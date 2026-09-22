@@ -6,6 +6,8 @@ import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dev.shizzi.ui.theme.AccentChoice
@@ -27,6 +29,14 @@ data class Settings(
 
     val vpnMode: VpnMode = VpnMode.AUTO,
     val hotspotBand: HotspotBand = HotspotBand.AUTO,
+
+    val globalDownloadMbps: Int = 40,
+    val globalUploadMbps: Int = 5,
+    val globalQuotaBytes: Long = 0,
+    val defaultClientDownloadMbps: Int = 0,
+    val defaultClientUploadMbps: Int = 0,
+    val defaultClientQuotaBytes: Long = 0,
+    val clientPolicies: Map<String, ClientPolicySetting> = emptyMap(),
 
     val hasCompletedOnboarding: Boolean = false,
 
@@ -84,6 +94,36 @@ class SettingsStore(private val context: Context) {
         context.dataStore.edit { it[HOTSPOT_BAND] = band.name }
     }
 
+    suspend fun setGlobalTrafficPolicy(downloadMbps: Int, uploadMbps: Int, quotaBytes: Long) {
+        context.dataStore.edit {
+            it[GLOBAL_DOWNLOAD_MBPS] = downloadMbps.coerceAtLeast(0)
+            it[GLOBAL_UPLOAD_MBPS] = uploadMbps.coerceAtLeast(0)
+            it[GLOBAL_QUOTA_BYTES] = quotaBytes.coerceAtLeast(0)
+        }
+    }
+
+    suspend fun setDefaultClientTrafficPolicy(
+        downloadMbps: Int,
+        uploadMbps: Int,
+        quotaBytes: Long,
+    ) {
+        context.dataStore.edit {
+            it[DEFAULT_CLIENT_DOWNLOAD_MBPS] = downloadMbps.coerceAtLeast(0)
+            it[DEFAULT_CLIENT_UPLOAD_MBPS] = uploadMbps.coerceAtLeast(0)
+            it[DEFAULT_CLIENT_QUOTA_BYTES] = quotaBytes.coerceAtLeast(0)
+        }
+    }
+
+    suspend fun setClientTrafficPolicy(ip: String, policy: ClientPolicySetting) {
+        if (ip.isBlank()) return
+
+        context.dataStore.edit { preferences ->
+            val policies = decodeClientPolicies(preferences[CLIENT_POLICIES]).toMutableMap()
+            policies[ip] = policy
+            preferences[CLIENT_POLICIES] = encodeClientPolicies(policies)
+        }
+    }
+
     suspend fun setOnboardingComplete(hasCompleted: Boolean) {
         context.dataStore.edit { it[ONBOARDED] = hasCompleted }
     }
@@ -114,6 +154,13 @@ internal val CUSTOM_ACCENTS = stringPreferencesKey("custom_accents")
 internal val LOGGING = booleanPreferencesKey("logging")
 internal val VPN_MODE = stringPreferencesKey("vpn_mode")
 internal val HOTSPOT_BAND = stringPreferencesKey("hotspot_band")
+internal val GLOBAL_DOWNLOAD_MBPS = intPreferencesKey("global_download_mbps")
+internal val GLOBAL_UPLOAD_MBPS = intPreferencesKey("global_upload_mbps")
+internal val GLOBAL_QUOTA_BYTES = longPreferencesKey("global_quota_bytes")
+internal val DEFAULT_CLIENT_DOWNLOAD_MBPS = intPreferencesKey("default_client_download_mbps")
+internal val DEFAULT_CLIENT_UPLOAD_MBPS = intPreferencesKey("default_client_upload_mbps")
+internal val DEFAULT_CLIENT_QUOTA_BYTES = longPreferencesKey("default_client_quota_bytes")
+internal val CLIENT_POLICIES = stringPreferencesKey("client_policies")
 internal val ONBOARDED = booleanPreferencesKey("onboarded")
 internal val AUTOMATION = booleanPreferencesKey("automation")
 internal val AUTOMATION_TOKEN = stringPreferencesKey("automation_token")
@@ -128,6 +175,13 @@ internal fun toSettings(preferences: Preferences) = Settings(
     isLogging = preferences[LOGGING] ?: true,
     vpnMode = parseVpnMode(preferences[VPN_MODE]),
     hotspotBand = parseHotspotBand(preferences[HOTSPOT_BAND]),
+    globalDownloadMbps = preferences[GLOBAL_DOWNLOAD_MBPS] ?: 40,
+    globalUploadMbps = preferences[GLOBAL_UPLOAD_MBPS] ?: 5,
+    globalQuotaBytes = preferences[GLOBAL_QUOTA_BYTES] ?: 0,
+    defaultClientDownloadMbps = preferences[DEFAULT_CLIENT_DOWNLOAD_MBPS] ?: 0,
+    defaultClientUploadMbps = preferences[DEFAULT_CLIENT_UPLOAD_MBPS] ?: 0,
+    defaultClientQuotaBytes = preferences[DEFAULT_CLIENT_QUOTA_BYTES] ?: 0,
+    clientPolicies = decodeClientPolicies(preferences[CLIENT_POLICIES]),
     hasCompletedOnboarding = preferences[ONBOARDED] ?: false,
     isAutomationEnabled = preferences[AUTOMATION] ?: false,
     automationToken = preferences[AUTOMATION_TOKEN].orEmpty(),
