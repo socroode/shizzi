@@ -18,8 +18,23 @@ class TetheredClientsInspector(
     private val context: Context,
     private val timeoutMs: Long = DEFAULT_TIMEOUT_MS,
 ) {
+    private var cached: List<TetheredDevice> = emptyList()
+    private var lastReadAt = 0L
 
-    fun snapshot(): List<TetheredDevice> = runCatching {
+    @Synchronized
+    fun snapshot(): List<TetheredDevice> {
+        val now = System.currentTimeMillis()
+        if (now - lastReadAt < CACHE_MS) return cached
+
+        val fresh = readSnapshot()
+        if (fresh.isNotEmpty() || cached.isEmpty()) {
+            cached = fresh
+        }
+        lastReadAt = now
+        return cached
+    }
+
+    private fun readSnapshot(): List<TetheredDevice> = runCatching {
         val manager = context.getSystemService("tethering")
             ?: return emptyList()
         val managerClass = Class.forName("android.net.TetheringManager")
@@ -116,5 +131,6 @@ class TetheredClientsInspector(
     private companion object {
         const val WIFI_TETHERING_TYPE = 0
         const val DEFAULT_TIMEOUT_MS = 2_000L
+        const val CACHE_MS = 3_000L
     }
 }
