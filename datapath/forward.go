@@ -1,5 +1,6 @@
 package datapath
 
+// Fork build: global hotspot shaping enabled at 20 Mbps down / 5 Mbps up.
 import (
 	"net"
 	"strconv"
