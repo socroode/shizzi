@@ -28,6 +28,7 @@ data class ClientTrafficStats(
     val downloadBps: Long,
     val uploadBps: Long,
     val quotaBytes: Long,
+    val monthlyQuotaBytes: Long,
     val blocked: Boolean,
     val quotaReached: Boolean,
 ) {
