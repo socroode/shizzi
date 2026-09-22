@@ -40,6 +40,8 @@ data class ManagerTrafficStats(
     val globalQuotaBytes: Long = 0,
     val totalUpBytes: Long = 0,
     val totalDownBytes: Long = 0,
+    val sharedUpBytes: Long = 0,
+    val sharedDownBytes: Long = 0,
     val clients: List<ClientTrafficStats> = emptyList(),
 ) {
     val totalBytes: Long get() = totalUpBytes + totalDownBytes
@@ -60,6 +62,8 @@ fun parseManagerTrafficStats(raw: String?): ManagerTrafficStats {
         globalQuotaBytes = root.optLong("globalQuotaBytes"),
         totalUpBytes = root.optLong("totalUpBytes"),
         totalDownBytes = root.optLong("totalDownBytes"),
+        sharedUpBytes = root.optLong("sharedUpBytes"),
+        sharedDownBytes = root.optLong("sharedDownBytes"),
         clients = clients,
     )
 }
