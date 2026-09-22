@@ -101,6 +101,14 @@ class SessionService : Service() {
 
             internalState.update { current -> current.applyOutcome(outcome) }
             publishState()
+
+            if (internalState.value.status == UiStatus.CONNECTED) {
+                runCatching { syncMonthlyUsage(force = true) }
+                    .onFailure {
+                        SessionLog.warn("initial monthly policy sync failed: ${it.message}")
+                    }
+            }
+
             announceOutcome()
             followStatus()
         }
