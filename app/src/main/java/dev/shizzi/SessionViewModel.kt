@@ -135,32 +135,49 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setClientTrafficPolicy(
+        deviceId: String,
         ip: String,
         downloadMbps: Int,
         uploadMbps: Int,
-        quotaBytes: Long,
+        monthlyQuotaBytes: Long,
         blocked: Boolean,
     ) {
         viewModelScope.launch {
             val policy = ClientPolicySetting(
                 downloadMbps = downloadMbps,
                 uploadMbps = uploadMbps,
-                quotaBytes = quotaBytes,
+                quotaBytes = 0,
+                monthlyQuotaBytes = monthlyQuotaBytes,
                 blocked = blocked,
             )
-            settingsStore.setClientTrafficPolicy(ip, policy)
+            settingsStore.setDeviceTrafficPolicy(deviceId, policy)
 
             if (SessionService.isSessionUp) {
                 runCatching {
+                    val month = java.time.YearMonth.now().toString()
+                    val settings = settingsStore.settings.first()
+                    val used = settings.monthlyUsageByDevice[deviceId.lowercase()]
+                        ?.takeIf { it.month == month }
+                        ?.bytes
+                        ?: 0L
+                    val sessionUsed = SessionService.liveState.value.managerTraffic.clients
+                        .firstOrNull { it.ip == ip }
+                        ?.totalBytes
+                        ?: 0L
+                    val effectiveQuota = when {
+                        monthlyQuotaBytes <= 0 -> 0L
+                        else -> sessionUsed + (monthlyQuotaBytes - used).coerceAtLeast(0L)
+                    }
+
                     diagnostics.setClientTrafficPolicy(
                         ip = ip,
                         downloadBps = downloadMbps.toLong() * 1_000_000L,
                         uploadBps = uploadMbps.toLong() * 1_000_000L,
-                        quotaBytes = quotaBytes,
-                        blocked = blocked,
+                        quotaBytes = effectiveQuota,
+                        blocked = blocked || (monthlyQuotaBytes > 0 && used >= monthlyQuotaBytes),
                     )
                 }.onFailure {
-                    SessionLog.warn("live client traffic policy update failed for $ip: ${it.message}")
+                    SessionLog.warn("live device traffic policy update failed for $deviceId/$ip: ${it.message}")
                 }
             }
         }
