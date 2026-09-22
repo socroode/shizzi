@@ -100,6 +100,15 @@ class SessionResources(
         datapathSession?.setClientPolicy(ip, downloadBps, uploadBps, quotaBytes, blocked)
     }
 
+    fun setSharedPolicy(
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) {
+        datapathSession?.setSharedPolicy(downloadBps, uploadBps, quotaBytes, blocked)
+    }
+
     fun trafficStatsJson(): String =
         datapathSession?.trafficStatsJSON() ?: "{}"
 
