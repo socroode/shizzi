@@ -21,6 +21,7 @@ import dev.shizzi.ui.theme.standardTween
 /** [depth] orders screens so a transition can derive its own direction. */
 enum class Screen(val depth: Int) {
     HOME(0),
+    MANAGER(1),
     SETTINGS(1),
     LOG(2),
     EASTER_EGG(1),
