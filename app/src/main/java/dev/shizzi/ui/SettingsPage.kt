@@ -26,6 +26,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import dev.shizzi.AppPermission
+import dev.shizzi.HotspotBand
 import dev.shizzi.PermissionStatus
 import dev.shizzi.ShizukuState
 import dev.shizzi.VpnMode
@@ -55,6 +56,7 @@ data class SettingsState(
     val customAccents: List<Int>,
     val isLogging: Boolean,
     val vpnMode: VpnMode,
+    val hotspotBand: HotspotBand,
     val isRunningDiagnostics: Boolean,
     val automation: AutomationState,
 )
@@ -66,6 +68,7 @@ data class SettingsActions(
     val onAddCustomAccent: (Int) -> Unit,
     val onSetLogging: (Boolean) -> Unit,
     val onSetVpnMode: (VpnMode) -> Unit,
+    val onSetHotspotBand: (HotspotBand) -> Unit,
     val onOpenLog: () -> Unit,
     val onRunProbes: () -> Unit,
     val onGrantPermission: (AppPermission) -> Unit,
@@ -150,6 +153,11 @@ private fun settingsSections(
 
     SettingsSectionSpec("Advanced") {
         VpnSection(selected = state.vpnMode, onSelect = actions.onSetVpnMode)
+
+        HotspotBandSection(
+            selected = state.hotspotBand,
+            onSelect = actions.onSetHotspotBand,
+        )
 
         AutomationSection(
             state = state.automation,
