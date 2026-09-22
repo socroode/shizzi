@@ -110,6 +110,70 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { settingsStore.setHotspotBand(band) }
     }
 
+    fun setGlobalTrafficPolicy(downloadMbps: Int, uploadMbps: Int, quotaBytes: Long) {
+        viewModelScope.launch {
+            settingsStore.setGlobalTrafficPolicy(downloadMbps, uploadMbps, quotaBytes)
+
+            if (SessionService.isSessionUp) {
+                runCatching {
+                    diagnostics.setGlobalTrafficPolicy(
+                        downloadMbps.toLong() * 1_000_000L,
+                        uploadMbps.toLong() * 1_000_000L,
+                        quotaBytes,
+                    )
+                }.onFailure {
+                    SessionLog.warn("live global traffic policy update failed: ${it.message}")
+                }
+            }
+        }
+    }
+
+    fun setDefaultClientTrafficPolicy(downloadMbps: Int, uploadMbps: Int, quotaBytes: Long) {
+        viewModelScope.launch {
+            settingsStore.setDefaultClientTrafficPolicy(downloadMbps, uploadMbps, quotaBytes)
+        }
+    }
+
+    fun setClientTrafficPolicy(
+        ip: String,
+        downloadMbps: Int,
+        uploadMbps: Int,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) {
+        viewModelScope.launch {
+            val policy = ClientPolicySetting(
+                downloadMbps = downloadMbps,
+                uploadMbps = uploadMbps,
+                quotaBytes = quotaBytes,
+                blocked = blocked,
+            )
+            settingsStore.setClientTrafficPolicy(ip, policy)
+
+            if (SessionService.isSessionUp) {
+                runCatching {
+                    diagnostics.setClientTrafficPolicy(
+                        ip = ip,
+                        downloadBps = downloadMbps.toLong() * 1_000_000L,
+                        uploadBps = uploadMbps.toLong() * 1_000_000L,
+                        quotaBytes = quotaBytes,
+                        blocked = blocked,
+                    )
+                }.onFailure {
+                    SessionLog.warn("live client traffic policy update failed for $ip: ${it.message}")
+                }
+            }
+        }
+    }
+
+    fun resetTrafficStats() {
+        viewModelScope.launch {
+            if (!SessionService.isSessionUp) return@launch
+            runCatching { diagnostics.resetTrafficStats() }
+                .onFailure { SessionLog.warn("traffic stats reset failed: ${it.message}") }
+        }
+    }
+
     fun setTheme(choice: ThemeChoice) {
         viewModelScope.launch { settingsStore.setTheme(choice) }
     }
