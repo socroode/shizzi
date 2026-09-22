@@ -26,8 +26,19 @@ class TetherService : ITetherService.Stub {
 
     override fun getContractVersion(): Int = CONTRACT_VERSION
 
-    override fun start(logging: Boolean, vpnMode: String?): String {
+    override fun start(logging: Boolean, vpnMode: String?, hotspotBand: String?): String {
         SessionLog.setEnabled(logging)
+
+        val selectedBand = parseHotspotBand(hotspotBand)
+        val bandResult = HotspotBandControl(shellContext).apply(selectedBand)
+        when {
+            bandResult.applied -> SessionLog.info("hotspot band: ${bandResult.detail}")
+            else -> SessionLog.error(
+                "hotspot band request ${selectedBand.name} was not applied: " +
+                    bandResult.detail,
+            )
+        }
+
         return runCatching { session.start(parseVpnMode(vpnMode)) }
             .getOrElse { failure -> sessionError("start", failure) }
     }
