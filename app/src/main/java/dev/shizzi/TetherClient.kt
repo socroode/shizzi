@@ -203,10 +203,14 @@ class TetherClient {
         bound.rebootDevice()
     }
 
-    suspend fun start(logging: Boolean, vpnMode: VpnMode): String = withContext(Dispatchers.IO) {
+    suspend fun start(
+        logging: Boolean,
+        vpnMode: VpnMode,
+        hotspotBand: HotspotBand,
+    ): String = withContext(Dispatchers.IO) {
         val bound = service()
         verifyContract(bound)
-        bound.start(logging, vpnMode.name)
+        bound.start(logging, vpnMode.name, hotspotBand.name)
     }
 
     fun setLogging(enabled: Boolean) {
