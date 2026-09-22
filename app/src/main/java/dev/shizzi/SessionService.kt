@@ -43,8 +43,6 @@ class SessionService : Service() {
     private val sessionLock = Mutex()
     private val monthlyUsageLock = Mutex()
 
-    private val lastSessionBytesByDevice = mutableMapOf<String, Long>()
-    private var usageMonth = java.time.YearMonth.now().toString()
     private var lastUsageSyncAt = 0L
 
     override fun onCreate() {
@@ -117,7 +115,10 @@ class SessionService : Service() {
         },
     )
 
-    private suspend fun syncMonthlyUsage(force: Boolean = false) {
+    private suspend fun syncMonthlyUsage(
+        force: Boolean = false,
+        sessionKeyOverride: String? = null,
+    ) {
         if (!force && internalState.value.status != UiStatus.CONNECTED) return
 
         monthlyUsageLock.withLock {
@@ -126,10 +127,9 @@ class SessionService : Service() {
             lastUsageSyncAt = now
 
             val month = java.time.YearMonth.now().toString()
-            if (month != usageMonth) {
-                usageMonth = month
-                lastSessionBytesByDevice.clear()
-            }
+            val sessionKey = sessionKeyOverride
+                ?: internalState.value.interfaceName
+            if (sessionKey.isBlank()) return
 
             val stats = runCatching { controller.getTrafficStats() }
                 .getOrElse { failure ->
@@ -137,26 +137,17 @@ class SessionService : Service() {
                     return
                 }
 
-            val deltas = mutableMapOf<String, Long>()
-
-            stats.clients.forEach { client ->
-                val deviceId = client.deviceId.lowercase().ifBlank { client.ip }
-                val current = client.totalBytes.coerceAtLeast(0L)
-                val previous = lastSessionBytesByDevice[deviceId]
-
-                val delta = when {
-                    previous == null -> current
-                    current >= previous -> current - previous
-                    else -> current
+            val counters = stats.clients
+                .associate { client ->
+                    val deviceId = client.deviceId.lowercase().ifBlank { client.ip }
+                    deviceId to client.totalBytes.coerceAtLeast(0L)
                 }
 
-                if (delta > 0) {
-                    deltas[deviceId] = (deltas[deviceId] ?: 0L) + delta
-                }
-                lastSessionBytesByDevice[deviceId] = current
-            }
-
-            settingsStore().addMonthlyUsage(month, deltas)
+            settingsStore().checkpointMonthlyUsage(
+                month = month,
+                sessionKey = sessionKey,
+                countersByDevice = counters,
+            )
             val settings = settingsStore().settings.first()
 
             stats.clients.forEach { client ->
@@ -205,6 +196,7 @@ class SessionService : Service() {
 
     private fun stopSession() {
         val stopped = ++generation
+        val stoppingInterface = internalState.value.interfaceName
 
         val abandoned = startJob
         startJob = null
@@ -222,7 +214,12 @@ class SessionService : Service() {
             abandoned?.cancelAndJoin()
 
             sessionLock.withLock {
-                runCatching { syncMonthlyUsage(force = true) }
+                runCatching {
+                    syncMonthlyUsage(
+                        force = true,
+                        sessionKeyOverride = stoppingInterface,
+                    )
+                }
                     .onFailure { SessionLog.warn("final monthly usage sync failed: ${it.message}") }
 
                 runCatching { controller.stop() }
