@@ -103,6 +103,11 @@ class MainActivity : ComponentActivity() {
                             onSetLogging = viewModel::setLogging,
                             onSetVpnMode = viewModel::setVpnMode,
                             onSetHotspotBand = viewModel::setHotspotBand,
+                            onSetGlobalTrafficPolicy = viewModel::setGlobalTrafficPolicy,
+                            onSetDefaultClientTrafficPolicy =
+                                viewModel::setDefaultClientTrafficPolicy,
+                            onSetClientTrafficPolicy = viewModel::setClientTrafficPolicy,
+                            onResetTrafficStats = viewModel::resetTrafficStats,
                             onRunProbes = viewModel::runProbes,
                             onDismissDiagnostics = viewModel::dismissDiagnostics,
                             onClearLog = viewModel::clearLog,
