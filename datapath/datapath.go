@@ -139,6 +139,24 @@ func (s *Session) SetClientPolicy(
 	})
 }
 
+// SetSharedPolicy configures traffic that Android has NATed onto the Shizzi
+// tunnel address. This is hidden from the client list and can be attributed to
+// one physical client when tethering reports only one connected device.
+func (s *Session) SetSharedPolicy(
+	downloadBps, uploadBps, quotaBytes int64,
+	blocked bool,
+) {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.setSharedPolicy(ClientPolicy{
+		DownloadBitsPerSecond: downloadBps,
+		UploadBitsPerSecond:   uploadBps,
+		QuotaBytes:            quotaBytes,
+		Blocked:               blocked,
+	})
+}
+
 // TrafficStatsJSON returns aggregate and per-client counters/policies.
 func (s *Session) TrafficStatsJSON() string {
 	if s.traffic == nil {
