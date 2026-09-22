@@ -41,6 +41,11 @@ class SessionService : Service() {
     private var generation = 0
 
     private val sessionLock = Mutex()
+    private val monthlyUsageLock = Mutex()
+
+    private val lastSessionBytesByDevice = mutableMapOf<String, Long>()
+    private var usageMonth = java.time.YearMonth.now().toString()
+    private var lastUsageSyncAt = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -108,8 +113,92 @@ class SessionService : Service() {
         onStatus = { outcome ->
             internalState.update { current -> current.applyOutcome(outcome) }
             publishState()
+            scope.launch { syncMonthlyUsage() }
         },
     )
+
+    private suspend fun syncMonthlyUsage(force: Boolean = false) {
+        if (!force && internalState.value.status != UiStatus.CONNECTED) return
+
+        monthlyUsageLock.withLock {
+            val now = System.currentTimeMillis()
+            if (!force && now - lastUsageSyncAt < MONTHLY_USAGE_SYNC_MS) return
+            lastUsageSyncAt = now
+
+            val month = java.time.YearMonth.now().toString()
+            if (month != usageMonth) {
+                usageMonth = month
+                lastSessionBytesByDevice.clear()
+            }
+
+            val stats = runCatching { controller.getTrafficStats() }
+                .getOrElse { failure ->
+                    SessionLog.warn("monthly usage read failed: ${failure.message}")
+                    return
+                }
+
+            val deltas = mutableMapOf<String, Long>()
+
+            stats.clients.forEach { client ->
+                val deviceId = client.deviceId.lowercase().ifBlank { client.ip }
+                val current = client.totalBytes.coerceAtLeast(0L)
+                val previous = lastSessionBytesByDevice[deviceId]
+
+                val delta = when {
+                    previous == null -> current
+                    current >= previous -> current - previous
+                    else -> current
+                }
+
+                if (delta > 0) {
+                    deltas[deviceId] = (deltas[deviceId] ?: 0L) + delta
+                }
+                lastSessionBytesByDevice[deviceId] = current
+            }
+
+            settingsStore().addMonthlyUsage(month, deltas)
+            val settings = settingsStore().settings.first()
+
+            stats.clients.forEach { client ->
+                val deviceId = client.deviceId.lowercase().ifBlank { client.ip }
+                val policy = settings.devicePolicies[deviceId]
+                    ?: settings.clientPolicies[client.ip]
+                    ?: ClientPolicySetting(
+                        downloadMbps = settings.defaultClientDownloadMbps,
+                        uploadMbps = settings.defaultClientUploadMbps,
+                        quotaBytes = settings.defaultClientQuotaBytes,
+                    )
+
+                val monthlyUsed = settings.monthlyUsageByDevice[deviceId]
+                    ?.takeIf { it.month == month }
+                    ?.bytes
+                    ?: 0L
+
+                val monthlyQuota = policy.monthlyQuotaBytes
+                val effectiveSessionQuota = when {
+                    monthlyQuota <= 0 -> policy.quotaBytes
+                    else -> client.totalBytes + (monthlyQuota - monthlyUsed).coerceAtLeast(0L)
+                }
+
+                val monthlyBlocked = monthlyQuota > 0 && monthlyUsed >= monthlyQuota
+
+                runCatching {
+                    controller.setClientTrafficPolicy(
+                        ip = client.ip,
+                        downloadBps = policy.downloadMbps.toLong() * 1_000_000L,
+                        uploadBps = policy.uploadMbps.toLong() * 1_000_000L,
+                        quotaBytes = effectiveSessionQuota,
+                        blocked = policy.blocked || monthlyBlocked,
+                    )
+                }.onFailure { failure ->
+                    SessionLog.warn(
+                        "monthly policy apply failed for $deviceId/${client.ip}: " +
+                            failure.message,
+                    )
+                }
+            }
+        }
+    }
 
     private fun settingsStore(): SettingsStore =
         (application as App).settingsStore
@@ -133,6 +222,9 @@ class SessionService : Service() {
             abandoned?.cancelAndJoin()
 
             sessionLock.withLock {
+                runCatching { syncMonthlyUsage(force = true) }
+                    .onFailure { SessionLog.warn("final monthly usage sync failed: ${it.message}") }
+
                 runCatching { controller.stop() }
                     .onFailure { SessionLog.error("teardown failed: ${it.message}") }
 
@@ -202,6 +294,7 @@ class SessionService : Service() {
 
     companion object {
         private const val NOTIFICATION_ID = 1
+        private const val MONTHLY_USAGE_SYNC_MS = 5_000L
         const val ACTION_STOP = "dev.shizzi.STOP_SESSION"
         const val EXTRA_REPORT_AS = "reportAs"
 
