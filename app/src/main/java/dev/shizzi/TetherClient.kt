@@ -60,6 +60,7 @@ fun SessionUiState.applyOutcome(outcome: Result<String>): SessionUiState {
             isVpnBypassed = false,
             clientCount = 0,
             traffic = Traffic(),
+            managerTraffic = ManagerTrafficStats(),
         )
     }
 
