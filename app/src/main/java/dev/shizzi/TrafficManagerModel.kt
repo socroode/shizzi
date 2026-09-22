@@ -7,11 +7,19 @@ data class ClientPolicySetting(
     val downloadMbps: Int = 0,
     val uploadMbps: Int = 0,
     val quotaBytes: Long = 0,
+    val monthlyQuotaBytes: Long = 0,
     val blocked: Boolean = false,
+)
+
+data class MonthlyUsageRecord(
+    val month: String,
+    val bytes: Long,
 )
 
 data class ClientTrafficStats(
     val ip: String,
+    val deviceId: String,
+    val macAddress: String,
     val upBytes: Long,
     val downBytes: Long,
     val lastSeenUnixMillis: Long,
@@ -61,12 +69,15 @@ private fun parseClients(array: JSONArray): List<ClientTrafficStats> =
             add(
                 ClientTrafficStats(
                     ip = item.optString("ip"),
+                    deviceId = item.optString("deviceId").ifBlank { item.optString("ip") },
+                    macAddress = item.optString("macAddress").takeUnless { it == "null" }.orEmpty(),
                     upBytes = item.optLong("upBytes"),
                     downBytes = item.optLong("downBytes"),
                     lastSeenUnixMillis = item.optLong("lastSeenUnixMillis"),
                     downloadBps = item.optLong("downloadBps"),
                     uploadBps = item.optLong("uploadBps"),
                     quotaBytes = item.optLong("quotaBytes"),
+                    monthlyQuotaBytes = item.optLong("monthlyQuotaBytes"),
                     blocked = item.optBoolean("blocked"),
                     quotaReached = item.optBoolean("quotaReached"),
                 ),
@@ -83,6 +94,7 @@ fun encodeClientPolicies(policies: Map<String, ClientPolicySetting>): String =
                     put("downloadMbps", policy.downloadMbps)
                     put("uploadMbps", policy.uploadMbps)
                     put("quotaBytes", policy.quotaBytes)
+                    put("monthlyQuotaBytes", policy.monthlyQuotaBytes)
                     put("blocked", policy.blocked)
                 },
             )
@@ -121,3 +133,38 @@ fun managerConfigJson(settings: Settings): String =
         put("defaultClientQuotaBytes", settings.defaultClientQuotaBytes)
         put("clientPolicies", JSONArray(encodeClientPolicies(settings.clientPolicies)))
     }.toString()
+
+
+fun encodeMonthlyUsage(records: Map<String, MonthlyUsageRecord>): String =
+    JSONArray().apply {
+        records.toSortedMap().forEach { (deviceId, record) ->
+            put(
+                JSONObject().apply {
+                    put("deviceId", deviceId)
+                    put("month", record.month)
+                    put("bytes", record.bytes)
+                },
+            )
+        }
+    }.toString()
+
+fun decodeMonthlyUsage(raw: String?): Map<String, MonthlyUsageRecord> {
+    val array = runCatching { JSONArray(raw.orEmpty()) }.getOrNull() ?: return emptyMap()
+
+    return buildMap {
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            val deviceId = item.optString("deviceId").lowercase()
+            val month = item.optString("month")
+            if (deviceId.isBlank() || month.isBlank()) continue
+
+            put(
+                deviceId,
+                MonthlyUsageRecord(
+                    month = month,
+                    bytes = item.optLong("bytes").coerceAtLeast(0L),
+                ),
+            )
+        }
+    }
+}
