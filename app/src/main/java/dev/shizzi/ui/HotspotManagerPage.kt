@@ -35,7 +35,7 @@ import dev.shizzi.ui.theme.ShizziTheme
 data class HotspotManagerActions(
     val onSetGlobalPolicy: (Int, Int, Long) -> Unit,
     val onSetDefaultClientPolicy: (Int, Int, Long) -> Unit,
-    val onSetClientPolicy: (String, Int, Int, Long, Boolean) -> Unit,
+    val onSetClientPolicy: (String, String, Int, Int, Long, Boolean) -> Unit,
     val onResetStats: () -> Unit,
 )
 
@@ -108,8 +108,18 @@ fun HotspotManagerPage(
             }
 
             stats.clients.forEach { client ->
+                val month = java.time.YearMonth.now().toString()
+                val monthlyUsed = settings.monthlyUsageByDevice[client.deviceId.lowercase()]
+                    ?.takeIf { it.month == month }
+                    ?.bytes
+                    ?: 0L
+                val stored = settings.devicePolicies[client.deviceId.lowercase()]
+                    ?: settings.clientPolicies[client.ip]
+
                 ClientRow(
                     client = client,
+                    monthlyUsed = monthlyUsed,
+                    monthlyQuota = stored?.monthlyQuotaBytes ?: 0L,
                     onClick = { editingClient = client },
                 )
             }
@@ -131,12 +141,27 @@ fun HotspotManagerPage(
     }
 
     editingClient?.let { client ->
-        val stored = settings.clientPolicies[client.ip]
+        val stored = settings.devicePolicies[client.deviceId.lowercase()]
+            ?: settings.clientPolicies[client.ip]
+        val month = java.time.YearMonth.now().toString()
+        val monthlyUsed = settings.monthlyUsageByDevice[client.deviceId.lowercase()]
+            ?.takeIf { it.month == month }
+            ?.bytes
+            ?: 0L
+
         ClientPolicySheet(
             client = client,
             stored = stored,
-            onSave = { down, up, quota, blocked ->
-                actions.onSetClientPolicy(client.ip, down, up, quota, blocked)
+            monthlyUsed = monthlyUsed,
+            onSave = { down, up, monthlyQuota, blocked ->
+                actions.onSetClientPolicy(
+                    client.deviceId,
+                    client.ip,
+                    down,
+                    up,
+                    monthlyQuota,
+                    blocked,
+                )
                 editingClient = null
             },
             onDismiss = { editingClient = null },
@@ -145,21 +170,31 @@ fun HotspotManagerPage(
 }
 
 @Composable
-private fun ClientRow(client: ClientTrafficStats, onClick: () -> Unit) {
+private fun ClientRow(
+    client: ClientTrafficStats,
+    monthlyUsed: Long,
+    monthlyQuota: Long,
+    onClick: () -> Unit,
+) {
     val state = when {
         client.blocked -> "Blocked"
         client.quotaReached -> "Quota reached"
         else -> limitsLabel(client.downloadBps, client.uploadBps)
     }
 
+    val identity = when {
+        client.macAddress.isNotBlank() -> client.macAddress
+        else -> client.ip
+    }
+
     SettingsChoice(
         label = SettingsText(
-            title = client.ip,
-            subtitle = "${Traffic.format(client.totalBytes)} used · $state",
+            title = identity,
+            subtitle = "${Traffic.format(monthlyUsed)} this month · $state · ${client.ip}",
         ),
         value = when {
-            client.quotaBytes > 0 -> "${Traffic.format(client.quotaBytes)} cap"
-            else -> "No cap"
+            monthlyQuota > 0 -> "${Traffic.format(monthlyQuota)} / month"
+            else -> "No monthly cap"
         },
         onClick = onClick,
     )
@@ -248,6 +283,7 @@ private fun GlobalPolicySheet(
 private fun ClientPolicySheet(
     client: ClientTrafficStats,
     stored: ClientPolicySetting?,
+    monthlyUsed: Long,
     onSave: (Int, Int, Long, Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -255,7 +291,7 @@ private fun ClientPolicySheet(
         ?: (client.downloadBps / 1_000_000L).toInt()
     val initialUp = stored?.uploadMbps
         ?: (client.uploadBps / 1_000_000L).toInt()
-    val initialQuota = stored?.quotaBytes ?: client.quotaBytes
+    val initialQuota = stored?.monthlyQuotaBytes ?: 0L
     val initialBlocked = stored?.blocked ?: client.blocked
 
     var down by remember(client.ip) { mutableStateOf(initialDown.toString()) }
@@ -267,13 +303,13 @@ private fun ClientPolicySheet(
 
     ThemedBottomSheet(onDismiss = onDismiss) {
         Text(
-            text = client.ip,
+            text = if (client.macAddress.isNotBlank()) client.macAddress else client.ip,
             style = ShizziTheme.typography.heading,
             color = ShizziTheme.colors.onSurface,
         )
 
         Text(
-            text = "${Traffic.format(client.totalBytes)} used this session",
+            text = "${Traffic.format(monthlyUsed)} used this month · ${client.ip}",
             style = ShizziTheme.typography.body,
             color = ShizziTheme.colors.onSurfaceMuted,
         )
@@ -282,7 +318,7 @@ private fun ClientPolicySheet(
 
         NumberField("Download Mbps (0 = unlimited)", down) { down = it }
         NumberField("Upload Mbps (0 = unlimited)", up) { up = it }
-        NumberField("Quota MB (0 = unlimited)", quotaMb) { quotaMb = it }
+        NumberField("Monthly quota MB (0 = unlimited)", quotaMb) { quotaMb = it }
 
         Row(
             modifier = Modifier
