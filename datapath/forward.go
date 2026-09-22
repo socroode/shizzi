@@ -1,6 +1,6 @@
 package datapath
 
-// Fork build: global hotspot shaping enabled at 20 Mbps down / 5 Mbps up.
+// Fork build: global hotspot shaping enabled at 40 Mbps down / 5 Mbps up.
 import (
 	"net"
 	"strconv"
@@ -33,7 +33,7 @@ const (
 
 	// Global hotspot limits shared by every tethered client and every flow.
 	// Mbps here means decimal megabits per second, as used by speed tests.
-	globalDownloadBitsPerSecond int64 = 20_000_000
+	globalDownloadBitsPerSecond int64 = 40_000_000
 	globalUploadBitsPerSecond   int64 = 5_000_000
 
 	// A small TCP buffer keeps shaping smooth while avoiding excessive
@@ -160,7 +160,7 @@ func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer) bool {
 // relay copies bytes both ways until either side finishes, then closes both.
 //
 // Upload means client -> internet and uses the 5 Mbps shared limiter.
-// Download means internet -> client and uses the 20 Mbps shared limiter.
+// Download means internet -> client and uses the 40 Mbps shared limiter.
 func relay(client, upstream net.Conn) {
 	defer client.Close()
 	defer upstream.Close()
