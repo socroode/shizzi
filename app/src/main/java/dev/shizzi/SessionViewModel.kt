@@ -106,6 +106,10 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { settingsStore.setVpnMode(mode) }
     }
 
+    fun setHotspotBand(band: HotspotBand) {
+        viewModelScope.launch { settingsStore.setHotspotBand(band) }
+    }
+
     fun setTheme(choice: ThemeChoice) {
         viewModelScope.launch { settingsStore.setTheme(choice) }
     }
