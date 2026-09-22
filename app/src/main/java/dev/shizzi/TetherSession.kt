@@ -92,10 +92,14 @@ class TetherSession(private val context: Context) {
     }
 
     private fun startWatchdog(name: String) {
-        val guard = SessionWatchdog(name) { problem ->
-            SessionLog.warn("upstream drift: $problem")
-            tearDownAfter(problem)
-        }
+        val guard = SessionWatchdog(
+            expectedInterface = name,
+            onRecover = { problem -> recoverUpstream(name, problem) },
+            onDrift = { problem ->
+                SessionLog.warn("upstream drift: $problem")
+                tearDownAfter(problem)
+            },
+        )
         watchdog = guard
         guard.start()
     }
@@ -116,6 +120,50 @@ class TetherSession(private val context: Context) {
         runCatching { api.setPreferTestNetworks(false) }
             .onFailure { SessionLog.warn("could not clear the stale test-network preference: ${it.message}") }
         api.setPreferTestNetworks(true)
+    }
+
+    private fun recoverUpstream(name: String, problem: String): Boolean {
+        if (!isActive || interfaceName != name) return false
+
+        SessionLog.warn("watchdog recovery starting for $name: $problem")
+
+        val preferenceReset = runCatching { preferTestNetworks() }
+            .onFailure { SessionLog.warn("recovery preference reset failed: ${it.message}") }
+            .isSuccess
+
+        if (preferenceReset && awaitOwnedUpstream(name, RECOVERY_PREFERENCE_WAIT_MS)) {
+            SessionLog.info("watchdog recovery: preference reset restored $name")
+            return true
+        }
+
+        SessionLog.warn("watchdog recovery: restarting hotspot to force upstream reselection")
+
+        val restarted = runCatching {
+            restartDownstream()
+            preferTestNetworks()
+        }.onFailure {
+            SessionLog.warn("watchdog recovery hotspot restart failed: ${it.message}")
+        }.isSuccess
+
+        if (!restarted) return false
+
+        val recovered = awaitOwnedUpstream(name, RECOVERY_RESTART_WAIT_MS)
+        when {
+            recovered -> SessionLog.info("watchdog recovery: hotspot restart restored $name")
+            else -> SessionLog.warn("watchdog recovery: $name was not restored")
+        }
+        return recovered
+    }
+
+    private fun awaitOwnedUpstream(name: String, timeoutMs: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+
+        while (System.currentTimeMillis() < deadline) {
+            val observed = runCatching { liveUpstreams(name) }.getOrDefault(emptyList())
+            if (observed.isNotEmpty() && observed.all { it == name }) return true
+            Thread.sleep(RECOVERY_POLL_MS)
+        }
+        return false
     }
 
     private fun restartDownstream() {
@@ -255,5 +303,9 @@ class TetherSession(private val context: Context) {
 
         const val DOWNSTREAM_SETTLE_MS = 10_000L
         const val DOWNSTREAM_POLL_MS = 500L
+
+        const val RECOVERY_PREFERENCE_WAIT_MS = 4_000L
+        const val RECOVERY_RESTART_WAIT_MS = 8_000L
+        const val RECOVERY_POLL_MS = 500L
     }
 }
