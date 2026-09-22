@@ -26,7 +26,12 @@ class TetherService : ITetherService.Stub {
 
     override fun getContractVersion(): Int = CONTRACT_VERSION
 
-    override fun start(logging: Boolean, vpnMode: String?, hotspotBand: String?): String {
+    override fun start(
+        logging: Boolean,
+        vpnMode: String?,
+        hotspotBand: String?,
+        managerConfigJson: String?,
+    ): String {
         SessionLog.setEnabled(logging)
 
         val selectedBand = parseHotspotBand(hotspotBand)
@@ -39,8 +44,9 @@ class TetherService : ITetherService.Stub {
             )
         }
 
-        return runCatching { session.start(parseVpnMode(vpnMode)) }
-            .getOrElse { failure -> sessionError("start", failure) }
+        return runCatching {
+            session.start(parseVpnMode(vpnMode), managerConfigJson.orEmpty())
+        }.getOrElse { failure -> sessionError("start", failure) }
     }
 
     override fun stop(): String {
@@ -54,6 +60,38 @@ class TetherService : ITetherService.Stub {
     override fun getStatus(): String =
         runCatching { session.status() }
             .getOrElse { failure -> sessionError("getStatus", failure) }
+
+    override fun getTrafficStats(): String =
+        runCatching { session.trafficStats() }
+            .getOrDefault("{}")
+
+    override fun setGlobalTrafficPolicy(
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+    ) {
+        session.setGlobalTrafficPolicy(downloadBps, uploadBps, quotaBytes)
+    }
+
+    override fun setClientTrafficPolicy(
+        ip: String?,
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) {
+        session.setClientTrafficPolicy(
+            ip.orEmpty(),
+            downloadBps,
+            uploadBps,
+            quotaBytes,
+            blocked,
+        )
+    }
+
+    override fun resetTrafficStats() {
+        session.resetTrafficStats()
+    }
 
     override fun setLogging(enabled: Boolean) {
         SessionLog.setEnabled(enabled)
