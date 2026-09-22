@@ -22,6 +22,7 @@ class TetherSession(private val context: Context) {
     private var watchdog: SessionWatchdog? = null
     private val teardown = SessionTeardown(context)
     private val downstream = DownstreamInspector()
+    private val clientIdentities = ClientIdentityInspector()
     private val vpn = VpnUpstream(context) { problem -> tearDownAfter(problem) }
 
     val isActive: Boolean get() = state == SessionState.ACTIVE
@@ -128,7 +129,31 @@ class TetherSession(private val context: Context) {
         )
     }
 
-    fun trafficStats(): String = resources?.trafficStatsJson() ?: "{}"
+    fun trafficStats(): String {
+        val raw = resources?.trafficStatsJson() ?: return "{}"
+        val root = runCatching { JSONObject(raw) }.getOrNull() ?: return raw
+        val identities = clientIdentities.byIp()
+        val clients = root.optJSONArray("clients") ?: return root.toString()
+
+        for (index in 0 until clients.length()) {
+            val item = clients.optJSONObject(index) ?: continue
+            val ip = item.optString("ip")
+            val identity = identities[ip]
+
+            when (identity) {
+                null -> {
+                    item.put("deviceId", ip)
+                    item.put("macAddress", JSONObject.NULL)
+                }
+                else -> {
+                    item.put("deviceId", identity.deviceId)
+                    item.put("macAddress", identity.mac)
+                }
+            }
+        }
+
+        return root.toString()
+    }
 
     fun setGlobalTrafficPolicy(downloadBps: Long, uploadBps: Long, quotaBytes: Long) {
         resources?.setGlobalTrafficPolicy(downloadBps, uploadBps, quotaBytes)
