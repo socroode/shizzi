@@ -21,7 +21,9 @@ class ClientIdentityInspector {
     }
 
     private fun parseLine(line: String): ClientIdentity? {
-        val ip = IPV4.find(line)?.value ?: return null
+        val ip = line.trim().substringBefore(' ').takeIf {
+            it.contains('.') || it.contains(':')
+        } ?: return null
         val mac = MAC.find(line)?.value?.lowercase() ?: return null
         return ClientIdentity(ip = ip, mac = mac)
     }
@@ -38,7 +40,6 @@ class ClientIdentityInspector {
 
     private companion object {
         const val COMMAND_TIMEOUT_MS = 1_500L
-        val IPV4 = Regex("""\b(?:\d{1,3}\.){3}\d{1,3}\b""")
         val MAC = Regex("""\b(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b""")
     }
 }
