@@ -60,8 +60,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.4.0-v3-40x5-hotspot"
+        versionCode = 9
+        versionName = "0.5.0-hotspot-manager-v4"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 
