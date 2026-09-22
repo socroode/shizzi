@@ -30,7 +30,11 @@ const (
 	// milliseconds; QUIC keeps its own keepalives well inside this.
 	udpFlowTimeout = 60 * time.Second
 
-	// A small TCP buffer keeps shaping smooth while avoiding excessive wakeups.\n\ttcpCopyBufferSize = 32 * 1024\n)\n\n// installForwarders routes inbound flows to userspace handlers.
+	// A small TCP buffer keeps shaping smooth while avoiding excessive wakeups.
+	tcpCopyBufferSize = 32 * 1024
+)
+
+// installForwarders routes inbound flows to userspace handlers.
 //
 // Without these the stack silently drops every packet: nothing is listening on
 // the addresses tethered clients dial, because those addresses belong to hosts
