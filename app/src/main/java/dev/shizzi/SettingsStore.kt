@@ -137,28 +137,43 @@ class SettingsStore(private val context: Context) {
         }
     }
 
-    suspend fun addMonthlyUsage(
+    suspend fun checkpointMonthlyUsage(
         month: String,
-        deltasByDevice: Map<String, Long>,
+        sessionKey: String,
+        countersByDevice: Map<String, Long>,
     ) {
-        if (month.isBlank() || deltasByDevice.isEmpty()) return
+        if (month.isBlank() || sessionKey.isBlank() || countersByDevice.isEmpty()) return
 
         context.dataStore.edit { preferences ->
             val records = decodeMonthlyUsage(preferences[MONTHLY_USAGE]).toMutableMap()
 
-            deltasByDevice.forEach { (rawId, rawDelta) ->
+            countersByDevice.forEach { (rawId, rawCounter) ->
                 val deviceId = rawId.lowercase()
-                val delta = rawDelta.coerceAtLeast(0L)
-                if (deviceId.isBlank() || delta == 0L) return@forEach
+                val counter = rawCounter.coerceAtLeast(0L)
+                if (deviceId.isBlank()) return@forEach
 
                 val existing = records[deviceId]
-                val base = when {
+                val baseMonthly = when {
                     existing == null || existing.month != month -> 0L
                     else -> existing.bytes
                 }
+
+                val previousCounter = when {
+                    existing == null -> 0L
+                    existing.sessionKey != sessionKey -> 0L
+                    else -> existing.lastSessionBytes
+                }
+
+                val delta = when {
+                    counter >= previousCounter -> counter - previousCounter
+                    else -> counter
+                }
+
                 records[deviceId] = MonthlyUsageRecord(
                     month = month,
-                    bytes = base + delta,
+                    bytes = baseMonthly + delta,
+                    sessionKey = sessionKey,
+                    lastSessionBytes = counter,
                 )
             }
 
@@ -172,7 +187,13 @@ class SettingsStore(private val context: Context) {
 
         context.dataStore.edit { preferences ->
             val records = decodeMonthlyUsage(preferences[MONTHLY_USAGE]).toMutableMap()
-            records[normalized] = MonthlyUsageRecord(month = month, bytes = 0L)
+            val previous = records[normalized]
+            records[normalized] = MonthlyUsageRecord(
+                month = month,
+                bytes = 0L,
+                sessionKey = previous?.sessionKey.orEmpty(),
+                lastSessionBytes = previous?.lastSessionBytes ?: 0L,
+            )
             preferences[MONTHLY_USAGE] = encodeMonthlyUsage(records)
         }
     }
