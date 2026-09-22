@@ -14,6 +14,8 @@ data class ClientPolicySetting(
 data class MonthlyUsageRecord(
     val month: String,
     val bytes: Long,
+    val sessionKey: String = "",
+    val lastSessionBytes: Long = 0,
 )
 
 data class ClientTrafficStats(
@@ -143,6 +145,8 @@ fun encodeMonthlyUsage(records: Map<String, MonthlyUsageRecord>): String =
                     put("deviceId", deviceId)
                     put("month", record.month)
                     put("bytes", record.bytes)
+                    put("sessionKey", record.sessionKey)
+                    put("lastSessionBytes", record.lastSessionBytes)
                 },
             )
         }
@@ -163,6 +167,8 @@ fun decodeMonthlyUsage(raw: String?): Map<String, MonthlyUsageRecord> {
                 MonthlyUsageRecord(
                     month = month,
                     bytes = item.optLong("bytes").coerceAtLeast(0L),
+                    sessionKey = item.optString("sessionKey"),
+                    lastSessionBytes = item.optLong("lastSessionBytes").coerceAtLeast(0L),
                 ),
             )
         }
