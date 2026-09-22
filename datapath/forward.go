@@ -1,9 +1,9 @@
 package datapath
 
 import (
-	"io"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -29,7 +29,65 @@ const (
 	// udpFlowTimeout closes an idle UDP association. DNS exchanges finish in
 	// milliseconds; QUIC keeps its own keepalives well inside this.
 	udpFlowTimeout = 60 * time.Second
+
+	// Global hotspot limits shared by every tethered client and every flow.
+	// Mbps here means decimal megabits per second, as used by speed tests.
+	globalDownloadBitsPerSecond int64 = 20_000_000
+	globalUploadBitsPerSecond   int64 = 5_000_000
+
+	// A small TCP buffer keeps shaping smooth while avoiding excessive
+	// wakeups. All concurrent TCP streams share the same directional limiter.
+	tcpCopyBufferSize = 32 * 1024
 )
+
+var (
+	globalDownloadLimiter = newBandwidthLimiter(globalDownloadBitsPerSecond)
+	globalUploadLimiter   = newBandwidthLimiter(globalUploadBitsPerSecond)
+)
+
+// bandwidthLimiter is a process-wide leaky-bucket style pacer.
+//
+// Each call reserves a slice of the configured bandwidth on one shared
+// timeline. Because every client and every TCP/UDP flow uses the same limiter,
+// their aggregate traffic cannot exceed the configured rate for that direction.
+type bandwidthLimiter struct {
+	mu             sync.Mutex
+	bytesPerSecond float64
+	next           time.Time
+}
+
+func newBandwidthLimiter(bitsPerSecond int64) *bandwidthLimiter {
+	return &bandwidthLimiter{
+		bytesPerSecond: float64(bitsPerSecond) / 8,
+	}
+}
+
+func (l *bandwidthLimiter) wait(byteCount int) {
+	if l == nil || byteCount <= 0 || l.bytesPerSecond <= 0 {
+		return
+	}
+
+	transferTime := time.Duration(
+		float64(byteCount) / l.bytesPerSecond * float64(time.Second),
+	)
+	if transferTime <= 0 {
+		return
+	}
+
+	l.mu.Lock()
+	now := time.Now()
+	start := l.next
+	if start.Before(now) {
+		start = now
+	}
+	target := start.Add(transferTime)
+	l.next = target
+	l.mu.Unlock()
+
+	if delay := time.Until(target); delay > 0 {
+		time.Sleep(delay)
+	}
+}
 
 // installForwarders routes inbound flows to userspace handlers.
 //
@@ -100,9 +158,8 @@ func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer) bool {
 
 // relay copies bytes both ways until either side finishes, then closes both.
 //
-// Half-close is deliberately not propagated: a client that shuts down its write
-// side still expects to read the response, but tracking that per direction adds
-// state this prototype does not need. Both sides close when either completes.
+// Upload means client -> internet and uses the 5 Mbps shared limiter.
+// Download means internet -> client and uses the 20 Mbps shared limiter.
 func relay(client, upstream net.Conn) {
 	defer client.Close()
 	defer upstream.Close()
@@ -110,21 +167,39 @@ func relay(client, upstream net.Conn) {
 	done := make(chan struct{}, 2)
 
 	go func() {
-		io.Copy(upstream, client)
+		copyStreamLimited(upstream, client, globalUploadLimiter)
 		done <- struct{}{}
 	}()
 	go func() {
-		io.Copy(client, upstream)
+		copyStreamLimited(client, upstream, globalDownloadLimiter)
 		done <- struct{}{}
 	}()
 
 	<-done
 }
 
-// relayDatagrams copies datagrams both ways until the flow goes idle.
+// copyStreamLimited copies a TCP byte stream while pacing aggregate traffic.
+func copyStreamLimited(dst, src net.Conn, limiter *bandwidthLimiter) {
+	buffer := make([]byte, tcpCopyBufferSize)
+
+	for {
+		read, err := src.Read(buffer)
+		if read > 0 {
+			limiter.wait(read)
+			if _, writeErr := dst.Write(buffer[:read]); writeErr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// relayDatagrams copies UDP datagrams both ways until the flow goes idle.
 //
-// Unlike TCP there is no close to observe, so an idle deadline is the only
-// thing that reclaims the association.
+// UDP uses the same global directional limiters as TCP, so QUIC and other UDP
+// traffic cannot bypass the hotspot cap.
 func relayDatagrams(client, upstream net.Conn) {
 	defer client.Close()
 	defer upstream.Close()
@@ -132,19 +207,20 @@ func relayDatagrams(client, upstream net.Conn) {
 	done := make(chan struct{}, 2)
 
 	go func() {
-		copyWithIdleTimeout(upstream, client)
+		copyDatagramsLimited(upstream, client, globalUploadLimiter)
 		done <- struct{}{}
 	}()
 	go func() {
-		copyWithIdleTimeout(client, upstream)
+		copyDatagramsLimited(client, upstream, globalDownloadLimiter)
 		done <- struct{}{}
 	}()
 
 	<-done
 }
 
-// copyWithIdleTimeout copies until either side errors or the flow goes idle.
-func copyWithIdleTimeout(dst, src net.Conn) {
+// copyDatagramsLimited preserves datagram boundaries and applies shaping before
+// forwarding each packet.
+func copyDatagramsLimited(dst, src net.Conn, limiter *bandwidthLimiter) {
 	buffer := make([]byte, maxDatagramSize)
 
 	for {
@@ -154,6 +230,7 @@ func copyWithIdleTimeout(dst, src net.Conn) {
 
 		read, err := src.Read(buffer)
 		if read > 0 {
+			limiter.wait(read)
 			if _, writeErr := dst.Write(buffer[:read]); writeErr != nil {
 				return
 			}
