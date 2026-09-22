@@ -138,9 +138,11 @@ class SessionService : Service() {
                 }
 
             val counters = stats.clients
-                .associate { client ->
-                    val deviceId = client.deviceId.lowercase().ifBlank { client.ip }
-                    deviceId to client.totalBytes.coerceAtLeast(0L)
+                .groupBy { client ->
+                    client.deviceId.lowercase().ifBlank { client.ip }
+                }
+                .mapValues { (_, clients) ->
+                    clients.sumOf { it.totalBytes.coerceAtLeast(0L) }
                 }
 
             settingsStore().checkpointMonthlyUsage(
