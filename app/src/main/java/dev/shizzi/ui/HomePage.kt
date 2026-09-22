@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,6 +51,7 @@ fun HomePage(
     ) {
         HomeHeader(
             state = state,
+            onOpenManager = actions.onOpenManager,
             onOpenSettings = actions.onOpenSettings,
         )
 
@@ -77,6 +79,7 @@ fun HomePage(
 data class HomeActions(
     val onToggle: () -> Unit,
     val onCancel: () -> Unit,
+    val onOpenManager: () -> Unit,
     val onOpenSettings: () -> Unit,
     val onOpenEasterEgg: () -> Unit,
 )
@@ -84,6 +87,7 @@ data class HomeActions(
 @Composable
 private fun HomeHeader(
     state: SessionUiState,
+    onOpenManager: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     Row(
@@ -98,6 +102,13 @@ private fun HomeHeader(
         }
 
         Spacer(Modifier.weight(1f))
+
+        ShizziIconButton(
+            icon = Icons.Filled.Speed,
+            contentDescription = "Hotspot manager",
+            onClick = onOpenManager,
+            tint = ShizziTheme.colors.onSurfaceMuted,
+        )
 
         ShizziIconButton(
             icon = Icons.Filled.Settings,
