@@ -28,6 +28,7 @@ data class SessionUiState(
     val clientCount: Int = 0,
 
     val traffic: Traffic = Traffic(),
+    val managerTraffic: ManagerTrafficStats = ManagerTrafficStats(),
 ) {
 
     val canStart: Boolean get() = shizukuState is ShizukuState.Ready && !isBusy
@@ -43,6 +44,7 @@ fun SessionUiState.asStopped(): SessionUiState = copy(
     isVpnBypassed = false,
     clientCount = 0,
     traffic = Traffic(),
+    managerTraffic = ManagerTrafficStats(),
 )
 
 fun SessionUiState.applyOutcome(outcome: Result<String>): SessionUiState {
@@ -78,6 +80,9 @@ fun SessionUiState.applyOutcome(outcome: Result<String>): SessionUiState {
         traffic = Traffic(
             up = parsed?.optLong("bytesUp") ?: 0,
             down = parsed?.optLong("bytesDown") ?: 0,
+        ),
+        managerTraffic = parseManagerTrafficStats(
+            parsed?.optJSONObject("trafficManager")?.toString(),
         ),
     )
 }
@@ -207,10 +212,45 @@ class TetherClient {
         logging: Boolean,
         vpnMode: VpnMode,
         hotspotBand: HotspotBand,
+        managerConfigJson: String,
     ): String = withContext(Dispatchers.IO) {
         val bound = service()
         verifyContract(bound)
-        bound.start(logging, vpnMode.name, hotspotBand.name)
+        bound.start(logging, vpnMode.name, hotspotBand.name, managerConfigJson)
+    }
+
+    suspend fun getTrafficStats(): ManagerTrafficStats = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        parseManagerTrafficStats(bound.trafficStats)
+    }
+
+    suspend fun setGlobalTrafficPolicy(
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+    ) = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.setGlobalTrafficPolicy(downloadBps, uploadBps, quotaBytes)
+    }
+
+    suspend fun setClientTrafficPolicy(
+        ip: String,
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.setClientTrafficPolicy(ip, downloadBps, uploadBps, quotaBytes, blocked)
+    }
+
+    suspend fun resetTrafficStats() = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.resetTrafficStats()
     }
 
     fun setLogging(enabled: Boolean) {
