@@ -64,3 +64,41 @@ func TestResetStatsKeepsPolicy(t *testing.T) {
 		t.Fatal("reset should not clear policy")
 	}
 }
+
+
+func TestTunnelAddressesStayOutOfClientList(t *testing.T) {
+	m := newTrafficManager()
+
+	m.account("192.0.2.2", directionDownload, 100)
+	m.account("2001:db8::2", directionUpload, 50)
+
+	var snapshot trafficStatsSnapshot
+	if err := json.Unmarshal([]byte(m.statsJSON()), &snapshot); err != nil {
+		t.Fatalf("stats json: %v", err)
+	}
+
+	if len(snapshot.Clients) != 0 {
+		t.Fatalf("internal tunnel addresses must not become clients: %+v", snapshot.Clients)
+	}
+	if snapshot.SharedDownBytes != 100 || snapshot.SharedUpBytes != 50 {
+		t.Fatalf(
+			"shared counters wrong: down=%d up=%d",
+			snapshot.SharedDownBytes,
+			snapshot.SharedUpBytes,
+		)
+	}
+}
+
+func TestSharedPolicyBlocksNatTraffic(t *testing.T) {
+	m := newTrafficManager()
+	m.setSharedPolicy(ClientPolicy{QuotaBytes: 100})
+
+	if !m.waitAllowed("192.0.2.2", directionDownload, 100) {
+		t.Fatal("shared traffic should be allowed up to quota")
+	}
+	m.account("192.0.2.2", directionDownload, 100)
+
+	if m.waitAllowed("192.0.2.2", directionDownload, 1) {
+		t.Fatal("shared NAT traffic should stop after quota")
+	}
+}
