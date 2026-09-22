@@ -82,6 +82,31 @@ class SessionResources(
         session.setNetwork(handle)
     }
 
+    fun setGlobalTrafficPolicy(downloadBps: Long, uploadBps: Long, quotaBytes: Long) {
+        datapathSession?.setGlobalPolicy(downloadBps, uploadBps, quotaBytes)
+    }
+
+    fun setDefaultClientPolicy(downloadBps: Long, uploadBps: Long, quotaBytes: Long) {
+        datapathSession?.setDefaultClientPolicy(downloadBps, uploadBps, quotaBytes)
+    }
+
+    fun setClientPolicy(
+        ip: String,
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) {
+        datapathSession?.setClientPolicy(ip, downloadBps, uploadBps, quotaBytes, blocked)
+    }
+
+    fun trafficStatsJson(): String =
+        datapathSession?.trafficStatsJSON() ?: "{}"
+
+    fun resetTrafficStats() {
+        datapathSession?.resetTrafficStats()
+    }
+
     private fun awaitAvailability(interfaceName: String, timeoutMs: Int): Network {
         val deadline = System.currentTimeMillis() + timeoutMs
 
