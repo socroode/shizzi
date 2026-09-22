@@ -37,6 +37,8 @@ data class Settings(
     val defaultClientUploadMbps: Int = 0,
     val defaultClientQuotaBytes: Long = 0,
     val clientPolicies: Map<String, ClientPolicySetting> = emptyMap(),
+    val devicePolicies: Map<String, ClientPolicySetting> = emptyMap(),
+    val monthlyUsageByDevice: Map<String, MonthlyUsageRecord> = emptyMap(),
 
     val hasCompletedOnboarding: Boolean = false,
 
@@ -124,6 +126,57 @@ class SettingsStore(private val context: Context) {
         }
     }
 
+    suspend fun setDeviceTrafficPolicy(deviceId: String, policy: ClientPolicySetting) {
+        val normalized = deviceId.lowercase()
+        if (normalized.isBlank()) return
+
+        context.dataStore.edit { preferences ->
+            val policies = decodeClientPolicies(preferences[DEVICE_POLICIES]).toMutableMap()
+            policies[normalized] = policy
+            preferences[DEVICE_POLICIES] = encodeClientPolicies(policies)
+        }
+    }
+
+    suspend fun addMonthlyUsage(
+        month: String,
+        deltasByDevice: Map<String, Long>,
+    ) {
+        if (month.isBlank() || deltasByDevice.isEmpty()) return
+
+        context.dataStore.edit { preferences ->
+            val records = decodeMonthlyUsage(preferences[MONTHLY_USAGE]).toMutableMap()
+
+            deltasByDevice.forEach { (rawId, rawDelta) ->
+                val deviceId = rawId.lowercase()
+                val delta = rawDelta.coerceAtLeast(0L)
+                if (deviceId.isBlank() || delta == 0L) return@forEach
+
+                val existing = records[deviceId]
+                val base = when {
+                    existing == null || existing.month != month -> 0L
+                    else -> existing.bytes
+                }
+                records[deviceId] = MonthlyUsageRecord(
+                    month = month,
+                    bytes = base + delta,
+                )
+            }
+
+            preferences[MONTHLY_USAGE] = encodeMonthlyUsage(records)
+        }
+    }
+
+    suspend fun resetMonthlyUsage(deviceId: String, month: String) {
+        val normalized = deviceId.lowercase()
+        if (normalized.isBlank() || month.isBlank()) return
+
+        context.dataStore.edit { preferences ->
+            val records = decodeMonthlyUsage(preferences[MONTHLY_USAGE]).toMutableMap()
+            records[normalized] = MonthlyUsageRecord(month = month, bytes = 0L)
+            preferences[MONTHLY_USAGE] = encodeMonthlyUsage(records)
+        }
+    }
+
     suspend fun setOnboardingComplete(hasCompleted: Boolean) {
         context.dataStore.edit { it[ONBOARDED] = hasCompleted }
     }
@@ -161,6 +214,8 @@ internal val DEFAULT_CLIENT_DOWNLOAD_MBPS = intPreferencesKey("default_client_do
 internal val DEFAULT_CLIENT_UPLOAD_MBPS = intPreferencesKey("default_client_upload_mbps")
 internal val DEFAULT_CLIENT_QUOTA_BYTES = longPreferencesKey("default_client_quota_bytes")
 internal val CLIENT_POLICIES = stringPreferencesKey("client_policies")
+internal val DEVICE_POLICIES = stringPreferencesKey("device_policies")
+internal val MONTHLY_USAGE = stringPreferencesKey("monthly_usage")
 internal val ONBOARDED = booleanPreferencesKey("onboarded")
 internal val AUTOMATION = booleanPreferencesKey("automation")
 internal val AUTOMATION_TOKEN = stringPreferencesKey("automation_token")
@@ -182,6 +237,8 @@ internal fun toSettings(preferences: Preferences) = Settings(
     defaultClientUploadMbps = preferences[DEFAULT_CLIENT_UPLOAD_MBPS] ?: 0,
     defaultClientQuotaBytes = preferences[DEFAULT_CLIENT_QUOTA_BYTES] ?: 0,
     clientPolicies = decodeClientPolicies(preferences[CLIENT_POLICIES]),
+    devicePolicies = decodeClientPolicies(preferences[DEVICE_POLICIES]),
+    monthlyUsageByDevice = decodeMonthlyUsage(preferences[MONTHLY_USAGE]),
     hasCompletedOnboarding = preferences[ONBOARDED] ?: false,
     isAutomationEnabled = preferences[AUTOMATION] ?: false,
     automationToken = preferences[AUTOMATION_TOKEN].orEmpty(),
