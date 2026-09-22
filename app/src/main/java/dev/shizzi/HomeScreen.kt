@@ -11,6 +11,8 @@ import dev.shizzi.ui.EasterEggPage
 import dev.shizzi.ui.HandleBack
 import dev.shizzi.ui.HomeActions
 import dev.shizzi.ui.HomePage
+import dev.shizzi.ui.HotspotManagerActions
+import dev.shizzi.ui.HotspotManagerPage
 import dev.shizzi.ui.LogActions
 import dev.shizzi.ui.LogPage
 import dev.shizzi.ui.Screen
@@ -44,6 +46,10 @@ data class AppActions(
     val onSetLogging: (Boolean) -> Unit,
     val onSetVpnMode: (VpnMode) -> Unit,
     val onSetHotspotBand: (HotspotBand) -> Unit,
+    val onSetGlobalTrafficPolicy: (Int, Int, Long) -> Unit,
+    val onSetDefaultClientTrafficPolicy: (Int, Int, Long) -> Unit,
+    val onSetClientTrafficPolicy: (String, Int, Int, Long, Boolean) -> Unit,
+    val onResetTrafficStats: () -> Unit,
     val onRunProbes: () -> Unit,
     val onDismissDiagnostics: () -> Unit,
     val onClearLog: (onCleared: (String?) -> Unit) -> Unit,
@@ -111,6 +117,7 @@ private data class ScreenContext(
 private fun ScreenBody(screen: Screen, context: ScreenContext) {
     when (screen) {
         Screen.HOME -> HomeRoute(context)
+        Screen.MANAGER -> ManagerRoute(context)
         Screen.SETTINGS -> SettingsRoute(context)
         Screen.LOG -> LogRoute(context)
         Screen.EASTER_EGG -> EasterEggPage(onDismiss = context.navigation.goHome)
@@ -126,9 +133,29 @@ private fun HomeRoute(context: ScreenContext) {
         actions = HomeActions(
             onToggle = actions.onToggle,
             onCancel = actions.onCancel,
+            onOpenManager = { context.navigation.open(Screen.MANAGER) },
             onOpenSettings = { context.navigation.open(Screen.SETTINGS) },
             onOpenEasterEgg = { context.navigation.open(Screen.EASTER_EGG) },
         ),
+    )
+}
+
+@Composable
+private fun ManagerRoute(context: ScreenContext) {
+    val actions = context.actions
+    val state = context.state
+
+    HotspotManagerPage(
+        settings = state.settings,
+        stats = state.session.managerTraffic,
+        status = state.session.status,
+        actions = HotspotManagerActions(
+            onSetGlobalPolicy = actions.onSetGlobalTrafficPolicy,
+            onSetDefaultClientPolicy = actions.onSetDefaultClientTrafficPolicy,
+            onSetClientPolicy = actions.onSetClientTrafficPolicy,
+            onResetStats = actions.onResetTrafficStats,
+        ),
+        onBack = context.navigation.goBack,
     )
 }
 
