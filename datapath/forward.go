@@ -4,7 +4,6 @@ package datapath
 import (
 	"net"
 	"strconv"
-	"sync"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -31,77 +30,18 @@ const (
 	// milliseconds; QUIC keeps its own keepalives well inside this.
 	udpFlowTimeout = 60 * time.Second
 
-	// Global hotspot limits shared by every tethered client and every flow.
-	// Mbps here means decimal megabits per second, as used by speed tests.
-	globalDownloadBitsPerSecond int64 = 40_000_000
-	globalUploadBitsPerSecond   int64 = 5_000_000
-
-	// A small TCP buffer keeps shaping smooth while avoiding excessive
-	// wakeups. All concurrent TCP streams share the same directional limiter.
-	tcpCopyBufferSize = 32 * 1024
-)
-
-var (
-	globalDownloadLimiter = newBandwidthLimiter(globalDownloadBitsPerSecond)
-	globalUploadLimiter   = newBandwidthLimiter(globalUploadBitsPerSecond)
-)
-
-// bandwidthLimiter is a process-wide leaky-bucket style pacer.
-//
-// Each call reserves a slice of the configured bandwidth on one shared
-// timeline. Because every client and every TCP/UDP flow uses the same limiter,
-// their aggregate traffic cannot exceed the configured rate for that direction.
-type bandwidthLimiter struct {
-	mu             sync.Mutex
-	bytesPerSecond float64
-	next           time.Time
-}
-
-func newBandwidthLimiter(bitsPerSecond int64) *bandwidthLimiter {
-	return &bandwidthLimiter{
-		bytesPerSecond: float64(bitsPerSecond) / 8,
-	}
-}
-
-func (l *bandwidthLimiter) wait(byteCount int) {
-	if l == nil || byteCount <= 0 || l.bytesPerSecond <= 0 {
-		return
-	}
-
-	transferTime := time.Duration(
-		float64(byteCount) / l.bytesPerSecond * float64(time.Second),
-	)
-	if transferTime <= 0 {
-		return
-	}
-
-	l.mu.Lock()
-	now := time.Now()
-	start := l.next
-	if start.Before(now) {
-		start = now
-	}
-	target := start.Add(transferTime)
-	l.next = target
-	l.mu.Unlock()
-
-	if delay := time.Until(target); delay > 0 {
-		time.Sleep(delay)
-	}
-}
-
-// installForwarders routes inbound flows to userspace handlers.
+	// A small TCP buffer keeps shaping smooth while avoiding excessive wakeups.\n\ttcpCopyBufferSize = 32 * 1024\n)\n\n// installForwarders routes inbound flows to userspace handlers.
 //
 // Without these the stack silently drops every packet: nothing is listening on
 // the addresses tethered clients dial, because those addresses belong to hosts
 // out on the internet rather than to this stack.
-func installForwarders(netStack *stack.Stack, dialer *net.Dialer) {
+func installForwarders(netStack *stack.Stack, dialer *net.Dialer, traffic *TrafficManager) {
 	tcpForwarder := tcp.NewForwarder(netStack, defaultRcvWnd, maxInFlightTCP,
-		func(request *tcp.ForwarderRequest) { forwardTCP(request, dialer) })
+		func(request *tcp.ForwarderRequest) { forwardTCP(request, dialer, traffic) })
 	netStack.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpForwarder.HandlePacket)
 
 	udpForwarder := udp.NewForwarder(netStack,
-		func(request *udp.ForwarderRequest) bool { return forwardUDP(request, dialer) })
+		func(request *udp.ForwarderRequest) bool { return forwardUDP(request, dialer, traffic) })
 	netStack.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
 }
 
@@ -110,7 +50,7 @@ func installForwarders(netStack *stack.Stack, dialer *net.Dialer) {
 // The upstream socket is dialed before the client endpoint is created, so a
 // refused or unreachable destination sends the client a RST rather than
 // completing a handshake that then dies.
-func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer) {
+func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer, traffic *TrafficManager) {
 	id := request.ID()
 
 	upstream, err := dialer.Dial("tcp", destinationOf(id))
@@ -129,7 +69,7 @@ func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer) {
 	request.Complete(false)
 
 	client := gonet.NewTCPConn(&queue, endpoint)
-	go relay(client, upstream)
+	go relay(client, upstream, sourceOf(id), traffic)
 }
 
 // forwardUDP proxies one client datagram flow to its destination.
@@ -137,7 +77,7 @@ func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer) {
 // Returning false leaves the request unhandled, which makes the stack send the
 // client an ICMP port unreachable — the right answer when the destination
 // could not be reached, and better than dropping the datagram silently.
-func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer) bool {
+func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer, traffic *TrafficManager) bool {
 	id := request.ID()
 
 	upstream, err := dialer.Dial("udp", destinationOf(id))
@@ -153,41 +93,51 @@ func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer) bool {
 	}
 
 	client := gonet.NewUDPConn(&queue, endpoint)
-	go relayDatagrams(client, upstream)
+	go relayDatagrams(client, upstream, sourceOf(id), traffic)
 	return true
 }
 
 // relay copies bytes both ways until either side finishes, then closes both.
-//
-// Upload means client -> internet and uses the 5 Mbps shared limiter.
-// Download means internet -> client and uses the 40 Mbps shared limiter.
-func relay(client, upstream net.Conn) {
+func relay(client, upstream net.Conn, clientIP string, traffic *TrafficManager) {
 	defer client.Close()
 	defer upstream.Close()
 
 	done := make(chan struct{}, 2)
 
 	go func() {
-		copyStreamLimited(upstream, client, globalUploadLimiter)
+		copyStreamManaged(upstream, client, clientIP, directionUpload, traffic)
 		done <- struct{}{}
 	}()
 	go func() {
-		copyStreamLimited(client, upstream, globalDownloadLimiter)
+		copyStreamManaged(client, upstream, clientIP, directionDownload, traffic)
 		done <- struct{}{}
 	}()
 
 	<-done
 }
 
-// copyStreamLimited copies a TCP byte stream while pacing aggregate traffic.
-func copyStreamLimited(dst, src net.Conn, limiter *bandwidthLimiter) {
+// copyStreamManaged copies a TCP stream while applying global/client rate limits
+// and accounting quota usage after successful writes.
+func copyStreamManaged(
+	dst, src net.Conn,
+	clientIP string,
+	dir direction,
+	traffic *TrafficManager,
+) {
 	buffer := make([]byte, tcpCopyBufferSize)
 
 	for {
 		read, err := src.Read(buffer)
 		if read > 0 {
-			limiter.wait(read)
-			if _, writeErr := dst.Write(buffer[:read]); writeErr != nil {
+			if traffic != nil && !traffic.waitAllowed(clientIP, dir, read) {
+				return
+			}
+
+			written, writeErr := dst.Write(buffer[:read])
+			if written > 0 && traffic != nil {
+				traffic.account(clientIP, dir, written)
+			}
+			if writeErr != nil {
 				return
 			}
 		}
@@ -198,30 +148,32 @@ func copyStreamLimited(dst, src net.Conn, limiter *bandwidthLimiter) {
 }
 
 // relayDatagrams copies UDP datagrams both ways until the flow goes idle.
-//
-// UDP uses the same global directional limiters as TCP, so QUIC and other UDP
-// traffic cannot bypass the hotspot cap.
-func relayDatagrams(client, upstream net.Conn) {
+func relayDatagrams(client, upstream net.Conn, clientIP string, traffic *TrafficManager) {
 	defer client.Close()
 	defer upstream.Close()
 
 	done := make(chan struct{}, 2)
 
 	go func() {
-		copyDatagramsLimited(upstream, client, globalUploadLimiter)
+		copyDatagramsManaged(upstream, client, clientIP, directionUpload, traffic)
 		done <- struct{}{}
 	}()
 	go func() {
-		copyDatagramsLimited(client, upstream, globalDownloadLimiter)
+		copyDatagramsManaged(client, upstream, clientIP, directionDownload, traffic)
 		done <- struct{}{}
 	}()
 
 	<-done
 }
 
-// copyDatagramsLimited preserves datagram boundaries and applies shaping before
-// forwarding each packet.
-func copyDatagramsLimited(dst, src net.Conn, limiter *bandwidthLimiter) {
+// copyDatagramsManaged preserves datagram boundaries and applies shaping/quota
+// accounting to UDP just like TCP.
+func copyDatagramsManaged(
+	dst, src net.Conn,
+	clientIP string,
+	dir direction,
+	traffic *TrafficManager,
+) {
 	buffer := make([]byte, maxDatagramSize)
 
 	for {
@@ -231,8 +183,15 @@ func copyDatagramsLimited(dst, src net.Conn, limiter *bandwidthLimiter) {
 
 		read, err := src.Read(buffer)
 		if read > 0 {
-			limiter.wait(read)
-			if _, writeErr := dst.Write(buffer[:read]); writeErr != nil {
+			if traffic != nil && !traffic.waitAllowed(clientIP, dir, read) {
+				return
+			}
+
+			written, writeErr := dst.Write(buffer[:read])
+			if written > 0 && traffic != nil {
+				traffic.account(clientIP, dir, written)
+			}
+			if writeErr != nil {
 				return
 			}
 		}
@@ -242,8 +201,7 @@ func copyDatagramsLimited(dst, src net.Conn, limiter *bandwidthLimiter) {
 	}
 }
 
-// maxDatagramSize is large enough for any UDP payload a client can send
-// through a 1500-byte-MTU link without fragmentation surprises.
+// maxDatagramSize is large enough for any UDP payload a client can send.
 const maxDatagramSize = 65535
 
 // destinationOf renders the address a flow was actually addressed to.
@@ -255,6 +213,10 @@ func destinationOf(id stack.TransportEndpointID) string {
 		addressString(id.LocalAddress),
 		strconv.Itoa(int(id.LocalPort)),
 	)
+}
+
+func sourceOf(id stack.TransportEndpointID) string {
+	return addressString(id.RemoteAddress)
 }
 
 func addressString(address tcpip.Address) string {
