@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class SessionWatchdog(
     private val expectedInterface: String,
+    private val onRecover: (String) -> Boolean,
     private val onDrift: (String) -> Unit,
 ) {
 
@@ -41,8 +42,23 @@ class SessionWatchdog(
 
             val problem = checkUpstream()
             if (problem != null) {
+                Log.w(TAG, "upstream problem: $problem; attempting recovery")
+
+                val recovered = runCatching { onRecover(problem) }
+                    .getOrElse { failure ->
+                        Log.e(TAG, "recovery callback failed: ${failure.message}", failure)
+                        false
+                    }
+
+                if (recovered) {
+                    tolerance.reset()
+                    Log.i(TAG, "recovery succeeded for $expectedInterface")
+                    SessionLog.info("watchdog recovery succeeded: $expectedInterface restored")
+                    continue
+                }
+
                 isRunning.set(false)
-                Log.w(TAG, "tearing down: $problem")
+                Log.w(TAG, "recovery failed; tearing down: $problem")
                 onDrift(problem)
                 return
             }
