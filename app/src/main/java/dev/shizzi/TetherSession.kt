@@ -3,6 +3,7 @@ package dev.shizzi
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import org.json.JSONArray
 import org.json.JSONObject
 
 enum class SessionState { IDLE, STARTING, ACTIVE, ERROR }
@@ -23,6 +24,7 @@ class TetherSession(private val context: Context) {
     private val teardown = SessionTeardown(context)
     private val downstream = DownstreamInspector()
     private val clientIdentities = ClientIdentityInspector()
+    private val tetheredClients = TetheredClientsInspector(context)
     private val vpn = VpnUpstream(context) { problem -> tearDownAfter(problem) }
 
     val isActive: Boolean get() = state == SessionState.ACTIVE
@@ -132,26 +134,126 @@ class TetherSession(private val context: Context) {
     fun trafficStats(): String {
         val raw = resources?.trafficStatsJson() ?: return "{}"
         val root = runCatching { JSONObject(raw) }.getOrNull() ?: return raw
+        val rawClients = root.optJSONArray("clients") ?: JSONArray()
+        val devices = tetheredClients.snapshot()
         val identities = clientIdentities.byIp()
-        val clients = root.optJSONArray("clients") ?: return root.toString()
 
-        for (index in 0 until clients.length()) {
-            val item = clients.optJSONObject(index) ?: continue
-            val ip = item.optString("ip")
-            val identity = identities[ip]
+        if (devices.isEmpty()) {
+            for (index in 0 until rawClients.length()) {
+                val item = rawClients.optJSONObject(index) ?: continue
+                val ip = item.optString("ip")
+                val identity = identities[ip]
 
-            when (identity) {
-                null -> {
-                    item.put("deviceId", ip)
-                    item.put("macAddress", JSONObject.NULL)
+                when (identity) {
+                    null -> {
+                        item.put("deviceId", ip)
+                        item.put("macAddress", JSONObject.NULL)
+                    }
+                    else -> {
+                        item.put("deviceId", identity.deviceId)
+                        item.put("macAddress", identity.mac)
+                    }
                 }
-                else -> {
-                    item.put("deviceId", identity.deviceId)
-                    item.put("macAddress", identity.mac)
+            }
+            root.put("physicalClientCount", rawClients.length())
+            return root.toString()
+        }
+
+        val deviceByMac = devices.associateBy { it.deviceId }
+        val ipToMac = mutableMapOf<String, String>()
+
+        devices.forEach { device ->
+            device.addresses.forEach { address ->
+                ipToMac[address] = device.deviceId
+            }
+        }
+        identities.forEach { (ip, identity) ->
+            val mac = identity.deviceId
+            if (deviceByMac.containsKey(mac)) ipToMac[ip] = mac
+        }
+
+        data class Aggregate(
+            val device: TetheredDevice,
+            var up: Long = 0,
+            var down: Long = 0,
+            var lastSeen: Long = 0,
+            var downloadBps: Long = 0,
+            var uploadBps: Long = 0,
+            var quotaBytes: Long = 0,
+            var blocked: Boolean = false,
+            var quotaReached: Boolean = false,
+            var firstObservedIp: String = "",
+        )
+
+        val aggregates = devices.associate { it.deviceId to Aggregate(it) }.toMutableMap()
+        val soleDeviceId = devices.singleOrNull()?.deviceId
+
+        for (index in 0 until rawClients.length()) {
+            val item = rawClients.optJSONObject(index) ?: continue
+            val ip = item.optString("ip")
+            val mac = ipToMac[ip] ?: soleDeviceId ?: continue
+            val aggregate = aggregates[mac] ?: continue
+
+            aggregate.up += item.optLong("upBytes")
+            aggregate.down += item.optLong("downBytes")
+            aggregate.lastSeen = maxOf(
+                aggregate.lastSeen,
+                item.optLong("lastSeenUnixMillis"),
+            )
+            aggregate.downloadBps = item.optLong("downloadBps", aggregate.downloadBps)
+            aggregate.uploadBps = item.optLong("uploadBps", aggregate.uploadBps)
+            aggregate.quotaBytes = item.optLong("quotaBytes", aggregate.quotaBytes)
+            aggregate.blocked = aggregate.blocked || item.optBoolean("blocked")
+            aggregate.quotaReached =
+                aggregate.quotaReached || item.optBoolean("quotaReached")
+            if (aggregate.firstObservedIp.isBlank()) aggregate.firstObservedIp = ip
+        }
+
+        if (soleDeviceId != null) {
+            val aggregate = aggregates[soleDeviceId]
+            if (aggregate != null) {
+                aggregate.up += root.optLong("sharedUpBytes")
+                aggregate.down += root.optLong("sharedDownBytes")
+                if (aggregate.lastSeen == 0L && aggregate.up + aggregate.down > 0) {
+                    aggregate.lastSeen = System.currentTimeMillis()
                 }
             }
         }
 
+        val physicalClients = JSONArray()
+        aggregates.values.forEach { aggregate ->
+            val preferredIp = aggregate.device.addresses
+                .firstOrNull { it.contains('.') }
+                ?: aggregate.firstObservedIp
+                ?: aggregate.device.addresses.firstOrNull().orEmpty()
+
+            physicalClients.put(
+                JSONObject().apply {
+                    put("ip", preferredIp)
+                    put("deviceId", aggregate.device.deviceId)
+                    put("macAddress", aggregate.device.macAddress)
+                    put("upBytes", aggregate.up)
+                    put("downBytes", aggregate.down)
+                    put("lastSeenUnixMillis", aggregate.lastSeen)
+                    put("downloadBps", aggregate.downloadBps)
+                    put("uploadBps", aggregate.uploadBps)
+                    put("quotaBytes", aggregate.quotaBytes)
+                    put("blocked", aggregate.blocked)
+                    put("quotaReached", aggregate.quotaReached)
+                },
+            )
+        }
+
+        root.put("clients", physicalClients)
+        root.put("physicalClientCount", devices.size)
+        root.put(
+            "unattributedSharedBytes",
+            if (devices.size > 1) {
+                root.optLong("sharedUpBytes") + root.optLong("sharedDownBytes")
+            } else {
+                0L
+            },
+        )
         return root.toString()
     }
 
@@ -167,7 +269,49 @@ class TetherSession(private val context: Context) {
         blocked: Boolean,
     ) {
         if (ip.isBlank()) return
-        resources?.setClientPolicy(ip, downloadBps, uploadBps, quotaBytes, blocked)
+        val group = resources ?: return
+
+        val devices = tetheredClients.snapshot()
+        val identities = clientIdentities.byIp()
+
+        val target = devices.firstOrNull { device ->
+            ip in device.addresses ||
+                identities[ip]?.deviceId == device.deviceId
+        } ?: devices.singleOrNull()
+
+        if (target == null) {
+            group.setClientPolicy(ip, downloadBps, uploadBps, quotaBytes, blocked)
+            return
+        }
+
+        val routedIps = buildSet {
+            addAll(target.addresses)
+            identities.forEach { (candidateIp, identity) ->
+                if (identity.deviceId == target.deviceId) add(candidateIp)
+            }
+            add(ip)
+        }
+
+        routedIps
+            .filter { it.isNotBlank() }
+            .forEach { routedIp ->
+                group.setClientPolicy(
+                    routedIp,
+                    downloadBps,
+                    uploadBps,
+                    quotaBytes,
+                    blocked,
+                )
+            }
+
+        if (devices.size == 1) {
+            group.setSharedPolicy(
+                downloadBps,
+                uploadBps,
+                quotaBytes,
+                blocked,
+            )
+        }
     }
 
     fun resetTrafficStats() {
