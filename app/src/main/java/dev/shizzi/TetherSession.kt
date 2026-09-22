@@ -26,7 +26,7 @@ class TetherSession(private val context: Context) {
 
     val isActive: Boolean get() = state == SessionState.ACTIVE
 
-    fun start(mode: VpnMode = VpnMode.AUTO): String {
+    fun start(mode: VpnMode = VpnMode.AUTO, managerConfigJson: String = ""): String {
         if (isActive) return status()
 
         vpnMode = mode
@@ -39,7 +39,7 @@ class TetherSession(private val context: Context) {
                 "contract ${TetherService.CONTRACT_VERSION}",
         )
 
-        return runCatching { bringUp() }
+        return runCatching { bringUp(managerConfigJson) }
             .getOrElse { failure ->
                 Log.e(TAG, "start failed", failure)
                 SessionLog.error(
@@ -52,7 +52,7 @@ class TetherSession(private val context: Context) {
             }
     }
 
-    private fun bringUp(): String {
+    private fun bringUp(managerConfigJson: String): String {
         val group = SessionResources(testNetworkApi, context.connectivityManager())
         resources = group
 
@@ -61,6 +61,7 @@ class TetherSession(private val context: Context) {
         SessionLog.info("tun up: $name (mtu $TUN_MTU, $TUN_ADDRESS, $TUN_ADDRESS_V6)")
 
         group.startDatapath(TUN_MTU)
+        applyTrafficManagerConfig(group, managerConfigJson)
         SessionLog.info("datapath attached to $name")
         followVpn(group)
 
@@ -77,6 +78,75 @@ class TetherSession(private val context: Context) {
         teardown.installShutdownHook()
         startWatchdog(name)
         return status()
+    }
+
+    private fun applyTrafficManagerConfig(
+        group: SessionResources,
+        managerConfigJson: String,
+    ) {
+        val root = runCatching { JSONObject(managerConfigJson) }.getOrNull()
+            ?: JSONObject()
+
+        val globalDownloadBps = root.optLong("globalDownloadBps", 40_000_000L)
+        val globalUploadBps = root.optLong("globalUploadBps", 5_000_000L)
+        val globalQuotaBytes = root.optLong("globalQuotaBytes", 0L)
+
+        group.setGlobalTrafficPolicy(
+            globalDownloadBps,
+            globalUploadBps,
+            globalQuotaBytes,
+        )
+
+        group.setDefaultClientPolicy(
+            root.optLong("defaultClientDownloadBps", 0L),
+            root.optLong("defaultClientUploadBps", 0L),
+            root.optLong("defaultClientQuotaBytes", 0L),
+        )
+
+        val policies = root.optJSONArray("clientPolicies")
+        if (policies != null) {
+            for (index in 0 until policies.length()) {
+                val item = policies.optJSONObject(index) ?: continue
+                val ip = item.optString("ip")
+                if (ip.isBlank()) continue
+
+                group.setClientPolicy(
+                    ip = ip,
+                    downloadBps = item.optLong("downloadMbps", 0L) * 1_000_000L,
+                    uploadBps = item.optLong("uploadMbps", 0L) * 1_000_000L,
+                    quotaBytes = item.optLong("quotaBytes", 0L),
+                    blocked = item.optBoolean("blocked", false),
+                )
+            }
+        }
+
+        SessionLog.info(
+            "traffic manager: global " +
+                "${globalDownloadBps / 1_000_000} Mbps down / " +
+                "${globalUploadBps / 1_000_000} Mbps up; " +
+                "quota=$globalQuotaBytes bytes",
+        )
+    }
+
+    fun trafficStats(): String = resources?.trafficStatsJson() ?: "{}"
+
+    fun setGlobalTrafficPolicy(downloadBps: Long, uploadBps: Long, quotaBytes: Long) {
+        resources?.setGlobalTrafficPolicy(downloadBps, uploadBps, quotaBytes)
+    }
+
+    fun setClientTrafficPolicy(
+        ip: String,
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) {
+        if (ip.isBlank()) return
+        resources?.setClientPolicy(ip, downloadBps, uploadBps, quotaBytes, blocked)
+    }
+
+    fun resetTrafficStats() {
+        resources?.resetTrafficStats()
     }
 
     private fun followVpn(group: SessionResources) {
@@ -274,6 +344,7 @@ class TetherSession(private val context: Context) {
         put("bytesUp", traffic.up)
         put("bytesDown", traffic.down)
         put("clientCount", if (isActive) downstream.countDevices() else 0)
+        put("trafficManager", JSONObject(trafficStats()))
     }.toString()
 
     private fun isVpnBypassed(): Boolean {
