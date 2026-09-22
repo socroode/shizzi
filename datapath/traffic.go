@@ -100,6 +100,12 @@ type TrafficManager struct {
 	totalUpBytes   int64
 	totalDownBytes int64
 
+	sharedUpBytes   int64
+	sharedDownBytes int64
+	sharedPolicy    ClientPolicy
+	sharedDownloadLimiter *bandwidthLimiter
+	sharedUploadLimiter   *bandwidthLimiter
+
 	defaultClientPolicy ClientPolicy
 	clients             map[string]*clientTraffic
 }
@@ -110,6 +116,8 @@ func newTrafficManager() *TrafficManager {
 		globalUploadLimiter:         newBandwidthLimiter(5_000_000),
 		globalDownloadBitsPerSecond: 40_000_000,
 		globalUploadBitsPerSecond:   5_000_000,
+		sharedDownloadLimiter:       newBandwidthLimiter(0),
+		sharedUploadLimiter:         newBandwidthLimiter(0),
 		clients:                     make(map[string]*clientTraffic),
 	}
 }
@@ -154,6 +162,16 @@ func (m *TrafficManager) setClientPolicy(ip string, policy ClientPolicy) {
 	client.applyPolicy(policy)
 }
 
+func (m *TrafficManager) setSharedPolicy(policy ClientPolicy) {
+	m.mu.Lock()
+	m.sharedPolicy = policy
+	m.mu.Unlock()
+
+	m.sharedDownloadLimiter.setRate(policy.DownloadBitsPerSecond)
+	m.sharedUploadLimiter.setRate(policy.UploadBitsPerSecond)
+}
+
+
 func (c *clientTraffic) applyPolicy(policy ClientPolicy) {
 	c.Policy = policy
 	if c.downloadLimiter == nil {
@@ -186,10 +204,35 @@ func (m *TrafficManager) clientLocked(ip string) *clientTraffic {
 
 func (m *TrafficManager) waitAllowed(ip string, dir direction, byteCount int) bool {
 	m.mu.Lock()
-	client := m.clientLocked(ip)
-	client.LastSeen = time.Now()
 
 	globalUsed := m.totalUpBytes + m.totalDownBytes
+	globalLimiter := m.globalUploadLimiter
+	if dir == directionDownload {
+		globalLimiter = m.globalDownloadLimiter
+	}
+
+	if isSharedTunnelAddress(ip) {
+		sharedUsed := m.sharedUpBytes + m.sharedDownBytes
+		if m.sharedPolicy.Blocked ||
+			(m.globalQuotaBytes > 0 && globalUsed >= m.globalQuotaBytes) ||
+			(m.sharedPolicy.QuotaBytes > 0 && sharedUsed >= m.sharedPolicy.QuotaBytes) {
+			m.mu.Unlock()
+			return false
+		}
+
+		sharedLimiter := m.sharedUploadLimiter
+		if dir == directionDownload {
+			sharedLimiter = m.sharedDownloadLimiter
+		}
+		m.mu.Unlock()
+
+		globalLimiter.wait(byteCount)
+		sharedLimiter.wait(byteCount)
+		return true
+	}
+
+	client := m.clientLocked(ip)
+	client.LastSeen = time.Now()
 	clientUsed := client.UpBytes + client.DownBytes
 
 	if client.Policy.Blocked ||
@@ -200,10 +243,8 @@ func (m *TrafficManager) waitAllowed(ip string, dir direction, byteCount int) bo
 	}
 
 	clientLimiter := client.uploadLimiter
-	globalLimiter := m.globalUploadLimiter
 	if dir == directionDownload {
 		clientLimiter = client.downloadLimiter
-		globalLimiter = m.globalDownloadLimiter
 	}
 	m.mu.Unlock()
 
@@ -220,17 +261,28 @@ func (m *TrafficManager) account(ip string, dir direction, byteCount int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	client := m.clientLocked(ip)
-	client.LastSeen = time.Now()
-
 	if dir == directionDownload {
-		client.DownBytes += int64(byteCount)
 		m.totalDownBytes += int64(byteCount)
+		if isSharedTunnelAddress(ip) {
+			m.sharedDownBytes += int64(byteCount)
+			return
+		}
+
+		client := m.clientLocked(ip)
+		client.LastSeen = time.Now()
+		client.DownBytes += int64(byteCount)
 		return
 	}
 
-	client.UpBytes += int64(byteCount)
 	m.totalUpBytes += int64(byteCount)
+	if isSharedTunnelAddress(ip) {
+		m.sharedUpBytes += int64(byteCount)
+		return
+	}
+
+	client := m.clientLocked(ip)
+	client.LastSeen = time.Now()
+	client.UpBytes += int64(byteCount)
 }
 
 func (m *TrafficManager) resetStats() {
@@ -239,6 +291,8 @@ func (m *TrafficManager) resetStats() {
 
 	m.totalUpBytes = 0
 	m.totalDownBytes = 0
+	m.sharedUpBytes = 0
+	m.sharedDownBytes = 0
 	for _, client := range m.clients {
 		client.UpBytes = 0
 		client.DownBytes = 0
@@ -249,8 +303,10 @@ type trafficStatsSnapshot struct {
 	GlobalDownloadBitsPerSecond int64                `json:"globalDownloadBps"`
 	GlobalUploadBitsPerSecond   int64                `json:"globalUploadBps"`
 	GlobalQuotaBytes            int64                `json:"globalQuotaBytes"`
-	TotalUpBytes                int64                `json:"totalUpBytes"`
-	TotalDownBytes              int64                `json:"totalDownBytes"`
+	TotalUpBytes                int64                 `json:"totalUpBytes"`
+	TotalDownBytes              int64                 `json:"totalDownBytes"`
+	SharedUpBytes               int64                 `json:"sharedUpBytes"`
+	SharedDownBytes             int64                 `json:"sharedDownBytes"`
 	Clients                     []clientStatsSnapshot `json:"clients"`
 }
 
@@ -276,6 +332,8 @@ func (m *TrafficManager) statsJSON() string {
 		GlobalQuotaBytes:            m.globalQuotaBytes,
 		TotalUpBytes:                m.totalUpBytes,
 		TotalDownBytes:              m.totalDownBytes,
+		SharedUpBytes:               m.sharedUpBytes,
+		SharedDownBytes:             m.sharedDownBytes,
 		Clients:                     make([]clientStatsSnapshot, 0, len(m.clients)),
 	}
 
@@ -299,4 +357,13 @@ func (m *TrafficManager) statsJSON() string {
 		return "{}"
 	}
 	return string(encoded)
+}
+
+func isSharedTunnelAddress(ip string) bool {
+	switch ip {
+	case "192.0.2.2", "2001:db8::2":
+		return true
+	default:
+		return false
+	}
 }
