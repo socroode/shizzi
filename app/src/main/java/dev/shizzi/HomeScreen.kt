@@ -48,7 +48,7 @@ data class AppActions(
     val onSetHotspotBand: (HotspotBand) -> Unit,
     val onSetGlobalTrafficPolicy: (Int, Int, Long) -> Unit,
     val onSetDefaultClientTrafficPolicy: (Int, Int, Long) -> Unit,
-    val onSetClientTrafficPolicy: (String, Int, Int, Long, Boolean) -> Unit,
+    val onSetClientTrafficPolicy: (String, String, Int, Int, Long, Boolean) -> Unit,
     val onResetTrafficStats: () -> Unit,
     val onRunProbes: () -> Unit,
     val onDismissDiagnostics: () -> Unit,
