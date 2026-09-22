@@ -34,6 +34,11 @@ class UpstreamTolerance(
     private var strikes = 0
     private var lastReading = UpstreamReading.HEALTHY
 
+    fun reset() {
+        strikes = 0
+        lastReading = UpstreamReading.HEALTHY
+    }
+
     fun judge(reading: UpstreamReading, names: List<String>): String? {
         if (reading == UpstreamReading.HEALTHY) {
             strikes = 0
