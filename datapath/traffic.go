@@ -133,7 +133,7 @@ func (m *TrafficManager) setGlobalPolicy(downloadBps, uploadBps, quotaBytes int6
 	m.globalUploadLimiter.setRate(uploadBps)
 }
 
-func (m *TrafficManager) setDefaultClientPolicy(downloadBps, uploadBps, quotaBytes int64) {
+func (m *TrafficManager) setDefaultClientPolicy(downloadBps, uploadBps, quotaBytes int64, blocked bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -141,6 +141,7 @@ func (m *TrafficManager) setDefaultClientPolicy(downloadBps, uploadBps, quotaByt
 		DownloadBitsPerSecond: downloadBps,
 		UploadBitsPerSecond:   uploadBps,
 		QuotaBytes:            quotaBytes,
+		Blocked:               blocked,
 	}
 
 	for _, client := range m.clients {
