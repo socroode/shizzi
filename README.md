@@ -42,6 +42,10 @@ Download the APK from the
   Normal/Priority/VIP classes, active-client limits, temporary pauses,
   persistent known devices, per-device day/week/month/total usage, quick
   Guest/Family/VIP profiles, and connection history.
+- 🎟️ **Access Pass.** Generate persistent Guest/Day/VIP passes, optionally
+  require a pass before a hotspot client gets Internet access, assign passes
+  to online or offline known devices, and enforce pass duration, data quota,
+  and speed caps across reconnects.
 - 🔐 **Stable update signing.** Release APKs can use one permanent signing
   identity so future versions install as updates instead of requiring an
   uninstall. See [release signing](docs/release-signing.md).
