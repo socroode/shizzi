@@ -1,6 +1,7 @@
 package dev.shizzi
 
 import android.app.Application
+import java.security.SecureRandom
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.shizzi.ui.theme.AccentChoice
@@ -138,6 +139,53 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     fun setManagerOptions(dynamicBandwidthSharing: Boolean, maxClients: Int) {
         viewModelScope.launch {
             settingsStore.setManagerOptions(dynamicBandwidthSharing, maxClients)
+        }
+    }
+
+
+    fun setAccessPassRequired(required: Boolean) {
+        viewModelScope.launch {
+            settingsStore.setAccessPassRequired(required)
+        }
+    }
+
+    fun createAccessPass(
+        name: String,
+        downloadMbps: Int,
+        uploadMbps: Int,
+        quotaBytes: Long,
+        durationMinutes: Long,
+    ) {
+        viewModelScope.launch {
+            val existing = settingsStore.settings.first().accessPasses.keys
+            var code: String
+            do {
+                code = generateAccessPassCode()
+            } while (code in existing)
+
+            settingsStore.upsertAccessPass(
+                AccessPass(
+                    code = code,
+                    name = name.trim(),
+                    downloadMbps = downloadMbps.coerceAtLeast(0),
+                    uploadMbps = uploadMbps.coerceAtLeast(0),
+                    quotaBytes = quotaBytes.coerceAtLeast(0L),
+                    durationMinutes = durationMinutes.coerceAtLeast(0L),
+                    createdAtMillis = System.currentTimeMillis(),
+                ),
+            )
+        }
+    }
+
+    fun assignAccessPass(code: String, deviceId: String) {
+        viewModelScope.launch {
+            settingsStore.assignAccessPass(code, deviceId)
+        }
+    }
+
+    fun revokeAccessPass(code: String) {
+        viewModelScope.launch {
+            settingsStore.revokeAccessPass(code)
         }
     }
 
