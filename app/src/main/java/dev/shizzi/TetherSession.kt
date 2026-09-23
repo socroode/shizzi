@@ -432,15 +432,68 @@ class TetherSession(private val context: Context) {
     }
 
     private fun verifyUpstream(name: String) {
-        val deadline = System.currentTimeMillis() + UPSTREAM_SETTLE_MS
-        var observed = liveUpstreams(name)
+        if (awaitOwnedUpstream(name, UPSTREAM_SETTLE_MS)) return
 
-        while (System.currentTimeMillis() < deadline) {
-            if (observed.isNotEmpty() && observed.all { it == name }) return
-            Thread.sleep(UPSTREAM_POLL_MS)
-            observed = liveUpstreams(name)
-        }
+        val firstObserved = liveUpstreams(name)
+        SessionLog.warn(
+            "startup upstream mismatch: expected $name, observed $firstObserved; " +
+                "starting cold rebind",
+        )
+
+        if (recoverStartupUpstream(name)) return
+
+        val observed = liveUpstreams(name)
         error("verifyUpstream: expected only $name, tethering reports $observed")
+    }
+
+    private fun recoverStartupUpstream(name: String): Boolean {
+        repeat(STARTUP_RECOVERY_ATTEMPTS) { index ->
+            val attempt = index + 1
+            SessionLog.warn(
+                "startup recovery attempt $attempt/$STARTUP_RECOVERY_ATTEMPTS for $name",
+            )
+
+            val rebound = runCatching {
+                val control = DownstreamControl(context)
+                control.stopWifiTethering()
+
+                val preference = TetheringPreferenceApi(context)
+                runCatching { preference.setPreferTestNetworks(false) }
+                    .onFailure {
+                        SessionLog.warn(
+                            "startup recovery could not clear test-network preference: " +
+                                it.message,
+                        )
+                    }
+
+                Thread.sleep(STARTUP_RECOVERY_CLEAR_MS)
+                preference.setPreferTestNetworks(true)
+
+                val (didStart, detail) = control.startWifiTethering()
+                check(didStart) {
+                    "startup recovery: hotspot did not start ($detail)"
+                }
+
+                awaitDownstreamTethered()
+            }.onFailure { failure ->
+                SessionLog.warn(
+                    "startup recovery attempt $attempt failed: ${failure.message}",
+                )
+            }.isSuccess
+
+            if (rebound && awaitOwnedUpstream(name, STARTUP_RECOVERY_WAIT_MS)) {
+                SessionLog.info(
+                    "startup recovery restored owned upstream $name on attempt $attempt",
+                )
+                return true
+            }
+
+            SessionLog.warn(
+                "startup recovery attempt $attempt still sees ${liveUpstreams(name)}",
+            )
+        }
+
+        return false
     }
 
     private fun liveUpstreams(owned: String): List<String> =
@@ -547,5 +600,9 @@ class TetherSession(private val context: Context) {
         const val RECOVERY_PREFERENCE_WAIT_MS = 4_000L
         const val RECOVERY_RESTART_WAIT_MS = 8_000L
         const val RECOVERY_POLL_MS = 500L
+
+        const val STARTUP_RECOVERY_ATTEMPTS = 2
+        const val STARTUP_RECOVERY_CLEAR_MS = 1_500L
+        const val STARTUP_RECOVERY_WAIT_MS = 10_000L
     }
 }
