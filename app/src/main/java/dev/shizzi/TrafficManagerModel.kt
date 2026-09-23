@@ -41,6 +41,11 @@ data class ConnectionEvent(
 )
 
 
+const val PREPAID_PASS_DOWNLOAD_MBPS = 10
+const val PREPAID_PASS_UPLOAD_MBPS = 5
+const val PREPAID_PASS_QUOTA_BYTES = 100_000_000_000L
+const val PREPAID_PASS_DURATION_MINUTES = 43_200L
+
 data class AccessPass(
     val code: String,
     val name: String = "",
@@ -341,22 +346,28 @@ fun decodeAccessPasses(raw: String?): Map<String, AccessPass> {
             val item = array.optJSONObject(index) ?: continue
             val code = item.optString("code").trim().uppercase()
             if (code.isBlank()) continue
-            put(
-                code,
-                AccessPass(
-                    code = code,
-                    name = item.optString("name"),
-                    downloadMbps = item.optInt("downloadMbps").coerceAtLeast(0),
-                    uploadMbps = item.optInt("uploadMbps").coerceAtLeast(0),
-                    quotaBytes = item.optLong("quotaBytes").coerceAtLeast(0L),
-                    durationMinutes = item.optLong("durationMinutes").coerceAtLeast(0L),
-                    createdAtMillis = item.optLong("createdAtMillis").coerceAtLeast(0L),
-                    assignedDeviceId = item.optString("assignedDeviceId").lowercase(),
-                    activatedAtMillis = item.optLong("activatedAtMillis").coerceAtLeast(0L),
-                    startTotalBytes = item.optLong("startTotalBytes").coerceAtLeast(0L),
-                    enabled = if (item.has("enabled")) item.optBoolean("enabled") else true,
-                ),
+            val pass = AccessPass(
+                code = code,
+                name = item.optString("name"),
+                downloadMbps = item.optInt("downloadMbps").coerceAtLeast(0),
+                uploadMbps = item.optInt("uploadMbps").coerceAtLeast(0),
+                quotaBytes = item.optLong("quotaBytes").coerceAtLeast(0L),
+                durationMinutes = item.optLong("durationMinutes").coerceAtLeast(0L),
+                createdAtMillis = item.optLong("createdAtMillis").coerceAtLeast(0L),
+                assignedDeviceId = item.optString("assignedDeviceId").lowercase(),
+                activatedAtMillis = item.optLong("activatedAtMillis").coerceAtLeast(0L),
+                startTotalBytes = item.optLong("startTotalBytes").coerceAtLeast(0L),
+                enabled = if (item.has("enabled")) item.optBoolean("enabled") else true,
             )
+            if (
+                pass.downloadMbps != PREPAID_PASS_DOWNLOAD_MBPS ||
+                pass.uploadMbps != PREPAID_PASS_UPLOAD_MBPS ||
+                pass.quotaBytes != PREPAID_PASS_QUOTA_BYTES ||
+                pass.durationMinutes != PREPAID_PASS_DURATION_MINUTES
+            ) {
+                continue
+            }
+            put(code, pass)
         }
     }
 }
