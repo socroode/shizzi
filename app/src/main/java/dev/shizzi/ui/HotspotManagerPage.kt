@@ -31,6 +31,10 @@ import dev.shizzi.ClientPriority
 import dev.shizzi.ClientTrafficStats
 import dev.shizzi.ManagerTrafficStats
 import dev.shizzi.MonthlyUsageRecord
+import dev.shizzi.PREPAID_PASS_DOWNLOAD_MBPS
+import dev.shizzi.PREPAID_PASS_DURATION_MINUTES
+import dev.shizzi.PREPAID_PASS_QUOTA_BYTES
+import dev.shizzi.PREPAID_PASS_UPLOAD_MBPS
 import dev.shizzi.Settings
 import dev.shizzi.Traffic
 import dev.shizzi.UiStatus
@@ -174,44 +178,22 @@ fun HotspotManagerPage(
                 onClick = { editPortal = true },
             )
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(ShizziTheme.spacing.xs),
-            ) {
-                TextButton(
-                    onClick = {
-                        actions.onCreateAccessPass(
-                            "Guest 1h",
-                            5,
-                            2,
-                            2_000_000_000L,
-                            60L,
-                        )
-                    },
-                ) { Text("Guest 1h") }
-                TextButton(
-                    onClick = {
-                        actions.onCreateAccessPass(
-                            "Day",
-                            10,
-                            5,
-                            10_000_000_000L,
-                            1_440L,
-                        )
-                    },
-                ) { Text("Day") }
-                TextButton(
-                    onClick = {
-                        actions.onCreateAccessPass(
-                            "VIP 24h",
-                            20,
-                            5,
-                            0L,
-                            1_440L,
-                        )
-                    },
-                ) { Text("VIP") }
-            }
+            SettingsChoice(
+                label = SettingsText(
+                    title = "Prepaid voucher",
+                    subtitle = "30 days · 100 GB · 10/5 Mbps",
+                ),
+                value = "Create",
+                onClick = {
+                    actions.onCreateAccessPass(
+                        "Prepaid 30 days",
+                        PREPAID_PASS_DOWNLOAD_MBPS,
+                        PREPAID_PASS_UPLOAD_MBPS,
+                        PREPAID_PASS_QUOTA_BYTES,
+                        PREPAID_PASS_DURATION_MINUTES,
+                    )
+                },
+            )
 
             if (settings.accessPasses.isEmpty()) {
                 Text(
@@ -992,7 +974,10 @@ private fun accessPassSummary(pass: AccessPass): String {
     val duration = when {
         pass.durationMinutes <= 0L -> "no expiry"
         pass.durationMinutes < 60L -> "${pass.durationMinutes} min"
-        pass.durationMinutes % 1_440L == 0L -> "${pass.durationMinutes / 1_440L} day"
+        pass.durationMinutes % 1_440L == 0L -> {
+            val days = pass.durationMinutes / 1_440L
+            if (days == 1L) "1 day" else "$days days"
+        }
         else -> "${pass.durationMinutes / 60L} h"
     }
     return "$speed · $quota · $duration"
