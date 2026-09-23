@@ -215,6 +215,9 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	}
 
 	page := m.renderPortalPage(clientIP, ok, message)
+	if ok && req.Method == http.MethodPost {
+		page = injectPortalValidationRedirect(page)
+	}
 	status := "200 OK"
 	headers := fmt.Sprintf(
 		"HTTP/1.1 %s\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nConnection: close\r\nContent-Length: %d\r\n\r\n",
@@ -391,9 +394,36 @@ func portalUsagePopup(planName, speedText, usedText, remainingText, expiresText 
     <div class="row"><span>Validité restante</span><strong>%s</strong></div>
     <div class="row"><span>Débit</span><strong>%s</strong></div>
     <a href="http://192.0.2.2/" style="display:block;margin-top:18px;text-align:center;color:#d1d5db;text-decoration:none">Actualiser ma consommation</a>
-    <button type="button" onclick="document.getElementById('shizzi-usage-backdrop').remove()">Continuer</button>
+    <button type="button" onclick="if(window.shizziFinishLogin){window.shizziFinishLogin()}else{window.location.replace('http://connectivitycheck.gstatic.com/generate_204')}">Continuer</button>
   </div>
 </div>`, plan, used, remaining, expires, speed)
+}
+
+const portalValidationURL = "http://connectivitycheck.gstatic.com/generate_204"
+
+func injectPortalValidationRedirect(page string) string {
+	bridge := fmt.Sprintf(`
+<script>
+(function(){
+  var target=%q;
+  var timer=null;
+  window.shizziFinishLogin=function(){
+    if(timer){clearTimeout(timer);}
+    window.location.replace(target);
+  };
+  timer=setTimeout(window.shizziFinishLogin,3000);
+})();
+</script>
+<noscript><p style="text-align:center"><a href="%s">Continuer vers Internet</a></p></noscript>`,
+		portalValidationURL,
+		html.EscapeString(portalValidationURL),
+	)
+
+	lower := strings.ToLower(page)
+	if index := strings.LastIndex(lower, "</body>"); index >= 0 {
+		return page[:index] + bridge + page[index:]
+	}
+	return page + bridge
 }
 
 func normalizePortalCode(raw string) string {

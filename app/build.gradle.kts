@@ -60,8 +60,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 21
-        versionName = "1.1.2-usage-popup"
+        versionCode = 22
+        versionName = "1.1.3-captive-validation"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 

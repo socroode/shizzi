@@ -5,6 +5,10 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- After a voucher is accepted, the captive portal now automatically hands the client back to Android's connectivity check so the Wi-Fi network can become validated without choosing “Use this network as is”. The usage popup remains visible briefly, and its Continue button completes validation immediately.
+
 ## [0.8.1] - 2026-09-23
 
 ### Fixed
