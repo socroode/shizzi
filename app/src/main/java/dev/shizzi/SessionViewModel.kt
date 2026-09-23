@@ -135,6 +135,12 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun setManagerOptions(dynamicBandwidthSharing: Boolean, maxClients: Int) {
+        viewModelScope.launch {
+            settingsStore.setManagerOptions(dynamicBandwidthSharing, maxClients)
+        }
+    }
+
     fun setClientTrafficPolicy(
         deviceId: String,
         ip: String,
@@ -142,22 +148,28 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         downloadMbps: Int,
         uploadMbps: Int,
         monthlyQuotaBytes: Long,
+        priority: ClientPriority,
         blocked: Boolean,
         blockOnQuota: Boolean,
     ) {
         viewModelScope.launch {
+            val snapshot = settingsStore.settings.first()
+            val previous = snapshot.devicePolicies[deviceId.lowercase()]
+                ?: snapshot.clientPolicies[ip]
             val policy = ClientPolicySetting(
                 name = name.trim(),
                 downloadMbps = downloadMbps,
                 uploadMbps = uploadMbps,
                 quotaBytes = 0,
                 monthlyQuotaBytes = monthlyQuotaBytes,
+                priority = priority,
                 blocked = blocked,
                 blockOnQuota = blockOnQuota,
+                pausedUntilMillis = previous?.pausedUntilMillis ?: 0L,
             )
             settingsStore.setDeviceTrafficPolicy(deviceId, policy)
 
-            if (SessionService.isSessionUp) {
+            if (SessionService.isSessionUp && ip.isNotBlank()) {
                 runCatching {
                     val month = java.time.YearMonth.now().toString()
                     val settings = settingsStore.settings.first()
@@ -180,12 +192,67 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                         uploadBps = uploadMbps.toLong() * 1_000_000L,
                         quotaBytes = effectiveQuota,
                         blocked = blocked ||
+                            policy.pausedUntilMillis > System.currentTimeMillis() ||
                             (blockOnQuota && monthlyQuotaBytes > 0 && used >= monthlyQuotaBytes),
                     )
                 }.onFailure {
                     SessionLog.warn("live device traffic policy update failed for $deviceId/$ip: ${it.message}")
                 }
             }
+        }
+    }
+
+    fun setClientPause(deviceId: String, ip: String, durationMillis: Long) {
+        viewModelScope.launch {
+            val snapshot = settingsStore.settings.first()
+            val previous = snapshot.devicePolicies[deviceId.lowercase()]
+                ?: snapshot.clientPolicies[ip]
+                ?: ClientPolicySetting(
+                    downloadMbps = snapshot.defaultClientDownloadMbps,
+                    uploadMbps = snapshot.defaultClientUploadMbps,
+                    quotaBytes = snapshot.defaultClientQuotaBytes,
+                )
+            val until = when {
+                durationMillis <= 0L -> 0L
+                else -> System.currentTimeMillis() + durationMillis
+            }
+            val updated = previous.copy(pausedUntilMillis = until)
+            settingsStore.setDeviceTrafficPolicy(deviceId, updated)
+
+            if (SessionService.isSessionUp && ip.isNotBlank()) {
+                val month = java.time.YearMonth.now().toString()
+                val current = settingsStore.settings.first()
+                val used = current.monthlyUsageByDevice[deviceId.lowercase()]
+                    ?.takeIf { it.month == month }
+                    ?.bytes
+                    ?: 0L
+                val sessionUsed = SessionService.liveState.value.managerTraffic.clients
+                    .firstOrNull { it.ip == ip }
+                    ?.totalBytes
+                    ?: 0L
+                val effectiveQuota = when {
+                    updated.monthlyQuotaBytes <= 0 -> updated.quotaBytes
+                    else -> sessionUsed +
+                        (updated.monthlyQuotaBytes - used).coerceAtLeast(0L)
+                }
+                diagnostics.setClientTrafficPolicy(
+                    ip = ip,
+                    downloadBps = updated.downloadMbps.toLong() * 1_000_000L,
+                    uploadBps = updated.uploadMbps.toLong() * 1_000_000L,
+                    quotaBytes = effectiveQuota,
+                    blocked = updated.blocked ||
+                        updated.pausedUntilMillis > System.currentTimeMillis() ||
+                        (updated.blockOnQuota &&
+                            updated.monthlyQuotaBytes > 0 &&
+                            used >= updated.monthlyQuotaBytes),
+                )
+            }
+        }
+    }
+
+    fun resetClientMonthlyUsage(deviceId: String) {
+        viewModelScope.launch {
+            settingsStore.resetMonthlyUsage(deviceId, java.time.YearMonth.now().toString())
         }
     }
 
