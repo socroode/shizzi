@@ -45,6 +45,8 @@ data class Settings(
     val dynamicBandwidthSharing: Boolean = false,
     val maxClients: Int = 0,
     val connectionHistory: List<ConnectionEvent> = emptyList(),
+    val accessPassRequired: Boolean = false,
+    val accessPasses: Map<String, AccessPass> = emptyMap(),
 
     val hasCompletedOnboarding: Boolean = false,
 
@@ -232,6 +234,69 @@ class SettingsStore(private val context: Context) {
         }
     }
 
+    suspend fun setAccessPassRequired(required: Boolean) {
+        context.dataStore.edit { it[ACCESS_PASS_REQUIRED] = required }
+    }
+
+    suspend fun upsertAccessPass(pass: AccessPass) {
+        val code = pass.code.trim().uppercase()
+        if (code.isBlank()) return
+        context.dataStore.edit { preferences ->
+            val passes = decodeAccessPasses(preferences[ACCESS_PASSES]).toMutableMap()
+            passes[code] = pass.copy(code = code)
+            preferences[ACCESS_PASSES] = encodeAccessPasses(passes)
+        }
+    }
+
+    suspend fun assignAccessPass(code: String, deviceId: String) {
+        val normalizedCode = code.trim().uppercase()
+        val normalizedDevice = deviceId.lowercase()
+        if (normalizedCode.isBlank() || normalizedDevice.isBlank()) return
+
+        context.dataStore.edit { preferences ->
+            val passes = decodeAccessPasses(preferences[ACCESS_PASSES]).toMutableMap()
+            val pass = passes[normalizedCode] ?: return@edit
+            if (!pass.enabled) return@edit
+
+            val usage = decodeMonthlyUsage(preferences[MONTHLY_USAGE])
+            val startTotal = usage[normalizedDevice]?.totalBytes ?: 0L
+            val now = System.currentTimeMillis()
+
+            passes.keys.toList().forEach { key ->
+                val existing = passes[key] ?: return@forEach
+                if (existing.assignedDeviceId == normalizedDevice && key != normalizedCode) {
+                    passes[key] = existing.copy(
+                        assignedDeviceId = "",
+                        activatedAtMillis = 0L,
+                        startTotalBytes = 0L,
+                    )
+                }
+            }
+
+            passes[normalizedCode] = pass.copy(
+                assignedDeviceId = normalizedDevice,
+                activatedAtMillis = now,
+                startTotalBytes = startTotal,
+            )
+            preferences[ACCESS_PASSES] = encodeAccessPasses(passes)
+        }
+    }
+
+    suspend fun revokeAccessPass(code: String) {
+        val normalizedCode = code.trim().uppercase()
+        if (normalizedCode.isBlank()) return
+        context.dataStore.edit { preferences ->
+            val passes = decodeAccessPasses(preferences[ACCESS_PASSES]).toMutableMap()
+            val pass = passes[normalizedCode] ?: return@edit
+            passes[normalizedCode] = pass.copy(
+                assignedDeviceId = "",
+                activatedAtMillis = 0L,
+                startTotalBytes = 0L,
+            )
+            preferences[ACCESS_PASSES] = encodeAccessPasses(passes)
+        }
+    }
+
     suspend fun appendConnectionEvents(events: List<ConnectionEvent>) {
         if (events.isEmpty()) return
         context.dataStore.edit { preferences ->
@@ -284,6 +349,8 @@ internal val MONTHLY_USAGE = stringPreferencesKey("monthly_usage")
 internal val DYNAMIC_BANDWIDTH = booleanPreferencesKey("dynamic_bandwidth")
 internal val MAX_CLIENTS = intPreferencesKey("max_clients")
 internal val CONNECTION_HISTORY = stringPreferencesKey("connection_history")
+internal val ACCESS_PASS_REQUIRED = booleanPreferencesKey("access_pass_required")
+internal val ACCESS_PASSES = stringPreferencesKey("access_passes")
 internal val ONBOARDED = booleanPreferencesKey("onboarded")
 internal val AUTOMATION = booleanPreferencesKey("automation")
 internal val AUTOMATION_TOKEN = stringPreferencesKey("automation_token")
@@ -310,6 +377,8 @@ internal fun toSettings(preferences: Preferences) = Settings(
     dynamicBandwidthSharing = preferences[DYNAMIC_BANDWIDTH] ?: false,
     maxClients = preferences[MAX_CLIENTS] ?: 0,
     connectionHistory = decodeConnectionHistory(preferences[CONNECTION_HISTORY]),
+    accessPassRequired = preferences[ACCESS_PASS_REQUIRED] ?: false,
+    accessPasses = decodeAccessPasses(preferences[ACCESS_PASSES]),
     hasCompletedOnboarding = preferences[ONBOARDED] ?: false,
     isAutomationEnabled = preferences[AUTOMATION] ?: false,
     automationToken = preferences[AUTOMATION_TOKEN].orEmpty(),
