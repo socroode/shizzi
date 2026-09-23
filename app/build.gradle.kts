@@ -60,8 +60,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 19
-        versionName = "1.1.0-captive-portal"
+        versionCode = 20
+        versionName = "1.1.1-prepaid-30d"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 
