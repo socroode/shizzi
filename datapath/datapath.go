@@ -185,6 +185,14 @@ func (s *Session) SetPortalClientAccess(
 	)
 }
 
+// ClearPortalClaims acknowledges portal voucher submissions already persisted by Android.
+func (s *Session) ClearPortalClaims() {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.clearPortalClaims()
+}
+
 // TrafficStatsJSON returns aggregate and per-client counters/policies.
 func (s *Session) TrafficStatsJSON() string {
 	if s.traffic == nil {
