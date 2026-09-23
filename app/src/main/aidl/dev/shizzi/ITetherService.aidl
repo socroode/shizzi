@@ -34,6 +34,8 @@ interface ITetherService {
         boolean allowed
     );
 
+    void clearPortalClaims();
+
     void resetTrafficStats();
 
     String runProbes(boolean attemptTethering, int availabilityTimeoutMs);
