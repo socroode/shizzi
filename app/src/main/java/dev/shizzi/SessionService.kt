@@ -44,6 +44,7 @@ class SessionService : Service() {
     private val monthlyUsageLock = Mutex()
 
     private var lastUsageSyncAt = 0L
+    private var onlineDeviceIds: Set<String> = emptySet()
 
     override fun onCreate() {
         super.onCreate()
@@ -145,7 +146,12 @@ class SessionService : Service() {
                     return
                 }
 
-            val counters = stats.clients
+            val activeClients = stats.clients.filter { client ->
+                client.lastSeenUnixMillis > 0L &&
+                    now - client.lastSeenUnixMillis <= ACTIVE_CLIENT_WINDOW_MS
+            }
+
+            val counters = activeClients
                 .groupBy { client ->
                     client.deviceId.lowercase().ifBlank { client.ip }
                 }
@@ -158,17 +164,70 @@ class SessionService : Service() {
                 sessionKey = sessionKey,
                 countersByDevice = counters,
             )
-            val settings = settingsStore().settings.first()
 
-            stats.clients.forEach { client ->
+            var settings = settingsStore().settings.first()
+
+            activeClients.forEach { client ->
                 val deviceId = client.deviceId.lowercase().ifBlank { client.ip }
-                val policy = settings.devicePolicies[deviceId]
+                if (deviceId !in settings.devicePolicies) {
+                    settingsStore().setDeviceTrafficPolicy(
+                        deviceId,
+                        ClientPolicySetting(
+                            downloadMbps = settings.defaultClientDownloadMbps,
+                            uploadMbps = settings.defaultClientUploadMbps,
+                            quotaBytes = settings.defaultClientQuotaBytes,
+                        ),
+                    )
+                }
+            }
+            settings = settingsStore().settings.first()
+
+            val currentOnline = activeClients
+                .map { it.deviceId.lowercase().ifBlank { it.ip } }
+                .filter { it.isNotBlank() }
+                .toSet()
+            val historyEvents = buildList {
+                (currentOnline - onlineDeviceIds).forEach { deviceId ->
+                    add(ConnectionEvent(deviceId, connected = true, atUnixMillis = now))
+                }
+                (onlineDeviceIds - currentOnline).forEach { deviceId ->
+                    add(ConnectionEvent(deviceId, connected = false, atUnixMillis = now))
+                }
+            }
+            if (historyEvents.isNotEmpty()) {
+                settingsStore().appendConnectionEvents(historyEvents)
+                settings = settingsStore().settings.first()
+            }
+            onlineDeviceIds = currentOnline
+
+            fun policyFor(client: ClientTrafficStats): ClientPolicySetting {
+                val deviceId = client.deviceId.lowercase().ifBlank { client.ip }
+                return settings.devicePolicies[deviceId]
                     ?: settings.clientPolicies[client.ip]
                     ?: ClientPolicySetting(
                         downloadMbps = settings.defaultClientDownloadMbps,
                         uploadMbps = settings.defaultClientUploadMbps,
                         quotaBytes = settings.defaultClientQuotaBytes,
                     )
+            }
+
+            val orderedActive = activeClients.sortedWith(
+                compareByDescending<ClientTrafficStats> { policyFor(it).priority.weight }
+                    .thenBy { it.deviceId.lowercase().ifBlank { it.ip } },
+            )
+            val admittedIds = when {
+                settings.maxClients <= 0 -> orderedActive
+                else -> orderedActive.take(settings.maxClients)
+            }.map { it.deviceId.lowercase().ifBlank { it.ip } }.toSet()
+
+            val totalWeight = orderedActive
+                .filter { it.deviceId.lowercase().ifBlank { it.ip } in admittedIds }
+                .sumOf { policyFor(it).priority.weight }
+                .coerceAtLeast(1)
+
+            stats.clients.forEach { client ->
+                val deviceId = client.deviceId.lowercase().ifBlank { client.ip }
+                val policy = policyFor(client)
 
                 val monthlyUsed = settings.monthlyUsageByDevice[deviceId]
                     ?.takeIf { it.month == month }
@@ -183,14 +242,41 @@ class SessionService : Service() {
 
                 val monthlyBlocked =
                     policy.blockOnQuota && monthlyQuota > 0 && monthlyUsed >= monthlyQuota
+                val paused = policy.pausedUntilMillis > now
+                val isActive = deviceId in currentOnline
+                val overClientLimit =
+                    isActive && settings.maxClients > 0 && deviceId !in admittedIds
+
+                fun effectiveRate(globalMbps: Int, clientMbps: Int): Long {
+                    val manual = clientMbps.toLong() * 1_000_000L
+                    if (!settings.dynamicBandwidthSharing || !isActive || deviceId !in admittedIds) {
+                        return manual
+                    }
+                    val global = globalMbps.toLong() * 1_000_000L
+                    if (global <= 0L) return manual
+                    val share = global * policy.priority.weight / totalWeight
+                    return when {
+                        manual <= 0L -> share
+                        else -> manual.coerceAtMost(share)
+                    }
+                }
 
                 runCatching {
                     controller.setClientTrafficPolicy(
                         ip = client.ip,
-                        downloadBps = policy.downloadMbps.toLong() * 1_000_000L,
-                        uploadBps = policy.uploadMbps.toLong() * 1_000_000L,
+                        downloadBps = effectiveRate(
+                            settings.globalDownloadMbps,
+                            policy.downloadMbps,
+                        ),
+                        uploadBps = effectiveRate(
+                            settings.globalUploadMbps,
+                            policy.uploadMbps,
+                        ),
                         quotaBytes = effectiveSessionQuota,
-                        blocked = policy.blocked || monthlyBlocked,
+                        blocked = policy.blocked ||
+                            paused ||
+                            monthlyBlocked ||
+                            overClientLimit,
                     )
                 }.onFailure { failure ->
                     SessionLog.warn(
@@ -232,6 +318,16 @@ class SessionService : Service() {
                     )
                 }
                     .onFailure { SessionLog.warn("final monthly usage sync failed: ${it.message}") }
+
+                if (onlineDeviceIds.isNotEmpty()) {
+                    val now = System.currentTimeMillis()
+                    settingsStore().appendConnectionEvents(
+                        onlineDeviceIds.map { deviceId ->
+                            ConnectionEvent(deviceId, connected = false, atUnixMillis = now)
+                        },
+                    )
+                    onlineDeviceIds = emptySet()
+                }
 
                 runCatching { controller.stop() }
                     .onFailure { SessionLog.error("teardown failed: ${it.message}") }
@@ -303,6 +399,7 @@ class SessionService : Service() {
     companion object {
         private const val NOTIFICATION_ID = 1
         private const val MONTHLY_USAGE_SYNC_MS = 5_000L
+        private const val ACTIVE_CLIENT_WINDOW_MS = 15_000L
         const val ACTION_STOP = "dev.shizzi.STOP_SESSION"
         const val EXTRA_REPORT_AS = "reportAs"
 
