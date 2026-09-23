@@ -141,7 +141,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         downloadMbps: Int,
         uploadMbps: Int,
         monthlyQuotaBytes: Long,
-        blocked: Boolean,
+        blockOnQuota: Boolean,
     ) {
         viewModelScope.launch {
             val policy = ClientPolicySetting(
@@ -149,7 +149,8 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                 uploadMbps = uploadMbps,
                 quotaBytes = 0,
                 monthlyQuotaBytes = monthlyQuotaBytes,
-                blocked = blocked,
+                blocked = false,
+                blockOnQuota = blockOnQuota,
             )
             settingsStore.setDeviceTrafficPolicy(deviceId, policy)
 
@@ -175,7 +176,7 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                         downloadBps = downloadMbps.toLong() * 1_000_000L,
                         uploadBps = uploadMbps.toLong() * 1_000_000L,
                         quotaBytes = effectiveQuota,
-                        blocked = blocked || (monthlyQuotaBytes > 0 && used >= monthlyQuotaBytes),
+                        blocked = blockOnQuota && monthlyQuotaBytes > 0 && used >= monthlyQuotaBytes,
                     )
                 }.onFailure {
                     SessionLog.warn("live device traffic policy update failed for $deviceId/$ip: ${it.message}")
