@@ -106,6 +106,7 @@ class TetherSession(private val context: Context) {
             root.optLong("defaultClientDownloadBps", 0L),
             root.optLong("defaultClientUploadBps", 0L),
             root.optLong("defaultClientQuotaBytes", 0L),
+            root.optBoolean("defaultClientBlocked", false),
         )
 
         val policies = root.optJSONArray("clientPolicies")
