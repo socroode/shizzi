@@ -111,6 +111,10 @@ class TetherService : ITetherService.Stub {
         )
     }
 
+    override fun clearPortalClaims() {
+        session.clearPortalClaims()
+    }
+
     override fun resetTrafficStats() {
         session.resetTrafficStats()
     }
