@@ -36,9 +36,12 @@ Download the APK from the
   notification shade.
 - 🤖 **Automatable.** Start and stop from Tasker or MacroDroid. See
   [automation](docs/automation.md).
-- 📶 **Hotspot Manager Pro.** Global and per-device speed limits, persistent
+- 📶 **Hotspot Control.** Global and per-device speed limits, persistent
   monthly quotas, automatic quota blocking, immediate manual blocking,
-  friendly device names, and bandwidth presets.
+  friendly device names, bandwidth presets, weighted dynamic sharing,
+  Normal/Priority/VIP classes, active-client limits, temporary pauses,
+  persistent known devices, per-device day/week/month/total usage, quick
+  Guest/Family/VIP profiles, and connection history.
 - 🔐 **Stable update signing.** Release APKs can use one permanent signing
   identity so future versions install as updates instead of requiring an
   uninstall. See [release signing](docs/release-signing.md).
