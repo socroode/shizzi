@@ -40,6 +40,31 @@ data class ConnectionEvent(
     val atUnixMillis: Long,
 )
 
+
+data class AccessPass(
+    val code: String,
+    val name: String = "",
+    val downloadMbps: Int = 0,
+    val uploadMbps: Int = 0,
+    val quotaBytes: Long = 0,
+    val durationMinutes: Long = 0,
+    val createdAtMillis: Long = 0,
+    val assignedDeviceId: String = "",
+    val activatedAtMillis: Long = 0,
+    val startTotalBytes: Long = 0,
+    val enabled: Boolean = true,
+) {
+    fun expiresAtMillis(): Long = when {
+        activatedAtMillis <= 0L || durationMinutes <= 0L -> 0L
+        else -> activatedAtMillis + durationMinutes * 60_000L
+    }
+
+    fun isExpired(nowMillis: Long): Boolean {
+        val expires = expiresAtMillis()
+        return expires > 0L && nowMillis >= expires
+    }
+}
+
 data class ClientTrafficStats(
     val ip: String,
     val deviceId: String,
@@ -257,6 +282,55 @@ fun decodeConnectionHistory(raw: String?): List<ConnectionEvent> {
                     deviceId = deviceId,
                     connected = item.optBoolean("connected"),
                     atUnixMillis = item.optLong("atUnixMillis"),
+                ),
+            )
+        }
+    }
+}
+
+
+fun encodeAccessPasses(passes: Map<String, AccessPass>): String =
+    JSONArray().apply {
+        passes.toSortedMap().forEach { (_, pass) ->
+            put(
+                JSONObject().apply {
+                    put("code", pass.code)
+                    put("name", pass.name)
+                    put("downloadMbps", pass.downloadMbps)
+                    put("uploadMbps", pass.uploadMbps)
+                    put("quotaBytes", pass.quotaBytes)
+                    put("durationMinutes", pass.durationMinutes)
+                    put("createdAtMillis", pass.createdAtMillis)
+                    put("assignedDeviceId", pass.assignedDeviceId)
+                    put("activatedAtMillis", pass.activatedAtMillis)
+                    put("startTotalBytes", pass.startTotalBytes)
+                    put("enabled", pass.enabled)
+                },
+            )
+        }
+    }.toString()
+
+fun decodeAccessPasses(raw: String?): Map<String, AccessPass> {
+    val array = runCatching { JSONArray(raw.orEmpty()) }.getOrNull() ?: return emptyMap()
+    return buildMap {
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            val code = item.optString("code").trim().uppercase()
+            if (code.isBlank()) continue
+            put(
+                code,
+                AccessPass(
+                    code = code,
+                    name = item.optString("name"),
+                    downloadMbps = item.optInt("downloadMbps").coerceAtLeast(0),
+                    uploadMbps = item.optInt("uploadMbps").coerceAtLeast(0),
+                    quotaBytes = item.optLong("quotaBytes").coerceAtLeast(0L),
+                    durationMinutes = item.optLong("durationMinutes").coerceAtLeast(0L),
+                    createdAtMillis = item.optLong("createdAtMillis").coerceAtLeast(0L),
+                    assignedDeviceId = item.optString("assignedDeviceId").lowercase(),
+                    activatedAtMillis = item.optLong("activatedAtMillis").coerceAtLeast(0L),
+                    startTotalBytes = item.optLong("startTotalBytes").coerceAtLeast(0L),
+                    enabled = if (item.has("enabled")) item.optBoolean("enabled") else true,
                 ),
             )
         }
