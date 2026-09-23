@@ -102,3 +102,22 @@ func TestSharedPolicyBlocksNatTraffic(t *testing.T) {
 		t.Fatal("shared NAT traffic should stop after quota")
 	}
 }
+
+
+func TestDefaultClientPolicyCanStartBlocked(t *testing.T) {
+	m := newTrafficManager()
+	m.setDefaultClientPolicy(5_000_000, 2_000_000, 0, true)
+
+	if m.waitAllowed("192.168.1.20", directionDownload, 100) {
+		t.Fatal("new client should inherit blocked default policy")
+	}
+
+	m.setClientPolicy("192.168.1.20", ClientPolicy{
+		DownloadBitsPerSecond: 5_000_000,
+		UploadBitsPerSecond:   2_000_000,
+		Blocked:               false,
+	})
+	if !m.waitAllowed("192.168.1.20", directionDownload, 100) {
+		t.Fatal("explicit client policy should grant access")
+	}
+}
