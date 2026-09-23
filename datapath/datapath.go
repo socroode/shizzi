@@ -157,6 +157,34 @@ func (s *Session) SetSharedPolicy(
 	})
 }
 
+
+// SetPortalConfig updates the captive portal and available access passes.
+func (s *Session) SetPortalConfig(required bool, configJSON string) {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.setPortalConfig(required, configJSON)
+}
+
+// SetPortalClientAccess seeds or clears one client's portal authorization.
+// quotaRemainingBytes <= 0 means unlimited. expiresAtMillis <= 0 means no expiry.
+func (s *Session) SetPortalClientAccess(
+	ip, code string,
+	expiresAtMillis, quotaRemainingBytes int64,
+	allowed bool,
+) {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.setPortalClientAccess(
+		ip,
+		code,
+		expiresAtMillis,
+		quotaRemainingBytes,
+		allowed,
+	)
+}
+
 // TrafficStatsJSON returns aggregate and per-client counters/policies.
 func (s *Session) TrafficStatsJSON() string {
 	if s.traffic == nil {
