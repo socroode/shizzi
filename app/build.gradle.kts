@@ -60,8 +60,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 20
-        versionName = "1.1.1-prepaid-30d"
+        versionCode = 21
+        versionName = "1.1.2-usage-popup"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 
