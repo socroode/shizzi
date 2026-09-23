@@ -202,6 +202,7 @@ fun managerConfigJson(settings: Settings): String =
         put("defaultClientDownloadBps", settings.defaultClientDownloadMbps.toLong() * 1_000_000L)
         put("defaultClientUploadBps", settings.defaultClientUploadMbps.toLong() * 1_000_000L)
         put("defaultClientQuotaBytes", settings.defaultClientQuotaBytes)
+        put("defaultClientBlocked", settings.accessPassRequired)
         put("clientPolicies", JSONArray(encodeClientPolicies(settings.clientPolicies)))
     }.toString()
 
