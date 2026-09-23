@@ -60,8 +60,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.9.0-hotspot-control"
+        versionCode = 17
+        versionName = "0.9.1-hotspot-control-ui-fix"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 
