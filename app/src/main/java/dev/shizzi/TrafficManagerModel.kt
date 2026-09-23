@@ -9,6 +9,7 @@ data class ClientPolicySetting(
     val quotaBytes: Long = 0,
     val monthlyQuotaBytes: Long = 0,
     val blocked: Boolean = false,
+    val blockOnQuota: Boolean = false,
 )
 
 data class MonthlyUsageRecord(
@@ -103,6 +104,7 @@ fun encodeClientPolicies(policies: Map<String, ClientPolicySetting>): String =
                     put("quotaBytes", policy.quotaBytes)
                     put("monthlyQuotaBytes", policy.monthlyQuotaBytes)
                     put("blocked", policy.blocked)
+                    put("blockOnQuota", policy.blockOnQuota)
                 },
             )
         }
@@ -123,7 +125,15 @@ fun decodeClientPolicies(raw: String?): Map<String, ClientPolicySetting> {
                     downloadMbps = item.optInt("downloadMbps"),
                     uploadMbps = item.optInt("uploadMbps"),
                     quotaBytes = item.optLong("quotaBytes"),
-                    blocked = item.optBoolean("blocked"),
+                    monthlyQuotaBytes = item.optLong("monthlyQuotaBytes"),
+                    // v0.7.1 used "blocked" for the quota switch. Migrate that
+                    // meaning so existing users are not permanently blocked.
+                    blocked = if (item.has("blockOnQuota")) item.optBoolean("blocked") else false,
+                    blockOnQuota = if (item.has("blockOnQuota")) {
+                        item.optBoolean("blockOnQuota")
+                    } else {
+                        item.optBoolean("blocked")
+                    },
                 ),
             )
         }
