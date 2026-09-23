@@ -3,14 +3,22 @@ package dev.shizzi
 import org.json.JSONArray
 import org.json.JSONObject
 
+enum class ClientPriority(val weight: Int) {
+    NORMAL(1),
+    PRIORITY(2),
+    VIP(3),
+}
+
 data class ClientPolicySetting(
     val name: String = "",
     val downloadMbps: Int = 0,
     val uploadMbps: Int = 0,
     val quotaBytes: Long = 0,
     val monthlyQuotaBytes: Long = 0,
+    val priority: ClientPriority = ClientPriority.NORMAL,
     val blocked: Boolean = false,
     val blockOnQuota: Boolean = false,
+    val pausedUntilMillis: Long = 0,
 )
 
 data class MonthlyUsageRecord(
@@ -18,6 +26,18 @@ data class MonthlyUsageRecord(
     val bytes: Long,
     val sessionKey: String = "",
     val lastSessionBytes: Long = 0,
+    val day: String = "",
+    val dayBytes: Long = 0,
+    val week: String = "",
+    val weekBytes: Long = 0,
+    val totalBytes: Long = 0,
+    val lastSeenUnixMillis: Long = 0,
+)
+
+data class ConnectionEvent(
+    val deviceId: String,
+    val connected: Boolean,
+    val atUnixMillis: Long,
 )
 
 data class ClientTrafficStats(
@@ -105,8 +125,10 @@ fun encodeClientPolicies(policies: Map<String, ClientPolicySetting>): String =
                     put("uploadMbps", policy.uploadMbps)
                     put("quotaBytes", policy.quotaBytes)
                     put("monthlyQuotaBytes", policy.monthlyQuotaBytes)
+                    put("priority", policy.priority.name)
                     put("blocked", policy.blocked)
                     put("blockOnQuota", policy.blockOnQuota)
+                    put("pausedUntilMillis", policy.pausedUntilMillis)
                 },
             )
         }
@@ -129,6 +151,9 @@ fun decodeClientPolicies(raw: String?): Map<String, ClientPolicySetting> {
                     uploadMbps = item.optInt("uploadMbps"),
                     quotaBytes = item.optLong("quotaBytes"),
                     monthlyQuotaBytes = item.optLong("monthlyQuotaBytes"),
+                    priority = runCatching {
+                        ClientPriority.valueOf(item.optString("priority"))
+                    }.getOrDefault(ClientPriority.NORMAL),
                     // v0.7.1 used "blocked" for the quota switch. Migrate that
                     // meaning so existing users are not permanently blocked.
                     blocked = if (item.has("blockOnQuota")) item.optBoolean("blocked") else false,
@@ -137,6 +162,7 @@ fun decodeClientPolicies(raw: String?): Map<String, ClientPolicySetting> {
                     } else {
                         item.optBoolean("blocked")
                     },
+                    pausedUntilMillis = item.optLong("pausedUntilMillis"),
                 ),
             )
         }
@@ -165,6 +191,12 @@ fun encodeMonthlyUsage(records: Map<String, MonthlyUsageRecord>): String =
                     put("bytes", record.bytes)
                     put("sessionKey", record.sessionKey)
                     put("lastSessionBytes", record.lastSessionBytes)
+                    put("day", record.day)
+                    put("dayBytes", record.dayBytes)
+                    put("week", record.week)
+                    put("weekBytes", record.weekBytes)
+                    put("totalBytes", record.totalBytes)
+                    put("lastSeenUnixMillis", record.lastSeenUnixMillis)
                 },
             )
         }
@@ -187,6 +219,44 @@ fun decodeMonthlyUsage(raw: String?): Map<String, MonthlyUsageRecord> {
                     bytes = item.optLong("bytes").coerceAtLeast(0L),
                     sessionKey = item.optString("sessionKey"),
                     lastSessionBytes = item.optLong("lastSessionBytes").coerceAtLeast(0L),
+                    day = item.optString("day"),
+                    dayBytes = item.optLong("dayBytes").coerceAtLeast(0L),
+                    week = item.optString("week"),
+                    weekBytes = item.optLong("weekBytes").coerceAtLeast(0L),
+                    totalBytes = item.optLong("totalBytes").coerceAtLeast(0L),
+                    lastSeenUnixMillis = item.optLong("lastSeenUnixMillis").coerceAtLeast(0L),
+                ),
+            )
+        }
+    }
+}
+
+
+fun encodeConnectionHistory(events: List<ConnectionEvent>): String =
+    JSONArray().apply {
+        events.forEach { event ->
+            put(
+                JSONObject().apply {
+                    put("deviceId", event.deviceId)
+                    put("connected", event.connected)
+                    put("atUnixMillis", event.atUnixMillis)
+                },
+            )
+        }
+    }.toString()
+
+fun decodeConnectionHistory(raw: String?): List<ConnectionEvent> {
+    val array = runCatching { JSONArray(raw.orEmpty()) }.getOrNull() ?: return emptyList()
+    return buildList {
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            val deviceId = item.optString("deviceId").lowercase()
+            if (deviceId.isBlank()) continue
+            add(
+                ConnectionEvent(
+                    deviceId = deviceId,
+                    connected = item.optBoolean("connected"),
+                    atUnixMillis = item.optLong("atUnixMillis"),
                 ),
             )
         }
