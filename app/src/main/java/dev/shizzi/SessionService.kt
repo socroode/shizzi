@@ -206,6 +206,7 @@ class SessionService : Service() {
                         settings.accessPassRequired,
                         portalConfigJson(settings),
                     )
+                    controller.clearPortalClaims()
                 }.onFailure {
                     SessionLog.warn("portal claim sync failed: ${it.message}")
                 }
