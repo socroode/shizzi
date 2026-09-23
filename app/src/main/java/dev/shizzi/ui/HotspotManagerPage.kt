@@ -160,7 +160,7 @@ fun HotspotManagerPage(
                     down,
                     up,
                     monthlyQuota,
-                    blocked,
+                    blockOnQuota,
                 )
                 editingClient = null
             },
@@ -292,14 +292,14 @@ private fun ClientPolicySheet(
     val initialUp = stored?.uploadMbps
         ?: (client.uploadBps / 1_000_000L).toInt()
     val initialQuota = stored?.monthlyQuotaBytes ?: 0L
-    val initialBlocked = stored?.blocked ?: client.blocked
+    val initialBlockOnQuota = stored?.blockOnQuota ?: false
 
     var down by remember(client.ip) { mutableStateOf(initialDown.toString()) }
     var up by remember(client.ip) { mutableStateOf(initialUp.toString()) }
     var quotaMb by remember(client.ip) {
         mutableStateOf((initialQuota / 1_000_000L).toString())
     }
-    var blocked by remember(client.ip) { mutableStateOf(initialBlocked) }
+    var blockOnQuota by remember(client.ip) { mutableStateOf(initialBlockOnQuota) }
 
     ThemedBottomSheet(onDismiss = onDismiss) {
         Text(
@@ -327,11 +327,11 @@ private fun ClientPolicySheet(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             SettingsLabel(
-                title = "Block Internet",
-                subtitle = "Keeps the client on Wi-Fi but Shizzi stops forwarding traffic",
+                title = "Block when quota is reached",
+                subtitle = "Keeps Internet available until the monthly quota is actually reached",
                 modifier = Modifier.weight(1f),
             )
-            Switch(checked = blocked, onCheckedChange = { blocked = it })
+            Switch(checked = blockOnQuota, onCheckedChange = { blockOnQuota = it })
         }
 
         SaveRow(
