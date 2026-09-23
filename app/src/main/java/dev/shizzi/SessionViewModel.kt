@@ -146,6 +146,14 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
     fun setAccessPassRequired(required: Boolean) {
         viewModelScope.launch {
             settingsStore.setAccessPassRequired(required)
+            refreshLivePortalConfig()
+        }
+    }
+
+    fun setPortalCustomization(title: String, message: String, html: String) {
+        viewModelScope.launch {
+            settingsStore.setPortalCustomization(title, message, html)
+            refreshLivePortalConfig()
         }
     }
 
@@ -174,18 +182,34 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
                     createdAtMillis = System.currentTimeMillis(),
                 ),
             )
+            refreshLivePortalConfig()
         }
     }
 
     fun assignAccessPass(code: String, deviceId: String) {
         viewModelScope.launch {
             settingsStore.assignAccessPass(code, deviceId)
+            refreshLivePortalConfig()
         }
     }
 
     fun revokeAccessPass(code: String) {
         viewModelScope.launch {
             settingsStore.revokeAccessPass(code)
+            refreshLivePortalConfig()
+        }
+    }
+
+    private suspend fun refreshLivePortalConfig() {
+        if (!SessionService.isSessionUp) return
+        val current = settingsStore.settings.first()
+        runCatching {
+            diagnostics.setPortalConfig(
+                current.accessPassRequired,
+                portalConfigJson(current),
+            )
+        }.onFailure {
+            SessionLog.warn("live captive portal update failed: ${it.message}")
         }
     }
 
