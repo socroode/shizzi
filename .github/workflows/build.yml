@@ -95,8 +95,7 @@ jobs:
           keyPassword=$SHIZZI_KEY_PASSWORD
           EOF
 
-      - name: Build permanently signed release APK
-        if: ${{ env.SHIZZI_KEYSTORE_B64 != '' }}
+      - name: Build release APK
         run: ./gradlew assembleRelease --no-daemon
 
       - name: Lint
@@ -115,6 +114,14 @@ jobs:
         with:
           name: shizzi-v0.8.0-signed
           path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+      - name: Upload unsigned release APK fallback
+        if: ${{ env.SHIZZI_KEYSTORE_B64 == '' }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: shizzi-v0.8.0-unsigned
+          path: app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
 
       - name: Upload lint report
