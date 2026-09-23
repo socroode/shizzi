@@ -19,6 +19,9 @@ import dev.shizzi.ui.theme.serialize
 import dev.shizzi.ui.theme.serializeAccents
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import java.time.LocalDate
+import java.time.YearMonth
+import java.time.temporal.WeekFields
 
 data class Settings(
     val theme: ThemeChoice = ThemeChoice.SYSTEM,
@@ -39,6 +42,9 @@ data class Settings(
     val clientPolicies: Map<String, ClientPolicySetting> = emptyMap(),
     val devicePolicies: Map<String, ClientPolicySetting> = emptyMap(),
     val monthlyUsageByDevice: Map<String, MonthlyUsageRecord> = emptyMap(),
+    val dynamicBandwidthSharing: Boolean = false,
+    val maxClients: Int = 0,
+    val connectionHistory: List<ConnectionEvent> = emptyList(),
 
     val hasCompletedOnboarding: Boolean = false,
 
@@ -116,6 +122,13 @@ class SettingsStore(private val context: Context) {
         }
     }
 
+    suspend fun setManagerOptions(dynamicBandwidthSharing: Boolean, maxClients: Int) {
+        context.dataStore.edit {
+            it[DYNAMIC_BANDWIDTH] = dynamicBandwidthSharing
+            it[MAX_CLIENTS] = maxClients.coerceAtLeast(0)
+        }
+    }
+
     suspend fun setClientTrafficPolicy(ip: String, policy: ClientPolicySetting) {
         if (ip.isBlank()) return
 
@@ -144,6 +157,15 @@ class SettingsStore(private val context: Context) {
     ) {
         if (month.isBlank() || sessionKey.isBlank() || countersByDevice.isEmpty()) return
 
+        val today = LocalDate.now()
+        val dayKey = today.toString()
+        val weekFields = WeekFields.ISO
+        val weekKey = "%04d-W%02d".format(
+            today.get(weekFields.weekBasedYear()),
+            today.get(weekFields.weekOfWeekBasedYear()),
+        )
+        val now = System.currentTimeMillis()
+
         context.dataStore.edit { preferences ->
             val records = decodeMonthlyUsage(preferences[MONTHLY_USAGE]).toMutableMap()
 
@@ -153,10 +175,10 @@ class SettingsStore(private val context: Context) {
                 if (deviceId.isBlank()) return@forEach
 
                 val existing = records[deviceId]
-                val baseMonthly = when {
-                    existing == null || existing.month != month -> 0L
-                    else -> existing.bytes
-                }
+                val baseMonthly = if (existing?.month == month) existing.bytes else 0L
+                val baseDay = if (existing?.day == dayKey) existing.dayBytes else 0L
+                val baseWeek = if (existing?.week == weekKey) existing.weekBytes else 0L
+                val baseTotal = existing?.totalBytes ?: 0L
 
                 val previousCounter = when {
                     existing == null -> 0L
@@ -174,6 +196,12 @@ class SettingsStore(private val context: Context) {
                     bytes = baseMonthly + delta,
                     sessionKey = sessionKey,
                     lastSessionBytes = counter,
+                    day = dayKey,
+                    dayBytes = baseDay + delta,
+                    week = weekKey,
+                    weekBytes = baseWeek + delta,
+                    totalBytes = baseTotal + delta,
+                    lastSeenUnixMillis = now,
                 )
             }
 
@@ -193,8 +221,24 @@ class SettingsStore(private val context: Context) {
                 bytes = 0L,
                 sessionKey = previous?.sessionKey.orEmpty(),
                 lastSessionBytes = previous?.lastSessionBytes ?: 0L,
+                day = previous?.day.orEmpty(),
+                dayBytes = previous?.dayBytes ?: 0L,
+                week = previous?.week.orEmpty(),
+                weekBytes = previous?.weekBytes ?: 0L,
+                totalBytes = previous?.totalBytes ?: 0L,
+                lastSeenUnixMillis = previous?.lastSeenUnixMillis ?: 0L,
             )
             preferences[MONTHLY_USAGE] = encodeMonthlyUsage(records)
+        }
+    }
+
+    suspend fun appendConnectionEvents(events: List<ConnectionEvent>) {
+        if (events.isEmpty()) return
+        context.dataStore.edit { preferences ->
+            val history = decodeConnectionHistory(preferences[CONNECTION_HISTORY]).toMutableList()
+            history += events
+            val trimmed = history.takeLast(100)
+            preferences[CONNECTION_HISTORY] = encodeConnectionHistory(trimmed)
         }
     }
 
@@ -237,6 +281,9 @@ internal val DEFAULT_CLIENT_QUOTA_BYTES = longPreferencesKey("default_client_quo
 internal val CLIENT_POLICIES = stringPreferencesKey("client_policies")
 internal val DEVICE_POLICIES = stringPreferencesKey("device_policies")
 internal val MONTHLY_USAGE = stringPreferencesKey("monthly_usage")
+internal val DYNAMIC_BANDWIDTH = booleanPreferencesKey("dynamic_bandwidth")
+internal val MAX_CLIENTS = intPreferencesKey("max_clients")
+internal val CONNECTION_HISTORY = stringPreferencesKey("connection_history")
 internal val ONBOARDED = booleanPreferencesKey("onboarded")
 internal val AUTOMATION = booleanPreferencesKey("automation")
 internal val AUTOMATION_TOKEN = stringPreferencesKey("automation_token")
@@ -260,6 +307,9 @@ internal fun toSettings(preferences: Preferences) = Settings(
     clientPolicies = decodeClientPolicies(preferences[CLIENT_POLICIES]),
     devicePolicies = decodeClientPolicies(preferences[DEVICE_POLICIES]),
     monthlyUsageByDevice = decodeMonthlyUsage(preferences[MONTHLY_USAGE]),
+    dynamicBandwidthSharing = preferences[DYNAMIC_BANDWIDTH] ?: false,
+    maxClients = preferences[MAX_CLIENTS] ?: 0,
+    connectionHistory = decodeConnectionHistory(preferences[CONNECTION_HISTORY]),
     hasCompletedOnboarding = preferences[ONBOARDED] ?: false,
     isAutomationEnabled = preferences[AUTOMATION] ?: false,
     automationToken = preferences[AUTOMATION_TOKEN].orEmpty(),
