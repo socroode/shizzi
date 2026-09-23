@@ -74,6 +74,12 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 	}
 }
 
+func (m *TrafficManager) clearPortalClaims() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.portalClaims = nil
+}
+
 func (m *TrafficManager) setPortalClientAccess(
 	ip, code string,
 	expiresAtMillis, quotaRemainingBytes int64,
