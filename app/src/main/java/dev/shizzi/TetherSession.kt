@@ -59,6 +59,8 @@ class TetherSession(private val context: Context) {
         val group = SessionResources(testNetworkApi, context.connectivityManager())
         resources = group
 
+        prepareFreshStartup()
+
         val name = group.acquire(tunAddresses(), TEST_NETWORK_DNS_SERVERS, AVAILABILITY_TIMEOUT_MS)
         interfaceName = name
         SessionLog.info("tun up: $name (mtu $TUN_MTU, $TUN_ADDRESS, $TUN_ADDRESS_V6)")
@@ -354,6 +356,65 @@ class TetherSession(private val context: Context) {
         }
     }
 
+    private fun prepareFreshStartup() {
+        val control = DownstreamControl(context)
+        runCatching { control.stopWifiTethering() }
+            .onFailure { failure ->
+                SessionLog.warn(
+                    "startup cleanup: could not stop hotspot before TUN creation: ${failure.message}",
+                )
+            }
+
+        runCatching { TetheringPreferenceApi(context).setPreferTestNetworks(false) }
+            .onFailure { failure ->
+                SessionLog.warn(
+                    "startup cleanup: could not clear test-network preference: ${failure.message}",
+                )
+            }
+
+        check(clearCompetingShizziNetworks()) {
+            "startup cleanup: stale Shizzi test network still present; refusing to start"
+        }
+
+        Thread.sleep(STARTUP_PREPARE_SETTLE_MS)
+    }
+
+    private fun clearCompetingShizziNetworks(
+        excludingInterface: String? = null,
+    ): Boolean {
+        val group = resources ?: return true
+
+        repeat(STALE_TUN_CLEANUP_ATTEMPTS) { index ->
+            val stale = group.staleShizziInterfaces(excludingInterface)
+            if (stale.isEmpty()) return true
+
+            SessionLog.warn(
+                "startup cleanup attempt ${index + 1}/$STALE_TUN_CLEANUP_ATTEMPTS: " +
+                    "stale Shizzi networks=$stale",
+            )
+
+            val requested = group.releaseStaleShizziNetworks(excludingInterface)
+            if (requested.isNotEmpty()) {
+                SessionLog.info("startup cleanup: teardown requested for $requested")
+            }
+
+            val deadline = System.currentTimeMillis() + STALE_TUN_RELEASE_WAIT_MS
+            while (System.currentTimeMillis() < deadline) {
+                if (group.staleShizziInterfaces(excludingInterface).isEmpty()) {
+                    SessionLog.info("startup cleanup: stale Shizzi networks released")
+                    return true
+                }
+                Thread.sleep(STALE_TUN_POLL_MS)
+            }
+        }
+
+        val remaining = group.staleShizziInterfaces(excludingInterface)
+        if (remaining.isNotEmpty()) {
+            SessionLog.warn("startup cleanup: competing Shizzi networks remain $remaining")
+        }
+        return remaining.isEmpty()
+    }
+
     private fun preferTestNetworks() {
         val api = TetheringPreferenceApi(context)
         runCatching { api.setPreferTestNetworks(false) }
@@ -378,6 +439,9 @@ class TetherSession(private val context: Context) {
         SessionLog.warn("watchdog recovery: restarting hotspot to force upstream reselection")
 
         val restarted = runCatching {
+            check(clearCompetingShizziNetworks(name)) {
+                "watchdog recovery: competing Shizzi test network could not be cleared"
+            }
             restartDownstream()
             preferTestNetworks()
         }.onFailure {
@@ -465,6 +529,10 @@ class TetherSession(private val context: Context) {
                                 it.message,
                         )
                     }
+
+                check(clearCompetingShizziNetworks(name)) {
+                    "startup recovery: competing Shizzi test network could not be cleared"
+                }
 
                 Thread.sleep(STARTUP_RECOVERY_CLEAR_MS)
                 preference.setPreferTestNetworks(true)
@@ -604,5 +672,10 @@ class TetherSession(private val context: Context) {
         const val STARTUP_RECOVERY_ATTEMPTS = 2
         const val STARTUP_RECOVERY_CLEAR_MS = 1_500L
         const val STARTUP_RECOVERY_WAIT_MS = 10_000L
+
+        const val STARTUP_PREPARE_SETTLE_MS = 750L
+        const val STALE_TUN_CLEANUP_ATTEMPTS = 2
+        const val STALE_TUN_RELEASE_WAIT_MS = 4_000L
+        const val STALE_TUN_POLL_MS = 250L
     }
 }
