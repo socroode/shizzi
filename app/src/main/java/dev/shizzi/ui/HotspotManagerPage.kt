@@ -48,6 +48,7 @@ data class HotspotManagerActions(
     val onSetDefaultClientPolicy: (Int, Int, Long) -> Unit,
     val onSetManagerOptions: (Boolean, Int) -> Unit,
     val onSetAccessPassRequired: (Boolean) -> Unit,
+    val onSetPortalCustomization: (String, String, String) -> Unit,
     val onCreateAccessPass: (String, Int, Int, Long, Long) -> Unit,
     val onAssignAccessPass: (String, String) -> Unit,
     val onRevokeAccessPass: (String) -> Unit,
@@ -76,6 +77,7 @@ fun HotspotManagerPage(
     onBack: () -> Unit,
 ) {
     var editGlobal by remember { mutableStateOf(false) }
+    var editPortal by remember { mutableStateOf(false) }
     var editingTarget by remember { mutableStateOf<PolicyTarget?>(null) }
     val now = System.currentTimeMillis()
     val activeClients = stats.clients.filter {
@@ -154,7 +156,7 @@ fun HotspotManagerPage(
             ) {
                 SettingsLabel(
                     title = "Require an access pass",
-                    subtitle = "New clients stay offline until a pass is assigned",
+                    subtitle = "New clients stay offline until they enter a valid voucher",
                     modifier = Modifier.weight(1f),
                 )
                 Switch(
@@ -162,6 +164,15 @@ fun HotspotManagerPage(
                     onCheckedChange = actions.onSetAccessPassRequired,
                 )
             }
+
+            SettingsChoice(
+                label = SettingsText(
+                    title = "Captive portal",
+                    subtitle = "HTML page shown automatically before Internet access",
+                ),
+                value = settings.portalTitle,
+                onClick = { editPortal = true },
+            )
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -347,6 +358,17 @@ fun HotspotManagerPage(
                 editGlobal = false
             },
             onDismiss = { editGlobal = false },
+        )
+    }
+
+    if (editPortal) {
+        PortalCustomizationSheet(
+            settings = settings,
+            onSave = { title, message, html ->
+                actions.onSetPortalCustomization(title, message, html)
+                editPortal = false
+            },
+            onDismiss = { editPortal = false },
         )
     }
 
@@ -787,6 +809,95 @@ private fun ClientPolicySheet(
                         blockOnQuota,
                     )
                 },
+                onCancel = onDismiss,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PortalCustomizationSheet(
+    settings: Settings,
+    onSave: (String, String, String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var title by remember { mutableStateOf(settings.portalTitle) }
+    var message by remember { mutableStateOf(settings.portalMessage) }
+    var html by remember { mutableStateOf(settings.portalHtml) }
+
+    ThemedBottomSheet(onDismiss = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.92f)
+                .imePadding(),
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = ShizziTheme.spacing.lg),
+            ) {
+                Text(
+                    text = "Captive portal",
+                    style = ShizziTheme.typography.heading,
+                    color = ShizziTheme.colors.onSurface,
+                )
+                Text(
+                    text = "Clients see this page before Internet access is granted.",
+                    style = ShizziTheme.typography.body,
+                    color = ShizziTheme.colors.onSurfaceMuted,
+                    modifier = Modifier.padding(bottom = ShizziTheme.spacing.md),
+                )
+
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it.take(80) },
+                    label = { Text("Portal title") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = ShizziTheme.spacing.xs),
+                )
+
+                OutlinedTextField(
+                    value = message,
+                    onValueChange = { message = it.take(240) },
+                    label = { Text("Welcome message") },
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = ShizziTheme.spacing.xs),
+                )
+
+                Text(
+                    text = "Custom HTML (optional)",
+                    style = ShizziTheme.typography.subheading,
+                    color = ShizziTheme.colors.onSurface,
+                    modifier = Modifier.padding(top = ShizziTheme.spacing.md),
+                )
+                Text(
+                    text = "Leave empty for the built-in page. Supported placeholders: " +
+                        "{{TITLE}}, {{MESSAGE}}, {{STATUS}}, {{FORM_ACTION}}.",
+                    style = ShizziTheme.typography.body,
+                    color = ShizziTheme.colors.onSurfaceMuted,
+                )
+
+                OutlinedTextField(
+                    value = html,
+                    onValueChange = { html = it.take(100_000) },
+                    label = { Text("HTML / CSS") },
+                    minLines = 8,
+                    maxLines = 18,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = ShizziTheme.spacing.xs),
+                )
+            }
+
+            SaveRow(
+                onSave = { onSave(title.trim(), message.trim(), html) },
                 onCancel = onDismiss,
             )
         }
