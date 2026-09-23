@@ -398,9 +398,22 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private fun generateAccessPassCode(): String {
+        val alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        return buildString(8) {
+            repeat(8) {
+                append(alphabet[ACCESS_PASS_RANDOM.nextInt(alphabet.length)])
+            }
+        }
+    }
+
     override fun onCleared() {
 
         diagnostics.unbind()
         super.onCleared()
+    }
+
+    private companion object {
+        val ACCESS_PASS_RANDOM = SecureRandom()
     }
 }
