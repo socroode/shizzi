@@ -191,11 +191,9 @@ class SessionService : Service() {
                                 "192.0.2.2", "2001:db8::2" -> stats.clients.singleOrNull()
                                 else -> null
                             }
-                        val deviceId = claimant
-                            ?.deviceId
-                            ?.lowercase()
-                            ?.ifBlank { claimant.ip }
-                            .orEmpty()
+                        val deviceId = claimant?.let { client ->
+                            client.deviceId.lowercase().ifBlank { client.ip }
+                        }.orEmpty()
                         if (deviceId.isNotBlank()) {
                             settingsStore().assignAccessPass(claim.code, deviceId)
                         }
