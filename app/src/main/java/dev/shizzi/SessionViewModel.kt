@@ -174,11 +174,11 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
             settingsStore.upsertAccessPass(
                 AccessPass(
                     code = code,
-                    name = name.trim(),
-                    downloadMbps = downloadMbps.coerceAtLeast(0),
-                    uploadMbps = uploadMbps.coerceAtLeast(0),
-                    quotaBytes = quotaBytes.coerceAtLeast(0L),
-                    durationMinutes = durationMinutes.coerceAtLeast(0L),
+                    name = "Prepaid 30 days",
+                    downloadMbps = PREPAID_PASS_DOWNLOAD_MBPS,
+                    uploadMbps = PREPAID_PASS_UPLOAD_MBPS,
+                    quotaBytes = PREPAID_PASS_QUOTA_BYTES,
+                    durationMinutes = PREPAID_PASS_DURATION_MINUTES,
                     createdAtMillis = System.currentTimeMillis(),
                 ),
             )
