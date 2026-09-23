@@ -25,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import dev.shizzi.AccessPass
 import dev.shizzi.ClientPolicySetting
 import dev.shizzi.ClientPriority
 import dev.shizzi.ClientTrafficStats
@@ -46,6 +47,10 @@ data class HotspotManagerActions(
     val onSetGlobalPolicy: (Int, Int, Long) -> Unit,
     val onSetDefaultClientPolicy: (Int, Int, Long) -> Unit,
     val onSetManagerOptions: (Boolean, Int) -> Unit,
+    val onSetAccessPassRequired: (Boolean) -> Unit,
+    val onCreateAccessPass: (String, Int, Int, Long, Long) -> Unit,
+    val onAssignAccessPass: (String, String) -> Unit,
+    val onRevokeAccessPass: (String) -> Unit,
     val onSetClientPolicy:
         (String, String, String, Int, Int, Long, ClientPriority, Boolean, Boolean) -> Unit,
     val onSetClientPause: (String, String, Long) -> Unit,
@@ -137,6 +142,94 @@ fun HotspotManagerPage(
                 enabled = status == UiStatus.CONNECTED,
             ) {
                 Text("Reset session counters")
+            }
+
+            SectionLabel("Access passes")
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = ShizziTheme.spacing.md),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SettingsLabel(
+                    title = "Require an access pass",
+                    subtitle = "New clients stay offline until a pass is assigned",
+                    modifier = Modifier.weight(1f),
+                )
+                Switch(
+                    checked = settings.accessPassRequired,
+                    onCheckedChange = actions.onSetAccessPassRequired,
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(ShizziTheme.spacing.xs),
+            ) {
+                TextButton(
+                    onClick = {
+                        actions.onCreateAccessPass(
+                            "Guest 1h",
+                            5,
+                            2,
+                            2_000_000_000L,
+                            60L,
+                        )
+                    },
+                ) { Text("Guest 1h") }
+                TextButton(
+                    onClick = {
+                        actions.onCreateAccessPass(
+                            "Day",
+                            10,
+                            5,
+                            10_000_000_000L,
+                            1_440L,
+                        )
+                    },
+                ) { Text("Day") }
+                TextButton(
+                    onClick = {
+                        actions.onCreateAccessPass(
+                            "VIP 24h",
+                            20,
+                            5,
+                            0L,
+                            1_440L,
+                        )
+                    },
+                ) { Text("VIP") }
+            }
+
+            if (settings.accessPasses.isEmpty()) {
+                Text(
+                    text = "No access pass yet. Create one with a preset above.",
+                    style = ShizziTheme.typography.body,
+                    color = ShizziTheme.colors.onSurfaceMuted,
+                    modifier = Modifier.padding(vertical = ShizziTheme.spacing.sm),
+                )
+            } else {
+                settings.accessPasses.values
+                    .sortedByDescending { it.createdAtMillis }
+                    .take(8)
+                    .forEach { pass ->
+                        val assignedName = settings.devicePolicies[pass.assignedDeviceId]
+                            ?.name
+                            .orEmpty()
+                        val stateText = when {
+                            !pass.enabled -> "Disabled"
+                            pass.assignedDeviceId.isBlank() -> "Available"
+                            pass.isExpired(now) -> "Expired"
+                            assignedName.isNotBlank() -> "Used by $assignedName"
+                            else -> "Used"
+                        }
+                        ManagerMetric(
+                            title = pass.code,
+                            value = stateText,
+                            subtitle = accessPassSummary(pass),
+                        )
+                    }
             }
 
             SectionLabel("Clients")
@@ -283,6 +376,13 @@ fun HotspotManagerPage(
             onPause = { durationMillis ->
                 actions.onSetClientPause(target.deviceId, target.ip, durationMillis)
             },
+            accessPasses = settings.accessPasses,
+            onAssignAccessPass = { code ->
+                actions.onAssignAccessPass(code, target.deviceId)
+            },
+            onRevokeAccessPass = { code ->
+                actions.onRevokeAccessPass(code)
+            },
             onResetMonthly = {
                 actions.onResetClientMonthlyUsage(target.deviceId)
             },
@@ -428,8 +528,11 @@ private fun ClientPolicySheet(
     target: PolicyTarget,
     stored: ClientPolicySetting?,
     usage: MonthlyUsageRecord?,
+    accessPasses: Map<String, AccessPass>,
     onSave: (String, Int, Int, Long, ClientPriority, Boolean, Boolean) -> Unit,
     onPause: (Long) -> Unit,
+    onAssignAccessPass: (String) -> Unit,
+    onRevokeAccessPass: (String) -> Unit,
     onResetMonthly: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -561,6 +664,52 @@ private fun ClientPolicySheet(
             ClientPriority.entries.forEach { choice ->
                 TextButton(onClick = { priority = choice }) {
                     Text(if (priority == choice) "✓ ${choice.displayLabel()}" else choice.displayLabel())
+                }
+            }
+        }
+
+        SectionLabel("Access pass")
+        val activePass = accessPasses.values.firstOrNull {
+            it.assignedDeviceId == target.deviceId
+        }
+        if (activePass != null) {
+            ManagerMetric(
+                title = activePass.code,
+                value = if (activePass.isExpired(System.currentTimeMillis())) "Expired" else "Active",
+                subtitle = accessPassSummary(activePass),
+            )
+            TextButton(onClick = { onRevokeAccessPass(activePass.code) }) {
+                Text("Revoke access pass")
+            }
+        } else {
+            val availablePasses = accessPasses.values
+                .filter { it.enabled && it.assignedDeviceId.isBlank() }
+                .sortedByDescending { it.createdAtMillis }
+                .take(5)
+
+            if (availablePasses.isEmpty()) {
+                Text(
+                    text = "No available access pass.",
+                    style = ShizziTheme.typography.body,
+                    color = ShizziTheme.colors.onSurfaceMuted,
+                )
+            } else {
+                availablePasses.forEach { pass ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = ShizziTheme.spacing.xs),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        SettingsLabel(
+                            title = pass.code,
+                            subtitle = accessPassSummary(pass),
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { onAssignAccessPass(pass.code) }) {
+                            Text("Apply")
+                        }
+                    }
                 }
             }
         }
@@ -718,6 +867,24 @@ private fun currentWeekBytes(record: MonthlyUsageRecord?): Long {
         today.get(fields.weekOfWeekBasedYear()),
     )
     return if (record.week == key) record.weekBytes else 0L
+}
+
+private fun accessPassSummary(pass: AccessPass): String {
+    val speed = when {
+        pass.downloadMbps <= 0 && pass.uploadMbps <= 0 -> "unlimited speed"
+        else -> "${pass.downloadMbps}/${pass.uploadMbps} Mbps"
+    }
+    val quota = when {
+        pass.quotaBytes <= 0L -> "unlimited data"
+        else -> Traffic.format(pass.quotaBytes)
+    }
+    val duration = when {
+        pass.durationMinutes <= 0L -> "no expiry"
+        pass.durationMinutes < 60L -> "${pass.durationMinutes} min"
+        pass.durationMinutes % 1_440L == 0L -> "${pass.durationMinutes / 1_440L} day"
+        else -> "${pass.durationMinutes / 60L} h"
+    }
+    return "$speed · $quota · $duration"
 }
 
 private fun formatEventTime(atUnixMillis: Long): String {
