@@ -82,6 +82,12 @@ data class ClientTrafficStats(
     val totalBytes: Long get() = upBytes + downBytes
 }
 
+data class PortalClaim(
+    val ip: String,
+    val code: String,
+    val claimedAtMillis: Long,
+)
+
 data class ManagerTrafficStats(
     val globalDownloadBps: Long = 0,
     val globalUploadBps: Long = 0,
@@ -91,6 +97,7 @@ data class ManagerTrafficStats(
     val sharedUpBytes: Long = 0,
     val sharedDownBytes: Long = 0,
     val clients: List<ClientTrafficStats> = emptyList(),
+    val portalClaims: List<PortalClaim> = emptyList(),
 ) {
     val totalBytes: Long get() = totalUpBytes + totalDownBytes
 }
@@ -113,6 +120,20 @@ fun parseManagerTrafficStats(raw: String?): ManagerTrafficStats {
         sharedUpBytes = root.optLong("sharedUpBytes"),
         sharedDownBytes = root.optLong("sharedDownBytes"),
         clients = clients,
+        portalClaims = root.optJSONArray("portalClaims")?.let { array ->
+            buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    add(
+                        PortalClaim(
+                            ip = item.optString("ip"),
+                            code = item.optString("code"),
+                            claimedAtMillis = item.optLong("claimedAtMillis"),
+                        ),
+                    )
+                }
+            }
+        }.orEmpty(),
     )
 }
 
@@ -202,7 +223,9 @@ fun managerConfigJson(settings: Settings): String =
         put("defaultClientDownloadBps", settings.defaultClientDownloadMbps.toLong() * 1_000_000L)
         put("defaultClientUploadBps", settings.defaultClientUploadMbps.toLong() * 1_000_000L)
         put("defaultClientQuotaBytes", settings.defaultClientQuotaBytes)
-        put("defaultClientBlocked", settings.accessPassRequired)
+        put("defaultClientBlocked", false)
+        put("portalRequired", settings.accessPassRequired)
+        put("portalConfig", portalConfigJson(settings))
         put("clientPolicies", JSONArray(encodeClientPolicies(settings.clientPolicies)))
     }.toString()
 
@@ -337,3 +360,29 @@ fun decodeAccessPasses(raw: String?): Map<String, AccessPass> {
         }
     }
 }
+
+
+fun portalConfigJson(settings: Settings): String =
+    JSONObject().apply {
+        put("title", settings.portalTitle)
+        put("message", settings.portalMessage)
+        put("html", settings.portalHtml)
+        put("passes", JSONArray().apply {
+            settings.accessPasses.values
+                .sortedBy { it.code }
+                .forEach { pass ->
+                    put(
+                        JSONObject().apply {
+                            put("code", pass.code)
+                            put("name", pass.name)
+                            put("downloadMbps", pass.downloadMbps)
+                            put("uploadMbps", pass.uploadMbps)
+                            put("quotaBytes", pass.quotaBytes)
+                            put("durationMinutes", pass.durationMinutes)
+                            put("assignedDeviceId", pass.assignedDeviceId)
+                            put("enabled", pass.enabled)
+                        },
+                    )
+                }
+        })
+    }.toString()
