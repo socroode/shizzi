@@ -324,12 +324,13 @@ func (m *TrafficManager) resetStats() {
 type trafficStatsSnapshot struct {
 	GlobalDownloadBitsPerSecond int64                `json:"globalDownloadBps"`
 	GlobalUploadBitsPerSecond   int64                `json:"globalUploadBps"`
-	GlobalQuotaBytes            int64                `json:"globalQuotaBytes"`
+	GlobalQuotaBytes            int64                 `json:"globalQuotaBytes"`
 	TotalUpBytes                int64                 `json:"totalUpBytes"`
 	TotalDownBytes              int64                 `json:"totalDownBytes"`
 	SharedUpBytes               int64                 `json:"sharedUpBytes"`
 	SharedDownBytes             int64                 `json:"sharedDownBytes"`
 	Clients                     []clientStatsSnapshot `json:"clients"`
+	PortalClaims                []PortalClaim         `json:"portalClaims,omitempty"`
 }
 
 type clientStatsSnapshot struct {
