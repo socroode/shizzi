@@ -18,3 +18,14 @@ Back up the JKS and its passwords somewhere durable. Losing this signing key
 means existing installations signed with it cannot be updated in place.
 
 Do not commit the JKS, `keystore.properties`, passwords, or base64 key data.
+
+
+## Pinned signing certificate
+
+The permanent Shizzi signing certificate is pinned to this SHA-256 fingerprint:
+
+`1F:6D:2E:EF:58:BF:9C:40:F0:9B:51:55:C9:CA:5F:CC:D4:AD:1F:C8:44:73:E9:B0:66:CC:FD:4F:9B:40:30:6B`
+
+The CI workflow checks this fingerprint before producing a signed release. This
+prevents an accidental replacement key from silently creating APKs that cannot
+update existing installations.
