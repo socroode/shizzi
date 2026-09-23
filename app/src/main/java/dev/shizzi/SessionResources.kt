@@ -114,6 +114,27 @@ class SessionResources(
         datapathSession?.setSharedPolicy(downloadBps, uploadBps, quotaBytes, blocked)
     }
 
+
+    fun setPortalConfig(required: Boolean, configJson: String) {
+        datapathSession?.setPortalConfig(required, configJson)
+    }
+
+    fun setPortalClientAccess(
+        ip: String,
+        code: String,
+        expiresAtMillis: Long,
+        quotaRemainingBytes: Long,
+        allowed: Boolean,
+    ) {
+        datapathSession?.setPortalClientAccess(
+            ip,
+            code,
+            expiresAtMillis,
+            quotaRemainingBytes,
+            allowed,
+        )
+    }
+
     fun trafficStatsJson(): String =
         datapathSession?.trafficStatsJSON() ?: "{}"
 
