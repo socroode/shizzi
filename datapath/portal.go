@@ -205,7 +205,7 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 		ok, message = m.submitPortalCode(clientIP, values.Get("code"))
 	}
 
-	page := m.renderPortalPage(ok, message)
+	page := m.renderPortalPage(clientIP, ok, message)
 	status := "200 OK"
 	headers := fmt.Sprintf(
 		"HTTP/1.1 %s\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nConnection: close\r\nContent-Length: %d\r\n\r\n",
@@ -216,11 +216,51 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	_, _ = io.WriteString(conn, page)
 }
 
-func (m *TrafficManager) renderPortalPage(success bool, statusMessage string) string {
+func (m *TrafficManager) renderPortalPage(clientIP string, success bool, statusMessage string) string {
 	m.mu.Lock()
 	title := m.portalTitle
 	message := m.portalMessage
 	custom := m.portalHTML
+
+	planName := ""
+	speedText := ""
+	usedText := ""
+	remainingText := ""
+	expiresText := ""
+	if auth, ok := m.portalAuthorized[clientIP]; ok {
+		if pass, exists := m.portalPasses[auth.Code]; exists {
+			planName = pass.Name
+			speedText = fmt.Sprintf("%d/%d Mbps", pass.DownloadMbps, pass.UploadMbps)
+
+			sessionUsed := (m.clientUsedLocked(clientIP) - auth.StartSessionBytes)
+			if sessionUsed < 0 {
+				sessionUsed = 0
+			}
+			totalQuota := pass.QuotaBytes
+			remaining := int64(0)
+			if totalQuota > 0 {
+				remaining = auth.QuotaRemainingBytes - sessionUsed
+				if remaining < 0 {
+					remaining = 0
+				}
+				used := totalQuota - remaining
+				if used < 0 {
+					used = 0
+				}
+				usedText = formatPortalBytes(used)
+				remainingText = formatPortalBytes(remaining)
+			} else {
+				usedText = formatPortalBytes(sessionUsed)
+				remainingText = "Illimité"
+			}
+
+			if auth.ExpiresAtMillis > 0 {
+				expiresText = formatPortalTimeRemaining(auth.ExpiresAtMillis - time.Now().UnixMilli())
+			} else {
+				expiresText = "Sans expiration"
+			}
+		}
+	}
 	m.mu.Unlock()
 
 	if title == "" {
@@ -247,13 +287,103 @@ func (m *TrafficManager) renderPortalPage(success bool, statusMessage string) st
 		custom = defaultPortalHTML
 	}
 
+	usagePopup := ""
+	if success && (usedText != "" || remainingText != "") {
+		usagePopup = portalUsagePopup(
+			planName,
+			speedText,
+			usedText,
+			remainingText,
+			expiresText,
+		)
+	}
+
 	replacer := strings.NewReplacer(
 		"{{TITLE}}", html.EscapeString(title),
 		"{{MESSAGE}}", html.EscapeString(message),
 		"{{STATUS}}", status,
 		"{{FORM_ACTION}}", "/login",
+		"{{PLAN}}", html.EscapeString(planName),
+		"{{SPEED}}", html.EscapeString(speedText),
+		"{{USED}}", html.EscapeString(usedText),
+		"{{REMAINING}}", html.EscapeString(remainingText),
+		"{{EXPIRES}}", html.EscapeString(expiresText),
+		"{{USAGE_POPUP}}", usagePopup,
 	)
-	return replacer.Replace(custom)
+	rendered := replacer.Replace(custom)
+
+	if usagePopup != "" && !strings.Contains(custom, "{{USAGE_POPUP}}") {
+		if strings.Contains(strings.ToLower(rendered), "</body>") {
+			index := strings.LastIndex(strings.ToLower(rendered), "</body>")
+			rendered = rendered[:index] + usagePopup + rendered[index:]
+		} else {
+			rendered += usagePopup
+		}
+	}
+	return rendered
+}
+
+func formatPortalBytes(value int64) string {
+	if value <= 0 {
+		return "0 MB"
+	}
+	const (
+		mb = int64(1_000_000)
+		gb = int64(1_000_000_000)
+	)
+	if value < gb {
+		return fmt.Sprintf("%.0f MB", float64(value)/float64(mb))
+	}
+	return fmt.Sprintf("%.2f GB", float64(value)/float64(gb))
+}
+
+func formatPortalTimeRemaining(remainingMillis int64) string {
+	if remainingMillis <= 0 {
+		return "Expiré"
+	}
+	totalMinutes := remainingMillis / 60_000
+	days := totalMinutes / 1_440
+	hours := (totalMinutes % 1_440) / 60
+	minutes := totalMinutes % 60
+	switch {
+	case days > 0:
+		return fmt.Sprintf("%d j %d h", days, hours)
+	case hours > 0:
+		return fmt.Sprintf("%d h %d min", hours, minutes)
+	default:
+		return fmt.Sprintf("%d min", minutes)
+	}
+}
+
+func portalUsagePopup(planName, speedText, usedText, remainingText, expiresText string) string {
+	plan := html.EscapeString(planName)
+	speed := html.EscapeString(speedText)
+	used := html.EscapeString(usedText)
+	remaining := html.EscapeString(remainingText)
+	expires := html.EscapeString(expiresText)
+
+	return fmt.Sprintf(`
+<style>
+#shizzi-usage-backdrop{position:fixed;inset:0;background:#0009;display:flex;align-items:center;justify-content:center;padding:20px;z-index:99999}
+#shizzi-usage-card{width:min(100%%,420px);background:#111827;color:#f9fafb;border-radius:22px;padding:24px;box-shadow:0 24px 70px #0008;font-family:system-ui,-apple-system,sans-serif}
+#shizzi-usage-card h2{margin:0 0 8px;font-size:24px}
+#shizzi-usage-card .plan{color:#9ca3af;margin-bottom:18px}
+#shizzi-usage-card .meter{height:12px;background:#374151;border-radius:999px;overflow:hidden;margin:8px 0 18px}
+#shizzi-usage-card .meter span{display:block;height:100%%;background:#f9fafb;width:var(--used)}
+#shizzi-usage-card .row{display:flex;justify-content:space-between;gap:16px;padding:7px 0;border-bottom:1px solid #ffffff14}
+#shizzi-usage-card button{margin-top:20px;width:100%%;border:0;border-radius:12px;padding:13px 16px;background:#f9fafb;color:#111827;font-weight:700}
+</style>
+<div id="shizzi-usage-backdrop" role="dialog" aria-modal="true" aria-label="Consommation Internet">
+  <div id="shizzi-usage-card">
+    <h2>Votre consommation</h2>
+    <div class="plan">%s</div>
+    <div class="row"><span>Utilisé</span><strong>%s</strong></div>
+    <div class="row"><span>Restant</span><strong>%s</strong></div>
+    <div class="row"><span>Validité restante</span><strong>%s</strong></div>
+    <div class="row"><span>Débit</span><strong>%s</strong></div>
+    <button type="button" onclick="document.getElementById('shizzi-usage-backdrop').remove()">Continuer</button>
+  </div>
+</div>`, plan, used, remaining, expires, speed)
 }
 
 func normalizePortalCode(raw string) string {
