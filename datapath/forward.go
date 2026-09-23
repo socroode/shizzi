@@ -56,6 +56,21 @@ func installForwarders(netStack *stack.Stack, dialer *net.Dialer, traffic *Traff
 // completing a handshake that then dies.
 func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer, traffic *TrafficManager) {
 	id := request.ID()
+	clientIP := sourceOf(id)
+
+	if id.LocalPort == 80 && traffic != nil && traffic.portalRequiredFor(clientIP) {
+		var queue waiter.Queue
+		endpoint, tcpipErr := request.CreateEndpoint(&queue)
+		if tcpipErr != nil {
+			request.Complete(true)
+			return
+		}
+		request.Complete(false)
+
+		client := gonet.NewTCPConn(&queue, endpoint)
+		go traffic.servePortal(client, clientIP)
+		return
+	}
 
 	upstream, err := dialer.Dial("tcp", destinationOf(id))
 	if err != nil {
@@ -73,7 +88,7 @@ func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer, traffic *Traf
 	request.Complete(false)
 
 	client := gonet.NewTCPConn(&queue, endpoint)
-	go relay(client, upstream, sourceOf(id), traffic)
+	go relay(client, upstream, clientIP, traffic)
 }
 
 // forwardUDP proxies one client datagram flow to its destination.
@@ -97,7 +112,8 @@ func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer, traffic *Traf
 	}
 
 	client := gonet.NewUDPConn(&queue, endpoint)
-	go relayDatagrams(client, upstream, sourceOf(id), traffic)
+	bypassPortal := id.LocalPort == 53
+	go relayDatagrams(client, upstream, sourceOf(id), traffic, bypassPortal)
 	return true
 }
 
@@ -133,8 +149,14 @@ func copyStreamManaged(
 	for {
 		read, err := src.Read(buffer)
 		if read > 0 {
-			if traffic != nil && !traffic.waitAllowed(clientIP, dir, read) {
-				return
+			if traffic != nil {
+				allowed := traffic.waitAllowed(clientIP, dir, read)
+				if bypassPortal {
+					allowed = traffic.waitAllowedWithPortalBypass(clientIP, dir, read, true)
+				}
+				if !allowed {
+					return
+				}
 			}
 
 			written, writeErr := dst.Write(buffer[:read])
@@ -152,18 +174,23 @@ func copyStreamManaged(
 }
 
 // relayDatagrams copies UDP datagrams both ways until the flow goes idle.
-func relayDatagrams(client, upstream net.Conn, clientIP string, traffic *TrafficManager) {
+func relayDatagrams(
+	client, upstream net.Conn,
+	clientIP string,
+	traffic *TrafficManager,
+	bypassPortal bool,
+) {
 	defer client.Close()
 	defer upstream.Close()
 
 	done := make(chan struct{}, 2)
 
 	go func() {
-		copyDatagramsManaged(upstream, client, clientIP, directionUpload, traffic)
+		copyDatagramsManaged(upstream, client, clientIP, directionUpload, traffic, bypassPortal)
 		done <- struct{}{}
 	}()
 	go func() {
-		copyDatagramsManaged(client, upstream, clientIP, directionDownload, traffic)
+		copyDatagramsManaged(client, upstream, clientIP, directionDownload, traffic, bypassPortal)
 		done <- struct{}{}
 	}()
 
@@ -177,6 +204,7 @@ func copyDatagramsManaged(
 	clientIP string,
 	dir direction,
 	traffic *TrafficManager,
+	bypassPortal bool,
 ) {
 	buffer := make([]byte, maxDatagramSize)
 
