@@ -48,8 +48,11 @@ data class AppActions(
     val onSetHotspotBand: (HotspotBand) -> Unit,
     val onSetGlobalTrafficPolicy: (Int, Int, Long) -> Unit,
     val onSetDefaultClientTrafficPolicy: (Int, Int, Long) -> Unit,
+    val onSetManagerOptions: (Boolean, Int) -> Unit,
     val onSetClientTrafficPolicy:
-        (String, String, String, Int, Int, Long, Boolean, Boolean) -> Unit,
+        (String, String, String, Int, Int, Long, ClientPriority, Boolean, Boolean) -> Unit,
+    val onSetClientPause: (String, String, Long) -> Unit,
+    val onResetClientMonthlyUsage: (String) -> Unit,
     val onResetTrafficStats: () -> Unit,
     val onRunProbes: () -> Unit,
     val onDismissDiagnostics: () -> Unit,
@@ -153,7 +156,10 @@ private fun ManagerRoute(context: ScreenContext) {
         actions = HotspotManagerActions(
             onSetGlobalPolicy = actions.onSetGlobalTrafficPolicy,
             onSetDefaultClientPolicy = actions.onSetDefaultClientTrafficPolicy,
+            onSetManagerOptions = actions.onSetManagerOptions,
             onSetClientPolicy = actions.onSetClientTrafficPolicy,
+            onSetClientPause = actions.onSetClientPause,
+            onResetClientMonthlyUsage = actions.onResetClientMonthlyUsage,
             onResetStats = actions.onResetTrafficStats,
         ),
         onBack = context.navigation.goBack,
