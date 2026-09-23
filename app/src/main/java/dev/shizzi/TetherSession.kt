@@ -108,6 +108,10 @@ class TetherSession(private val context: Context) {
             root.optLong("defaultClientQuotaBytes", 0L),
             root.optBoolean("defaultClientBlocked", false),
         )
+        group.setPortalConfig(
+            root.optBoolean("portalRequired", false),
+            root.optString("portalConfig"),
+        )
 
         val policies = root.optJSONArray("clientPolicies")
         if (policies != null) {
@@ -315,6 +319,65 @@ class TetherSession(private val context: Context) {
                 blocked,
             )
         }
+    }
+
+
+
+    fun setPortalConfig(required: Boolean, configJson: String) {
+        resources?.setPortalConfig(required, configJson)
+    }
+
+    fun setPortalClientAccess(
+        ip: String,
+        code: String,
+        expiresAtMillis: Long,
+        quotaRemainingBytes: Long,
+        allowed: Boolean,
+    ) {
+        if (ip.isBlank()) return
+        val group = resources ?: return
+
+        val devices = tetheredClients.snapshot()
+        val identities = clientIdentities.byIp()
+        val target = devices.firstOrNull { device ->
+            ip in device.addresses ||
+                identities[ip]?.deviceId == device.deviceId
+        } ?: devices.singleOrNull()
+
+        if (target == null) {
+            group.setPortalClientAccess(
+                ip,
+                code,
+                expiresAtMillis,
+                quotaRemainingBytes,
+                allowed,
+            )
+            return
+        }
+
+        val routedIps = buildSet {
+            addAll(target.addresses)
+            identities.forEach { (candidateIp, identity) ->
+                if (identity.deviceId == target.deviceId) add(candidateIp)
+            }
+            add(ip)
+            if (devices.size == 1) {
+                add(TUN_ADDRESS)
+                add(TUN_ADDRESS_V6)
+            }
+        }
+
+        routedIps
+            .filter { it.isNotBlank() }
+            .forEach { routedIp ->
+                group.setPortalClientAccess(
+                    routedIp,
+                    code,
+                    expiresAtMillis,
+                    quotaRemainingBytes,
+                    allowed,
+                )
+            }
     }
 
     fun resetTrafficStats() {
