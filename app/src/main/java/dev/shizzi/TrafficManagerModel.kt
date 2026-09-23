@@ -4,6 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 data class ClientPolicySetting(
+    val name: String = "",
     val downloadMbps: Int = 0,
     val uploadMbps: Int = 0,
     val quotaBytes: Long = 0,
@@ -99,6 +100,7 @@ fun encodeClientPolicies(policies: Map<String, ClientPolicySetting>): String =
             put(
                 JSONObject().apply {
                     put("ip", ip)
+                    put("name", policy.name)
                     put("downloadMbps", policy.downloadMbps)
                     put("uploadMbps", policy.uploadMbps)
                     put("quotaBytes", policy.quotaBytes)
@@ -122,6 +124,7 @@ fun decodeClientPolicies(raw: String?): Map<String, ClientPolicySetting> {
             put(
                 ip,
                 ClientPolicySetting(
+                    name = item.optString("name"),
                     downloadMbps = item.optInt("downloadMbps"),
                     uploadMbps = item.optInt("uploadMbps"),
                     quotaBytes = item.optLong("quotaBytes"),
