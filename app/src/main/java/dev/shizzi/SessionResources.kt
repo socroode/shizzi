@@ -135,6 +135,10 @@ class SessionResources(
         )
     }
 
+    fun clearPortalClaims() {
+        datapathSession?.clearPortalClaims()
+    }
+
     fun trafficStatsJson(): String =
         datapathSession?.trafficStatsJSON() ?: "{}"
 
