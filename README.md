@@ -42,10 +42,15 @@ Download the APK from the
   Normal/Priority/VIP classes, active-client limits, temporary pauses,
   persistent known devices, per-device day/week/month/total usage, quick
   Guest/Family/VIP profiles, and connection history.
-- 🎟️ **Access Pass.** Generate persistent Guest/Day/VIP passes, optionally
-  require a pass before a hotspot client gets Internet access, assign passes
-  to online or offline known devices, and enforce pass duration, data quota,
-  and speed caps across reconnects.
+- 🎟️ **Access Pass + Captive Portal.** Generate persistent Guest/Day/VIP
+  passes and optionally require one before a hotspot client gets Internet.
+  Unauthorised clients keep DNS access but ordinary Internet traffic stays
+  blocked; HTTP captive-network checks are answered by Shizzi's local portal,
+  where the client enters the voucher on their own device. Valid vouchers are
+  bound to that device and enforce duration, data quota, and speed caps across
+  reconnects. The portal title/message are editable and the full HTML/CSS can
+  be replaced with a custom template using `{{TITLE}}`, `{{MESSAGE}}`,
+  `{{STATUS}}`, and `{{FORM_ACTION}}`.
 - 🔐 **Stable update signing.** Release APKs can use one permanent signing
   identity so future versions install as updates instead of requiring an
   uninstall. See [release signing](docs/release-signing.md).
