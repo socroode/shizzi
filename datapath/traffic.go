@@ -108,6 +108,14 @@ type TrafficManager struct {
 
 	defaultClientPolicy ClientPolicy
 	clients             map[string]*clientTraffic
+
+	portalRequired   bool
+	portalTitle      string
+	portalMessage    string
+	portalHTML       string
+	portalPasses     map[string]PortalPass
+	portalAuthorized map[string]PortalAuthorization
+	portalClaims     []PortalClaim
 }
 
 func newTrafficManager() *TrafficManager {
@@ -119,6 +127,8 @@ func newTrafficManager() *TrafficManager {
 		sharedDownloadLimiter:       newBandwidthLimiter(0),
 		sharedUploadLimiter:         newBandwidthLimiter(0),
 		clients:                     make(map[string]*clientTraffic),
+		portalPasses:                make(map[string]PortalPass),
+		portalAuthorized:            make(map[string]PortalAuthorization),
 	}
 }
 
@@ -204,6 +214,15 @@ func (m *TrafficManager) clientLocked(ip string) *clientTraffic {
 }
 
 func (m *TrafficManager) waitAllowed(ip string, dir direction, byteCount int) bool {
+	return m.waitAllowedWithPortalBypass(ip, dir, byteCount, false)
+}
+
+func (m *TrafficManager) waitAllowedWithPortalBypass(
+	ip string,
+	dir direction,
+	byteCount int,
+	bypassPortal bool,
+) bool {
 	m.mu.Lock()
 
 	globalUsed := m.totalUpBytes + m.totalDownBytes
@@ -214,9 +233,10 @@ func (m *TrafficManager) waitAllowed(ip string, dir direction, byteCount int) bo
 
 	if isSharedTunnelAddress(ip) {
 		sharedUsed := m.sharedUpBytes + m.sharedDownBytes
-		if m.sharedPolicy.Blocked ||
-			(m.globalQuotaBytes > 0 && globalUsed >= m.globalQuotaBytes) ||
-			(m.sharedPolicy.QuotaBytes > 0 && sharedUsed >= m.sharedPolicy.QuotaBytes) {
+		if (!bypassPortal && m.portalRequired && !m.portalAuthorizedLocked(ip)) ||
+			(!bypassPortal && m.sharedPolicy.Blocked) ||
+			(!bypassPortal && m.globalQuotaBytes > 0 && globalUsed >= m.globalQuotaBytes) ||
+			(!bypassPortal && m.sharedPolicy.QuotaBytes > 0 && sharedUsed >= m.sharedPolicy.QuotaBytes) {
 			m.mu.Unlock()
 			return false
 		}
@@ -236,9 +256,10 @@ func (m *TrafficManager) waitAllowed(ip string, dir direction, byteCount int) bo
 	client.LastSeen = time.Now()
 	clientUsed := client.UpBytes + client.DownBytes
 
-	if client.Policy.Blocked ||
-		(m.globalQuotaBytes > 0 && globalUsed >= m.globalQuotaBytes) ||
-		(client.Policy.QuotaBytes > 0 && clientUsed >= client.Policy.QuotaBytes) {
+	if (!bypassPortal && m.portalRequired && !m.portalAuthorizedLocked(ip)) ||
+		(!bypassPortal && client.Policy.Blocked) ||
+		(!bypassPortal && m.globalQuotaBytes > 0 && globalUsed >= m.globalQuotaBytes) ||
+		(!bypassPortal && client.Policy.QuotaBytes > 0 && clientUsed >= client.Policy.QuotaBytes) {
 		m.mu.Unlock()
 		return false
 	}
@@ -336,6 +357,7 @@ func (m *TrafficManager) statsJSON() string {
 		SharedUpBytes:               m.sharedUpBytes,
 		SharedDownBytes:             m.sharedDownBytes,
 		Clients:                     make([]clientStatsSnapshot, 0, len(m.clients)),
+		PortalClaims:                append([]PortalClaim(nil), m.portalClaims...),
 	}
 
 	for _, client := range m.clients {
