@@ -106,7 +106,10 @@ class MainActivity : ComponentActivity() {
                             onSetGlobalTrafficPolicy = viewModel::setGlobalTrafficPolicy,
                             onSetDefaultClientTrafficPolicy =
                                 viewModel::setDefaultClientTrafficPolicy,
+                            onSetManagerOptions = viewModel::setManagerOptions,
                             onSetClientTrafficPolicy = viewModel::setClientTrafficPolicy,
+                            onSetClientPause = viewModel::setClientPause,
+                            onResetClientMonthlyUsage = viewModel::resetClientMonthlyUsage,
                             onResetTrafficStats = viewModel::resetTrafficStats,
                             onRunProbes = viewModel::runProbes,
                             onDismissDiagnostics = viewModel::dismissDiagnostics,
