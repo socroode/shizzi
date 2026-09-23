@@ -182,6 +182,35 @@ class SessionService : Service() {
             }
             settings = settingsStore().settings.first()
 
+            if (stats.portalClaims.isNotEmpty()) {
+                stats.portalClaims
+                    .distinctBy { "${it.ip}|${it.code}" }
+                    .forEach { claim ->
+                        val claimant = stats.clients.firstOrNull { it.ip == claim.ip }
+                            ?: when (claim.ip) {
+                                "192.0.2.2", "2001:db8::2" -> stats.clients.singleOrNull()
+                                else -> null
+                            }
+                        val deviceId = claimant
+                            ?.deviceId
+                            ?.lowercase()
+                            ?.ifBlank { claimant.ip }
+                            .orEmpty()
+                        if (deviceId.isNotBlank()) {
+                            settingsStore().assignAccessPass(claim.code, deviceId)
+                        }
+                    }
+                settings = settingsStore().settings.first()
+                runCatching {
+                    controller.setPortalConfig(
+                        settings.accessPassRequired,
+                        portalConfigJson(settings),
+                    )
+                }.onFailure {
+                    SessionLog.warn("portal claim sync failed: ${it.message}")
+                }
+            }
+
             val currentOnline = activeClients
                 .map { it.deviceId.lowercase().ifBlank { it.ip } }
                 .filter { it.isNotBlank() }
@@ -246,8 +275,27 @@ class SessionService : Service() {
                     pass.quotaBytes > 0L && passUsed >= pass.quotaBytes
                 } == true
                 val passValid = accessPass != null && !passExpired && !passQuotaReached
-                val accessBlocked =
-                    settings.accessPassRequired && !passValid
+                val passQuotaRemaining = when {
+                    accessPass == null || accessPass.quotaBytes <= 0L -> 0L
+                    else -> (accessPass.quotaBytes - passUsed).coerceAtLeast(0L)
+                }
+
+                if (settings.accessPassRequired) {
+                    runCatching {
+                        controller.setPortalClientAccess(
+                            ip = client.ip,
+                            code = accessPass?.code.orEmpty(),
+                            expiresAtMillis = accessPass?.expiresAtMillis() ?: 0L,
+                            quotaRemainingBytes = passQuotaRemaining,
+                            allowed = passValid,
+                        )
+                    }.onFailure {
+                        SessionLog.warn(
+                            "portal access sync failed for $deviceId/${client.ip}: " +
+                                it.message,
+                        )
+                    }
+                }
 
                 val monthlyQuota = policy.monthlyQuotaBytes
                 val monthlySessionQuota = when {
@@ -316,10 +364,7 @@ class SessionService : Service() {
                         blocked = policy.blocked ||
                             paused ||
                             monthlyBlocked ||
-                            overClientLimit ||
-                            accessBlocked ||
-                            passExpired ||
-                            passQuotaReached,
+                            overClientLimit,
                     )
                 }.onFailure { failure ->
                     SessionLog.warn(
