@@ -153,7 +153,7 @@ fun HotspotManagerPage(
             client = client,
             stored = stored,
             monthlyUsed = monthlyUsed,
-            onSave = { down, up, monthlyQuota, blocked ->
+            onSave = { down, up, monthlyQuota, blockOnQuota ->
                 actions.onSetClientPolicy(
                     client.deviceId,
                     client.ip,
@@ -340,7 +340,7 @@ private fun ClientPolicySheet(
                     positiveInt(down),
                     positiveInt(up),
                     megabytes(quotaMb),
-                    blocked,
+                    blockOnQuota,
                 )
             },
             onCancel = onDismiss,
