@@ -1,6 +1,7 @@
 package datapath
 
 import (
+	"strings"
 	"encoding/json"
 	"testing"
 )
@@ -176,5 +177,44 @@ func TestCaptivePortalRejectsAssignedVoucher(t *testing.T) {
 	ok, _ := m.submitPortalCode("192.168.1.22", "USED1234")
 	if ok {
 		t.Fatal("an already assigned access code must not be reusable")
+	}
+}
+
+
+func TestCaptivePortalUsagePopup(t *testing.T) {
+	m := newTrafficManager()
+	m.setPortalConfig(true, `{
+		"title":"Test",
+		"message":"Login",
+		"passes":[{
+			"code":"MONTH100",
+			"name":"Prepaid 30 days",
+			"downloadMbps":10,
+			"uploadMbps":5,
+			"quotaBytes":100000000000,
+			"durationMinutes":43200,
+			"assignedDeviceId":"",
+			"enabled":true
+		}]
+	}`)
+
+	ip := "192.168.1.23"
+	ok, _ := m.submitPortalCode(ip, "MONTH100")
+	if !ok {
+		t.Fatal("valid prepaid voucher should authorize the client")
+	}
+
+	page := m.renderPortalPage(ip, true, "Access granted")
+	if !strings.Contains(page, "Votre consommation") {
+		t.Fatal("successful login should show the usage popup")
+	}
+	if !strings.Contains(page, "100.00 GB") {
+		t.Fatal("usage popup should show remaining prepaid data")
+	}
+	if !strings.Contains(page, "10/5 Mbps") {
+		t.Fatal("usage popup should show the voucher speed")
+	}
+	if !strings.Contains(page, "192.0.2.2") {
+		t.Fatal("usage popup should include the local refresh page")
 	}
 }
