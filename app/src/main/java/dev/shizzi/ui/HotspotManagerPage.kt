@@ -4,9 +4,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
@@ -453,7 +455,19 @@ private fun ClientPolicySheet(
     var blockOnQuota by remember(target.deviceId) { mutableStateOf(initialBlockOnQuota) }
 
     ThemedBottomSheet(onDismiss = onDismiss) {
-        Text(
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.92f)
+                .imePadding(),
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = ShizziTheme.spacing.lg),
+            ) {
+                Text(
             text = target.identity,
             style = ShizziTheme.typography.heading,
             color = ShizziTheme.colors.onSurface,
@@ -610,20 +624,23 @@ private fun ClientPolicySheet(
             Switch(checked = blockOnQuota, onCheckedChange = { blockOnQuota = it })
         }
 
-        SaveRow(
-            onSave = {
-                onSave(
-                    name.trim(),
-                    positiveInt(down),
-                    positiveInt(up),
-                    megabytes(quotaMb),
-                    priority,
-                    blocked,
-                    blockOnQuota,
-                )
-            },
-            onCancel = onDismiss,
-        )
+            }
+
+            SaveRow(
+                onSave = {
+                    onSave(
+                        name.trim(),
+                        positiveInt(down),
+                        positiveInt(up),
+                        megabytes(quotaMb),
+                        priority,
+                        blocked,
+                        blockOnQuota,
+                    )
+                },
+                onCancel = onDismiss,
+            )
+        }
     }
 }
 
