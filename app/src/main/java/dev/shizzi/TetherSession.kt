@@ -380,6 +380,10 @@ class TetherSession(private val context: Context) {
             }
     }
 
+    fun clearPortalClaims() {
+        resources?.clearPortalClaims()
+    }
+
     fun resetTrafficStats() {
         resources?.resetTrafficStats()
     }
