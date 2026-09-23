@@ -24,6 +24,16 @@ interface ITetherService {
         boolean blocked
     );
 
+    void setPortalConfig(boolean required, String configJson);
+
+    void setPortalClientAccess(
+        String ip,
+        String code,
+        long expiresAtMillis,
+        long quotaRemainingBytes,
+        boolean allowed
+    );
+
     void resetTrafficStats();
 
     String runProbes(boolean attemptTethering, int availabilityTimeoutMs);
