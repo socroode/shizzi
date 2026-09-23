@@ -115,6 +115,12 @@ func (m *TrafficManager) portalRequiredFor(ip string) bool {
 	return !m.portalAuthorizedLocked(ip)
 }
 
+func (m *TrafficManager) portalAuthorizedFor(ip string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.portalAuthorizedLocked(ip)
+}
+
 func (m *TrafficManager) portalAuthorizedLocked(ip string) bool {
 	auth, ok := m.portalAuthorized[ip]
 	if !ok {
@@ -197,8 +203,11 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	}
 	defer req.Body.Close()
 
-	ok := false
+	ok := m.portalAuthorizedFor(clientIP)
 	message := ""
+	if ok && req.Method == http.MethodGet {
+		message = "Accès actif."
+	}
 	if req.Method == http.MethodPost {
 		body, _ := io.ReadAll(io.LimitReader(req.Body, 16*1024))
 		values, _ := url.ParseQuery(string(body))
@@ -381,6 +390,7 @@ func portalUsagePopup(planName, speedText, usedText, remainingText, expiresText 
     <div class="row"><span>Restant</span><strong>%s</strong></div>
     <div class="row"><span>Validité restante</span><strong>%s</strong></div>
     <div class="row"><span>Débit</span><strong>%s</strong></div>
+    <a href="http://192.0.2.2/" style="display:block;margin-top:18px;text-align:center;color:#d1d5db;text-decoration:none">Actualiser ma consommation</a>
     <button type="button" onclick="document.getElementById('shizzi-usage-backdrop').remove()">Continuer</button>
   </div>
 </div>`, plan, used, remaining, expires, speed)
