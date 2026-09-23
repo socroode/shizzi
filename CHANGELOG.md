@@ -5,6 +5,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-23
+
+### Fixed
+
+- Startup now stops Wi-Fi tethering and clears the test-network preference before
+  creating the new TUN, so Android cannot keep routing through an older Shizzi
+  `testtunN` while the replacement is being prepared.
+- Stale Shizzi test networks are identified by the TUN interface plus Shizzi's
+  IPv4/IPv6 addresses, torn down, and waited out before startup continues.
+- Startup recovery and the active-session watchdog also purge competing stale
+  Shizzi TUNs before forcing tethering to reselect the owned interface.
+- Startup remains fail-closed: if a competing Shizzi test network cannot be
+  removed, the session refuses to become active instead of accepting the wrong
+  tethering upstream.
+
 ## [0.4.0-rc.3] - 2026-09-13
 
 Adds a quick settings tile and an intent API for starting and stopping sessions
