@@ -277,6 +277,12 @@ class TetherClient {
         )
     }
 
+    suspend fun clearPortalClaims() = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.clearPortalClaims()
+    }
+
     suspend fun resetTrafficStats() = withContext(Dispatchers.IO) {
         val bound = service()
         verifyContract(bound)
