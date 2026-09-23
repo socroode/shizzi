@@ -89,6 +89,28 @@ class TetherService : ITetherService.Stub {
         )
     }
 
+
+
+    override fun setPortalConfig(required: Boolean, configJson: String?) {
+        session.setPortalConfig(required, configJson.orEmpty())
+    }
+
+    override fun setPortalClientAccess(
+        ip: String?,
+        code: String?,
+        expiresAtMillis: Long,
+        quotaRemainingBytes: Long,
+        allowed: Boolean,
+    ) {
+        session.setPortalClientAccess(
+            ip.orEmpty(),
+            code.orEmpty(),
+            expiresAtMillis,
+            quotaRemainingBytes,
+            allowed,
+        )
+    }
+
     override fun resetTrafficStats() {
         session.resetTrafficStats()
     }
