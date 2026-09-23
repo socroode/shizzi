@@ -115,11 +115,11 @@ func (s *Session) SetGlobalPolicy(downloadBps, uploadBps, quotaBytes int64) {
 }
 
 // SetDefaultClientPolicy applies defaults to newly-seen hotspot clients.
-func (s *Session) SetDefaultClientPolicy(downloadBps, uploadBps, quotaBytes int64) {
+func (s *Session) SetDefaultClientPolicy(downloadBps, uploadBps, quotaBytes int64, blocked bool) {
 	if s.traffic == nil {
 		return
 	}
-	s.traffic.setDefaultClientPolicy(downloadBps, uploadBps, quotaBytes)
+	s.traffic.setDefaultClientPolicy(downloadBps, uploadBps, quotaBytes, blocked)
 }
 
 // SetClientPolicy configures one source IP. Rates/quota <= 0 mean unlimited.
