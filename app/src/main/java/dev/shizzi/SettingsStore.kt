@@ -47,6 +47,9 @@ data class Settings(
     val connectionHistory: List<ConnectionEvent> = emptyList(),
     val accessPassRequired: Boolean = false,
     val accessPasses: Map<String, AccessPass> = emptyMap(),
+    val portalTitle: String = "Shizzi Hotspot",
+    val portalMessage: String = "Enter your access code to go online.",
+    val portalHtml: String = "",
 
     val hasCompletedOnboarding: Boolean = false,
 
@@ -238,6 +241,14 @@ class SettingsStore(private val context: Context) {
         context.dataStore.edit { it[ACCESS_PASS_REQUIRED] = required }
     }
 
+    suspend fun setPortalCustomization(title: String, message: String, html: String) {
+        context.dataStore.edit {
+            it[PORTAL_TITLE] = title.take(80)
+            it[PORTAL_MESSAGE] = message.take(240)
+            it[PORTAL_HTML] = html.take(100_000)
+        }
+    }
+
     suspend fun upsertAccessPass(pass: AccessPass) {
         val code = pass.code.trim().uppercase()
         if (code.isBlank()) return
@@ -257,6 +268,12 @@ class SettingsStore(private val context: Context) {
             val passes = decodeAccessPasses(preferences[ACCESS_PASSES]).toMutableMap()
             val pass = passes[normalizedCode] ?: return@edit
             if (!pass.enabled) return@edit
+            if (
+                pass.assignedDeviceId == normalizedDevice &&
+                pass.activatedAtMillis > 0L
+            ) {
+                return@edit
+            }
 
             val usage = decodeMonthlyUsage(preferences[MONTHLY_USAGE])
             val startTotal = usage[normalizedDevice]?.totalBytes ?: 0L
@@ -351,6 +368,9 @@ internal val MAX_CLIENTS = intPreferencesKey("max_clients")
 internal val CONNECTION_HISTORY = stringPreferencesKey("connection_history")
 internal val ACCESS_PASS_REQUIRED = booleanPreferencesKey("access_pass_required")
 internal val ACCESS_PASSES = stringPreferencesKey("access_passes")
+internal val PORTAL_TITLE = stringPreferencesKey("portal_title")
+internal val PORTAL_MESSAGE = stringPreferencesKey("portal_message")
+internal val PORTAL_HTML = stringPreferencesKey("portal_html")
 internal val ONBOARDED = booleanPreferencesKey("onboarded")
 internal val AUTOMATION = booleanPreferencesKey("automation")
 internal val AUTOMATION_TOKEN = stringPreferencesKey("automation_token")
@@ -379,6 +399,9 @@ internal fun toSettings(preferences: Preferences) = Settings(
     connectionHistory = decodeConnectionHistory(preferences[CONNECTION_HISTORY]),
     accessPassRequired = preferences[ACCESS_PASS_REQUIRED] ?: false,
     accessPasses = decodeAccessPasses(preferences[ACCESS_PASSES]),
+    portalTitle = preferences[PORTAL_TITLE] ?: "Shizzi Hotspot",
+    portalMessage = preferences[PORTAL_MESSAGE] ?: "Enter your access code to go online.",
+    portalHtml = preferences[PORTAL_HTML].orEmpty(),
     hasCompletedOnboarding = preferences[ONBOARDED] ?: false,
     isAutomationEnabled = preferences[AUTOMATION] ?: false,
     automationToken = preferences[AUTOMATION_TOKEN].orEmpty(),
