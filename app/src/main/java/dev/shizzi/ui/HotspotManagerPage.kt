@@ -35,7 +35,8 @@ import dev.shizzi.ui.theme.ShizziTheme
 data class HotspotManagerActions(
     val onSetGlobalPolicy: (Int, Int, Long) -> Unit,
     val onSetDefaultClientPolicy: (Int, Int, Long) -> Unit,
-    val onSetClientPolicy: (String, String, Int, Int, Long, Boolean) -> Unit,
+    val onSetClientPolicy:
+        (String, String, String, Int, Int, Long, Boolean, Boolean) -> Unit,
     val onResetStats: () -> Unit,
 )
 
@@ -55,7 +56,7 @@ fun HotspotManagerPage(
             .fillMaxSize()
             .systemBarsPadding(),
     ) {
-        ScreenHeader(title = "Hotspot manager", onBack = onBack)
+        ScreenHeader(title = "Hotspot Manager Pro", onBack = onBack)
 
         Column(
             modifier = Modifier
@@ -118,6 +119,7 @@ fun HotspotManagerPage(
 
                 ClientRow(
                     client = client,
+                    displayName = stored?.name.orEmpty(),
                     monthlyUsed = monthlyUsed,
                     monthlyQuota = stored?.monthlyQuotaBytes ?: 0L,
                     onClick = { editingClient = client },
@@ -153,13 +155,15 @@ fun HotspotManagerPage(
             client = client,
             stored = stored,
             monthlyUsed = monthlyUsed,
-            onSave = { down, up, monthlyQuota, blockOnQuota ->
+            onSave = { name, down, up, monthlyQuota, blocked, blockOnQuota ->
                 actions.onSetClientPolicy(
                     client.deviceId,
                     client.ip,
+                    name,
                     down,
                     up,
                     monthlyQuota,
+                    blocked,
                     blockOnQuota,
                 )
                 editingClient = null
@@ -172,6 +176,7 @@ fun HotspotManagerPage(
 @Composable
 private fun ClientRow(
     client: ClientTrafficStats,
+    displayName: String,
     monthlyUsed: Long,
     monthlyQuota: Long,
     onClick: () -> Unit,
@@ -189,7 +194,7 @@ private fun ClientRow(
 
     SettingsChoice(
         label = SettingsText(
-            title = identity,
+            title = displayName.ifBlank { identity },
             subtitle = "${Traffic.format(monthlyUsed)} this month · $state · ${client.ip}",
         ),
         value = when {
@@ -284,21 +289,25 @@ private fun ClientPolicySheet(
     client: ClientTrafficStats,
     stored: ClientPolicySetting?,
     monthlyUsed: Long,
-    onSave: (Int, Int, Long, Boolean) -> Unit,
+    onSave: (String, Int, Int, Long, Boolean, Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val initialName = stored?.name.orEmpty()
     val initialDown = stored?.downloadMbps
         ?: (client.downloadBps / 1_000_000L).toInt()
     val initialUp = stored?.uploadMbps
         ?: (client.uploadBps / 1_000_000L).toInt()
     val initialQuota = stored?.monthlyQuotaBytes ?: 0L
+    val initialBlocked = stored?.blocked ?: false
     val initialBlockOnQuota = stored?.blockOnQuota ?: false
 
+    var name by remember(client.deviceId) { mutableStateOf(initialName) }
     var down by remember(client.ip) { mutableStateOf(initialDown.toString()) }
     var up by remember(client.ip) { mutableStateOf(initialUp.toString()) }
     var quotaMb by remember(client.ip) {
         mutableStateOf((initialQuota / 1_000_000L).toString())
     }
+    var blocked by remember(client.ip) { mutableStateOf(initialBlocked) }
     var blockOnQuota by remember(client.ip) { mutableStateOf(initialBlockOnQuota) }
 
     ThemedBottomSheet(onDismiss = onDismiss) {
@@ -316,9 +325,50 @@ private fun ClientPolicySheet(
 
         Spacer(Modifier.height(ShizziTheme.spacing.md))
 
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it.take(32) },
+            label = { Text("Device name (optional)") },
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = ShizziTheme.spacing.xs),
+        )
+
+        Text(
+            text = "Bandwidth presets",
+            style = ShizziTheme.typography.subheading,
+            color = ShizziTheme.colors.onSurface,
+            modifier = Modifier.padding(top = ShizziTheme.spacing.md),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(ShizziTheme.spacing.xs),
+        ) {
+            TextButton(onClick = { down = "0"; up = "0" }) { Text("∞") }
+            TextButton(onClick = { down = "1"; up = "1" }) { Text("1/1") }
+            TextButton(onClick = { down = "5"; up = "2" }) { Text("5/2") }
+            TextButton(onClick = { down = "10"; up = "5" }) { Text("10/5") }
+            TextButton(onClick = { down = "20"; up = "5" }) { Text("20/5") }
+        }
+
         NumberField("Download Mbps (0 = unlimited)", down) { down = it }
         NumberField("Upload Mbps (0 = unlimited)", up) { up = it }
         NumberField("Monthly quota MB (0 = unlimited)", quotaMb) { quotaMb = it }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = ShizziTheme.spacing.md),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SettingsLabel(
+                title = "Block Internet now",
+                subtitle = "Keeps the device on Wi-Fi but stops Internet forwarding immediately",
+                modifier = Modifier.weight(1f),
+            )
+            Switch(checked = blocked, onCheckedChange = { blocked = it })
+        }
 
         Row(
             modifier = Modifier
@@ -337,9 +387,11 @@ private fun ClientPolicySheet(
         SaveRow(
             onSave = {
                 onSave(
+                    name.trim(),
                     positiveInt(down),
                     positiveInt(up),
                     megabytes(quotaMb),
+                    blocked,
                     blockOnQuota,
                 )
             },
