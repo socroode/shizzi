@@ -269,6 +269,12 @@ class SettingsStore(private val context: Context) {
             val pass = passes[normalizedCode] ?: return@edit
             if (!pass.enabled) return@edit
             if (
+                pass.assignedDeviceId.isNotBlank() &&
+                pass.assignedDeviceId != normalizedDevice
+            ) {
+                return@edit
+            }
+            if (
                 pass.assignedDeviceId == normalizedDevice &&
                 pass.activatedAtMillis > 0L
             ) {
