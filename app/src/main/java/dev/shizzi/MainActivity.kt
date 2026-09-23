@@ -107,6 +107,10 @@ class MainActivity : ComponentActivity() {
                             onSetDefaultClientTrafficPolicy =
                                 viewModel::setDefaultClientTrafficPolicy,
                             onSetManagerOptions = viewModel::setManagerOptions,
+                            onSetAccessPassRequired = viewModel::setAccessPassRequired,
+                            onCreateAccessPass = viewModel::createAccessPass,
+                            onAssignAccessPass = viewModel::assignAccessPass,
+                            onRevokeAccessPass = viewModel::revokeAccessPass,
                             onSetClientTrafficPolicy = viewModel::setClientTrafficPolicy,
                             onSetClientPause = viewModel::setClientPause,
                             onResetClientMonthlyUsage = viewModel::resetClientMonthlyUsage,
