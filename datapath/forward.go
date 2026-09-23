@@ -149,14 +149,8 @@ func copyStreamManaged(
 	for {
 		read, err := src.Read(buffer)
 		if read > 0 {
-			if traffic != nil {
-				allowed := traffic.waitAllowed(clientIP, dir, read)
-				if bypassPortal {
-					allowed = traffic.waitAllowedWithPortalBypass(clientIP, dir, read, true)
-				}
-				if !allowed {
-					return
-				}
+			if traffic != nil && !traffic.waitAllowed(clientIP, dir, read) {
+				return
 			}
 
 			written, writeErr := dst.Write(buffer[:read])
@@ -215,8 +209,14 @@ func copyDatagramsManaged(
 
 		read, err := src.Read(buffer)
 		if read > 0 {
-			if traffic != nil && !traffic.waitAllowed(clientIP, dir, read) {
-				return
+			if traffic != nil {
+				allowed := traffic.waitAllowed(clientIP, dir, read)
+				if bypassPortal {
+					allowed = traffic.waitAllowedWithPortalBypass(clientIP, dir, read, true)
+				}
+				if !allowed {
+					return
+				}
 			}
 
 			written, writeErr := dst.Write(buffer[:read])
