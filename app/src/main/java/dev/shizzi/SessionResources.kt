@@ -116,6 +116,45 @@ class SessionResources(
         datapathSession?.resetTrafficStats()
     }
 
+    fun staleShizziInterfaces(excludingInterface: String? = null): List<String> =
+        shizziTestNetworks(excludingInterface).map { it.second }
+
+    fun releaseStaleShizziNetworks(excludingInterface: String? = null): List<String> {
+        val released = mutableListOf<String>()
+
+        shizziTestNetworks(excludingInterface).forEach { (network, name) ->
+            runCatching { testNetworkApi.teardownTestNetwork(network) }
+                .onSuccess { released += name }
+                .onFailure { failure ->
+                    SessionLog.warn(
+                        "startup cleanup: could not teardown stale $name: ${failure.message}",
+                    )
+                }
+        }
+
+        return released
+    }
+
+    private fun shizziTestNetworks(
+        excludingInterface: String? = null,
+    ): List<Pair<Network, String>> =
+        connectivityManager.allNetworks.mapNotNull { candidate ->
+            val properties = connectivityManager.getLinkProperties(candidate)
+                ?: return@mapNotNull null
+            val name = properties.interfaceName ?: return@mapNotNull null
+
+            if (name == excludingInterface || !TEST_TUN_PATTERN.matches(name)) {
+                return@mapNotNull null
+            }
+
+            val addresses = properties.linkAddresses.map { it.address }
+            if (SHIZZI_V4 !in addresses || SHIZZI_V6 !in addresses) {
+                return@mapNotNull null
+            }
+
+            candidate to name
+        }
+
     private fun awaitAvailability(interfaceName: String, timeoutMs: Int): Network {
         val deadline = System.currentTimeMillis() + timeoutMs
 
@@ -165,5 +204,11 @@ class SessionResources(
 
     private companion object {
         const val POLL_INTERVAL_MS = 200L
+
+        val TEST_TUN_PATTERN = Regex("^testtun\\d+$")
+        val SHIZZI_V4: java.net.InetAddress =
+            java.net.InetAddress.getByName("192.0.2.2")
+        val SHIZZI_V6: java.net.InetAddress =
+            java.net.InetAddress.getByName("2001:db8::2")
     }
 }
