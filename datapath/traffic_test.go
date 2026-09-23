@@ -121,3 +121,60 @@ func TestDefaultClientPolicyCanStartBlocked(t *testing.T) {
 		t.Fatal("explicit client policy should grant access")
 	}
 }
+
+
+func TestCaptivePortalVoucherAuthorizesClient(t *testing.T) {
+	m := newTrafficManager()
+	m.setPortalConfig(true, `{
+		"title":"Test",
+		"message":"Login",
+		"passes":[{
+			"code":"ABCD1234",
+			"name":"Guest",
+			"downloadMbps":5,
+			"uploadMbps":2,
+			"quotaBytes":1000,
+			"durationMinutes":60,
+			"assignedDeviceId":"",
+			"enabled":true
+		}]
+	}`)
+
+	ip := "192.168.1.21"
+	if !m.portalRequiredFor(ip) {
+		t.Fatal("client without a pass should be sent to the portal")
+	}
+	if m.waitAllowed(ip, directionDownload, 10) {
+		t.Fatal("client without a pass must not have Internet access")
+	}
+	if !m.waitAllowedWithPortalBypass(ip, directionDownload, 10, true) {
+		t.Fatal("portal bypass traffic such as DNS should remain available")
+	}
+
+	ok, _ := m.submitPortalCode(ip, "abcd1234")
+	if !ok {
+		t.Fatal("valid access code should authorize the client")
+	}
+	if m.portalRequiredFor(ip) {
+		t.Fatal("authorized client should leave captive mode")
+	}
+	if !m.waitAllowed(ip, directionDownload, 10) {
+		t.Fatal("authorized client should have Internet access")
+	}
+}
+
+func TestCaptivePortalRejectsAssignedVoucher(t *testing.T) {
+	m := newTrafficManager()
+	m.setPortalConfig(true, `{
+		"passes":[{
+			"code":"USED1234",
+			"assignedDeviceId":"aa:bb:cc:dd:ee:ff",
+			"enabled":true
+		}]
+	}`)
+
+	ok, _ := m.submitPortalCode("192.168.1.22", "USED1234")
+	if ok {
+		t.Fatal("an already assigned access code must not be reusable")
+	}
+}
