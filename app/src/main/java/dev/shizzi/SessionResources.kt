@@ -86,8 +86,13 @@ class SessionResources(
         datapathSession?.setGlobalPolicy(downloadBps, uploadBps, quotaBytes)
     }
 
-    fun setDefaultClientPolicy(downloadBps: Long, uploadBps: Long, quotaBytes: Long) {
-        datapathSession?.setDefaultClientPolicy(downloadBps, uploadBps, quotaBytes)
+    fun setDefaultClientPolicy(
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) {
+        datapathSession?.setDefaultClientPolicy(downloadBps, uploadBps, quotaBytes, blocked)
     }
 
     fun setClientPolicy(
