@@ -228,16 +228,41 @@ class SessionService : Service() {
             stats.clients.forEach { client ->
                 val deviceId = client.deviceId.lowercase().ifBlank { client.ip }
                 val policy = policyFor(client)
+                val usageRecord = settings.monthlyUsageByDevice[deviceId]
 
-                val monthlyUsed = settings.monthlyUsageByDevice[deviceId]
+                val monthlyUsed = usageRecord
                     ?.takeIf { it.month == month }
                     ?.bytes
                     ?: 0L
 
+                val accessPass = settings.accessPasses.values.firstOrNull { pass ->
+                    pass.enabled && pass.assignedDeviceId == deviceId
+                }
+                val passUsed = accessPass?.let { pass ->
+                    ((usageRecord?.totalBytes ?: 0L) - pass.startTotalBytes).coerceAtLeast(0L)
+                } ?: 0L
+                val passExpired = accessPass?.isExpired(now) == true
+                val passQuotaReached = accessPass?.let { pass ->
+                    pass.quotaBytes > 0L && passUsed >= pass.quotaBytes
+                } == true
+                val passValid = accessPass != null && !passExpired && !passQuotaReached
+                val accessBlocked =
+                    settings.accessPassRequired && !passValid
+
                 val monthlyQuota = policy.monthlyQuotaBytes
-                val effectiveSessionQuota = when {
+                val monthlySessionQuota = when {
                     monthlyQuota <= 0 -> policy.quotaBytes
                     else -> client.totalBytes + (monthlyQuota - monthlyUsed).coerceAtLeast(0L)
+                }
+                val passSessionQuota = when {
+                    accessPass == null || accessPass.quotaBytes <= 0L -> 0L
+                    else -> client.totalBytes +
+                        (accessPass.quotaBytes - passUsed).coerceAtLeast(0L)
+                }
+                val effectiveSessionQuota = when {
+                    monthlySessionQuota <= 0L -> passSessionQuota
+                    passSessionQuota <= 0L -> monthlySessionQuota
+                    else -> minOf(monthlySessionQuota, passSessionQuota)
                 }
 
                 val monthlyBlocked =
@@ -246,6 +271,12 @@ class SessionService : Service() {
                 val isActive = deviceId in currentOnline
                 val overClientLimit =
                     isActive && settings.maxClients > 0 && deviceId !in admittedIds
+
+                fun passCappedMbps(policyMbps: Int, passMbps: Int): Int = when {
+                    !passValid || passMbps <= 0 -> policyMbps
+                    policyMbps <= 0 -> passMbps
+                    else -> minOf(policyMbps, passMbps)
+                }
 
                 fun effectiveRate(globalMbps: Int, clientMbps: Int): Long {
                     val manual = clientMbps.toLong() * 1_000_000L
@@ -261,26 +292,38 @@ class SessionService : Service() {
                     }
                 }
 
+                val cappedDownload = passCappedMbps(
+                    policy.downloadMbps,
+                    accessPass?.downloadMbps ?: 0,
+                )
+                val cappedUpload = passCappedMbps(
+                    policy.uploadMbps,
+                    accessPass?.uploadMbps ?: 0,
+                )
+
                 runCatching {
                     controller.setClientTrafficPolicy(
                         ip = client.ip,
                         downloadBps = effectiveRate(
                             settings.globalDownloadMbps,
-                            policy.downloadMbps,
+                            cappedDownload,
                         ),
                         uploadBps = effectiveRate(
                             settings.globalUploadMbps,
-                            policy.uploadMbps,
+                            cappedUpload,
                         ),
                         quotaBytes = effectiveSessionQuota,
                         blocked = policy.blocked ||
                             paused ||
                             monthlyBlocked ||
-                            overClientLimit,
+                            overClientLimit ||
+                            accessBlocked ||
+                            passExpired ||
+                            passQuotaReached,
                     )
                 }.onFailure { failure ->
                     SessionLog.warn(
-                        "monthly policy apply failed for $deviceId/${client.ip}: " +
+                        "monthly/access policy apply failed for $deviceId/${client.ip}: " +
                             failure.message,
                     )
                 }
