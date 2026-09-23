@@ -181,7 +181,8 @@ class SessionService : Service() {
                     else -> client.totalBytes + (monthlyQuota - monthlyUsed).coerceAtLeast(0L)
                 }
 
-                val monthlyBlocked = monthlyQuota > 0 && monthlyUsed >= monthlyQuota
+                val monthlyBlocked =
+                    policy.blockOnQuota && monthlyQuota > 0 && monthlyUsed >= monthlyQuota
 
                 runCatching {
                     controller.setClientTrafficPolicy(
