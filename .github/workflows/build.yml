@@ -127,7 +127,7 @@ jobs:
         if: ${{ env.SHIZZI_KEYSTORE_B64 != '' }}
         uses: actions/upload-artifact@v5
         with:
-          name: shizzi-v0.8.0-signed
+          name: shizzi-v0.8.1-signed
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
@@ -135,7 +135,7 @@ jobs:
         if: ${{ env.SHIZZI_KEYSTORE_B64 == '' }}
         uses: actions/upload-artifact@v5
         with:
-          name: shizzi-v0.8.0-unsigned
+          name: shizzi-v0.8.1-unsigned
           path: app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
 
