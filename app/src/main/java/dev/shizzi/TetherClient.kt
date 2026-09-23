@@ -248,6 +248,35 @@ class TetherClient {
         bound.setClientTrafficPolicy(ip, downloadBps, uploadBps, quotaBytes, blocked)
     }
 
+
+
+    suspend fun setPortalConfig(
+        required: Boolean,
+        configJson: String,
+    ) = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.setPortalConfig(required, configJson)
+    }
+
+    suspend fun setPortalClientAccess(
+        ip: String,
+        code: String,
+        expiresAtMillis: Long,
+        quotaRemainingBytes: Long,
+        allowed: Boolean,
+    ) = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.setPortalClientAccess(
+            ip,
+            code,
+            expiresAtMillis,
+            quotaRemainingBytes,
+            allowed,
+        )
+    }
+
     suspend fun resetTrafficStats() = withContext(Dispatchers.IO) {
         val bound = service()
         verifyContract(bound)
