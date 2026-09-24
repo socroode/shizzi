@@ -319,14 +319,17 @@ class SessionService : Service() {
                 val overClientLimit =
                     isActive && settings.maxClients > 0 && deviceId !in admittedIds
 
-                fun passCappedMbps(policyMbps: Int, passMbps: Int): Int = when {
-                    !passValid || passMbps <= 0 -> policyMbps
-                    policyMbps <= 0 -> passMbps
-                    else -> minOf(policyMbps, passMbps)
+                fun passCappedBps(policyMbps: Int, passBps: Long): Long {
+                    val policyBps = policyMbps.toLong().coerceAtLeast(0L) * 1_000_000L
+                    return when {
+                        !passValid || passBps <= 0L -> policyBps
+                        policyBps <= 0L -> passBps
+                        else -> minOf(policyBps, passBps)
+                    }
                 }
 
-                fun effectiveRate(globalMbps: Int, clientMbps: Int): Long {
-                    val manual = clientMbps.toLong() * 1_000_000L
+                fun effectiveRate(globalMbps: Int, clientBps: Long): Long {
+                    val manual = clientBps.coerceAtLeast(0L)
                     if (!settings.dynamicBandwidthSharing || !isActive || deviceId !in admittedIds) {
                         return manual
                     }
@@ -339,13 +342,13 @@ class SessionService : Service() {
                     }
                 }
 
-                val cappedDownload = passCappedMbps(
+                val cappedDownload = passCappedBps(
                     policy.downloadMbps,
-                    accessPass?.downloadMbps ?: 0,
+                    accessPass?.downloadBps ?: 0L,
                 )
-                val cappedUpload = passCappedMbps(
+                val cappedUpload = passCappedBps(
                     policy.uploadMbps,
-                    accessPass?.uploadMbps ?: 0,
+                    accessPass?.uploadBps ?: 0L,
                 )
 
                 runCatching {
