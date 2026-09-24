@@ -51,7 +51,10 @@ data class AppActions(
     val onSetManagerOptions: (Boolean, Int) -> Unit,
     val onSetAccessPassRequired: (Boolean) -> Unit,
     val onSetPortalCustomization: (String, String, String) -> Unit,
-    val onCreateAccessPass: (String, Int, Int, Long, Long) -> Unit,
+    val onGenerateVouchers:
+        (String, Int, RateUnit, Int, RateUnit, Long, DataUnit, Long, DurationUnit, Int, Boolean) -> Unit,
+    val onDeleteVoucherTemplate: (String) -> Unit,
+    val onSetAccessPassEnabled: (String, Boolean) -> Unit,
     val onAssignAccessPass: (String, String) -> Unit,
     val onRevokeAccessPass: (String) -> Unit,
     val onSetClientTrafficPolicy:
@@ -164,7 +167,9 @@ private fun ManagerRoute(context: ScreenContext) {
             onSetManagerOptions = actions.onSetManagerOptions,
             onSetAccessPassRequired = actions.onSetAccessPassRequired,
             onSetPortalCustomization = actions.onSetPortalCustomization,
-            onCreateAccessPass = actions.onCreateAccessPass,
+            onGenerateVouchers = actions.onGenerateVouchers,
+            onDeleteVoucherTemplate = actions.onDeleteVoucherTemplate,
+            onSetAccessPassEnabled = actions.onSetAccessPassEnabled,
             onAssignAccessPass = actions.onAssignAccessPass,
             onRevokeAccessPass = actions.onRevokeAccessPass,
             onSetClientPolicy = actions.onSetClientTrafficPolicy,
