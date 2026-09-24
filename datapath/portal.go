@@ -638,7 +638,7 @@ func portalUsagePopup(planName, speedText, usedText, remainingText, expiresText 
     <div class="row"><span>Restant</span><strong>%s</strong></div>
     <div class="row"><span>Validité restante</span><strong>%s</strong></div>
     <div class="row"><span>Débit</span><strong>%s</strong></div>
-    <a href="http://192.0.2.2/status" target="_blank" rel="noopener" style="display:block;margin-top:18px;text-align:center;color:#d1d5db;text-decoration:none">Ouvrir le suivi en direct</a>
+    <a href="http://192.0.2.1/status" target="_blank" rel="noopener" style="display:block;margin-top:18px;text-align:center;color:#d1d5db;text-decoration:none">Ouvrir le suivi en direct</a>
     <button type="button" onclick="if(window.shizziFinishLogin){window.shizziFinishLogin()}else{window.location.replace('http://connectivitycheck.gstatic.com/generate_204')}">Continuer</button>
   </div>
 </div>`, plan, used, remaining, expires, speed)
