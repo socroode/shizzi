@@ -47,6 +47,7 @@ data class Settings(
     val connectionHistory: List<ConnectionEvent> = emptyList(),
     val accessPassRequired: Boolean = false,
     val accessPasses: Map<String, AccessPass> = emptyMap(),
+    val voucherTemplates: Map<String, VoucherTemplate> = emptyMap(),
     val portalTitle: String = "Shizzi Hotspot",
     val portalMessage: String = "Enter your access code to go online.",
     val portalHtml: String = "",
@@ -259,6 +260,51 @@ class SettingsStore(private val context: Context) {
         }
     }
 
+
+    suspend fun upsertAccessPasses(newPasses: List<AccessPass>) {
+        if (newPasses.isEmpty()) return
+        context.dataStore.edit { preferences ->
+            val passes = decodeAccessPasses(preferences[ACCESS_PASSES]).toMutableMap()
+            newPasses.forEach { pass ->
+                val code = pass.code.trim().uppercase()
+                if (code.isNotBlank()) passes[code] = pass.copy(code = code)
+            }
+            preferences[ACCESS_PASSES] = encodeAccessPasses(passes)
+        }
+    }
+
+    suspend fun saveVoucherTemplate(template: VoucherTemplate) {
+        val id = template.id.trim()
+        val name = template.name.trim()
+        if (id.isBlank() || name.isBlank()) return
+        context.dataStore.edit { preferences ->
+            val templates = decodeVoucherTemplates(preferences[VOUCHER_TEMPLATES]).toMutableMap()
+            templates[id] = template.copy(id = id, name = name.take(48))
+            preferences[VOUCHER_TEMPLATES] = encodeVoucherTemplates(templates)
+        }
+    }
+
+    suspend fun deleteVoucherTemplate(id: String) {
+        val normalized = id.trim()
+        if (normalized.isBlank()) return
+        context.dataStore.edit { preferences ->
+            val templates = decodeVoucherTemplates(preferences[VOUCHER_TEMPLATES]).toMutableMap()
+            templates.remove(normalized)
+            preferences[VOUCHER_TEMPLATES] = encodeVoucherTemplates(templates)
+        }
+    }
+
+    suspend fun setAccessPassEnabled(code: String, enabled: Boolean) {
+        val normalizedCode = code.trim().uppercase()
+        if (normalizedCode.isBlank()) return
+        context.dataStore.edit { preferences ->
+            val passes = decodeAccessPasses(preferences[ACCESS_PASSES]).toMutableMap()
+            val pass = passes[normalizedCode] ?: return@edit
+            passes[normalizedCode] = pass.copy(enabled = enabled)
+            preferences[ACCESS_PASSES] = encodeAccessPasses(passes)
+        }
+    }
+
     suspend fun assignAccessPass(code: String, deviceId: String) {
         val normalizedCode = code.trim().uppercase()
         val normalizedDevice = deviceId.lowercase()
@@ -374,6 +420,7 @@ internal val MAX_CLIENTS = intPreferencesKey("max_clients")
 internal val CONNECTION_HISTORY = stringPreferencesKey("connection_history")
 internal val ACCESS_PASS_REQUIRED = booleanPreferencesKey("access_pass_required")
 internal val ACCESS_PASSES = stringPreferencesKey("access_passes")
+internal val VOUCHER_TEMPLATES = stringPreferencesKey("voucher_templates")
 internal val PORTAL_TITLE = stringPreferencesKey("portal_title")
 internal val PORTAL_MESSAGE = stringPreferencesKey("portal_message")
 internal val PORTAL_HTML = stringPreferencesKey("portal_html")
@@ -405,6 +452,7 @@ internal fun toSettings(preferences: Preferences) = Settings(
     connectionHistory = decodeConnectionHistory(preferences[CONNECTION_HISTORY]),
     accessPassRequired = preferences[ACCESS_PASS_REQUIRED] ?: false,
     accessPasses = decodeAccessPasses(preferences[ACCESS_PASSES]),
+    voucherTemplates = decodeVoucherTemplates(preferences[VOUCHER_TEMPLATES]),
     portalTitle = preferences[PORTAL_TITLE] ?: "Shizzi Hotspot",
     portalMessage = preferences[PORTAL_MESSAGE] ?: "Enter your access code to go online.",
     portalHtml = preferences[PORTAL_HTML].orEmpty(),
