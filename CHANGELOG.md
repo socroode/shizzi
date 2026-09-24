@@ -5,9 +5,34 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-09-24
+
 ### Fixed
 
-- After a voucher is accepted, the captive portal now automatically hands the client back to Android's connectivity check so the Wi-Fi network can become validated without choosing “Use this network as is”. The usage popup remains visible briefly, and its Continue button completes validation immediately.
+- A valid prepaid voucher now stays provisionally authorized while Android
+  resolves the physical hotspot client. Manager synchronization no longer
+  overwrites a freshly accepted voucher with an immediate deny.
+- Unresolved portal claims are retried for 30 seconds instead of being cleared
+  on the first synchronization cycle.
+- Portal authorizations now fail closed if the voucher disappears, is disabled,
+  expires, exhausts its quota, or never finishes device assignment.
+- After a voucher is accepted, the captive portal hands the client back to
+  Android's connectivity check so the Wi-Fi network can become validated
+  without choosing “Use this network as is”.
+
+### Changed
+
+- Voucher Studio remains complete: custom download/upload speeds, quota,
+  validity, templates, batch generation, inventory states, CSV export and the
+  live usage page are retained.
+- Prepaid vouchers are now the authoritative per-device speed/data policy.
+  Legacy manual per-device speed, data quota, quick profiles, pause controls
+  and manual voucher assignment were removed from the hotspot UI.
+- Dynamic bandwidth sharing is retained. The global share can reduce a
+  client's instantaneous rate under congestion, but can never raise it above
+  that voucher's configured maximum.
+- Normal/Priority/VIP weighting, device naming, usage history, global hotspot
+  limits, max-client control and immediate administrative blocking remain.
 
 ## [0.8.1] - 2026-09-23
 

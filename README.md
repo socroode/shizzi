@@ -36,12 +36,12 @@ Download the APK from the
   notification shade.
 - 🤖 **Automatable.** Start and stop from Tasker or MacroDroid. See
   [automation](docs/automation.md).
-- 📶 **Hotspot Control.** Global and per-device speed limits, persistent
-  monthly quotas, automatic quota blocking, immediate manual blocking,
-  friendly device names, bandwidth presets, weighted dynamic sharing,
-  Normal/Priority/VIP classes, active-client limits, temporary pauses,
-  persistent known devices, per-device day/week/month/total usage, quick
-  Guest/Family/VIP profiles, and connection history.
+- 📶 **Hotspot Control.** Global hotspot speed/data ceilings, active-client
+  limits, immediate administrative blocking, friendly device names, connection
+  history and day/week/month/total usage. In prepaid mode the voucher is the
+  client's speed/data/validity policy. Weighted dynamic sharing can divide
+  congested global capacity by Normal/Priority/VIP class, but it never lets a
+  client exceed the speed printed on its voucher.
 - 🎟️ **Voucher Studio + Captive Portal.** Build your own prepaid offers
   instead of using fixed presets: independent download/upload values in kbps
   or Mbps, custom data volume in MB/GB, validity in minutes/hours/days, and

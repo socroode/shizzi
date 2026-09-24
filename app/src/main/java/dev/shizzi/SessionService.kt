@@ -198,6 +198,7 @@ class SessionService : Service() {
             }
 
             if (stats.portalClaims.isNotEmpty()) {
+                var hasPendingClaim = false
                 stats.portalClaims
                     .distinctBy { "${it.ip}|${it.code}" }
                     .forEach { claim ->
@@ -209,17 +210,34 @@ class SessionService : Service() {
                         val deviceId = claimant?.let { client ->
                             client.deviceId.lowercase().ifBlank { client.ip }
                         }.orEmpty()
-                        if (deviceId.isNotBlank()) {
-                            settingsStore().assignAccessPass(claim.code, deviceId)
+
+                        when {
+                            deviceId.isNotBlank() -> {
+                                settingsStore().assignAccessPass(claim.code, deviceId)
+                            }
+
+                            now - claim.claimedAtMillis <= PORTAL_CLAIM_RETRY_MS -> {
+                                // A portal claim can arrive before Android exposes the
+                                // physical tethered client. Keep it for another manager
+                                // cycle instead of revoking a voucher that was just sold.
+                                hasPendingClaim = true
+                                SessionLog.info(
+                                    "portal claim pending device identity for " +
+                                        "${claim.ip}/${claim.code}",
+                                )
+                            }
                         }
                     }
+
                 settings = settingsStore().settings.first()
                 runCatching {
                     controller.setPortalConfig(
                         settings.accessPassRequired,
                         portalConfigJson(settings),
                     )
-                    controller.clearPortalClaims()
+                    if (!hasPendingClaim) {
+                        controller.clearPortalClaims()
+                    }
                 }.onFailure {
                     SessionLog.warn("portal claim sync failed: ${it.message}")
                 }
@@ -294,12 +312,15 @@ class SessionService : Service() {
                     else -> (accessPass.quotaBytes - passUsed).coerceAtLeast(0L)
                 }
 
-                if (settings.accessPassRequired) {
+                if (settings.accessPassRequired && accessPass != null) {
+                    // No pass in DataStore can simply mean that the valid portal claim
+                    // is still waiting for Android's client identity. Do not overwrite
+                    // the datapath's provisional authorization with an immediate deny.
                     runCatching {
                         controller.setPortalClientAccess(
                             ip = client.ip,
-                            code = accessPass?.code.orEmpty(),
-                            expiresAtMillis = accessPass?.expiresAtMillis() ?: 0L,
+                            code = accessPass.code,
+                            expiresAtMillis = accessPass.expiresAtMillis(),
                             quotaRemainingBytes = passQuotaRemaining,
                             allowed = passValid,
                         )
@@ -313,6 +334,7 @@ class SessionService : Service() {
 
                 val monthlyQuota = policy.monthlyQuotaBytes
                 val monthlySessionQuota = when {
+                    settings.accessPassRequired -> 0L
                     monthlyQuota <= 0 -> policy.quotaBytes
                     else -> client.totalBytes + (monthlyQuota - monthlyUsed).coerceAtLeast(0L)
                 }
@@ -328,8 +350,12 @@ class SessionService : Service() {
                 }
 
                 val monthlyBlocked =
-                    policy.blockOnQuota && monthlyQuota > 0 && monthlyUsed >= monthlyQuota
-                val paused = policy.pausedUntilMillis > now
+                    !settings.accessPassRequired &&
+                        policy.blockOnQuota &&
+                        monthlyQuota > 0 &&
+                        monthlyUsed >= monthlyQuota
+                val paused =
+                    !settings.accessPassRequired && policy.pausedUntilMillis > now
                 val isActive = deviceId in currentOnline
                 val overClientLimit =
                     isActive && settings.maxClients > 0 && deviceId !in admittedIds
@@ -337,9 +363,9 @@ class SessionService : Service() {
                 fun passCappedBps(policyMbps: Int, passBps: Long): Long {
                     val policyBps = policyMbps.toLong().coerceAtLeast(0L) * 1_000_000L
                     return when {
-                        !passValid || passBps <= 0L -> policyBps
-                        policyBps <= 0L -> passBps
-                        else -> minOf(policyBps, passBps)
+                        settings.accessPassRequired && passValid ->
+                            passBps.coerceAtLeast(0L)
+                        else -> policyBps
                     }
                 }
 
@@ -505,6 +531,7 @@ class SessionService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val MONTHLY_USAGE_SYNC_MS = 5_000L
         private const val ACTIVE_CLIENT_WINDOW_MS = 15_000L
+        private const val PORTAL_CLAIM_RETRY_MS = 30_000L
         const val ACTION_STOP = "dev.shizzi.STOP_SESSION"
         const val EXTRA_REPORT_AS = "reportAs"
 

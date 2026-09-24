@@ -35,10 +35,11 @@ type PortalClaim struct {
 }
 
 type PortalAuthorization struct {
-	Code                string
-	ExpiresAtMillis     int64
-	QuotaRemainingBytes int64
-	StartSessionBytes   int64
+	Code                   string
+	ExpiresAtMillis        int64
+	QuotaRemainingBytes    int64
+	StartSessionBytes      int64
+	ProvisionalUntilMillis int64
 }
 
 type portalConfigPayload struct {
@@ -118,10 +119,11 @@ func (m *TrafficManager) setPortalClientAccess(
 	}
 
 	m.portalAuthorized[ip] = PortalAuthorization{
-		Code:                normalizePortalCode(code),
-		ExpiresAtMillis:     expiresAtMillis,
-		QuotaRemainingBytes: quotaRemainingBytes,
-		StartSessionBytes:   m.clientUsedLocked(ip),
+		Code:                   normalizePortalCode(code),
+		ExpiresAtMillis:        expiresAtMillis,
+		QuotaRemainingBytes:    quotaRemainingBytes,
+		StartSessionBytes:      m.clientUsedLocked(ip),
+		ProvisionalUntilMillis: 0,
 	}
 }
 
@@ -146,10 +148,30 @@ func (m *TrafficManager) portalAuthorizedLocked(ip string) bool {
 	if !ok {
 		return false
 	}
-	if auth.ExpiresAtMillis > 0 && time.Now().UnixMilli() >= auth.ExpiresAtMillis {
+
+	now := time.Now().UnixMilli()
+	if auth.ExpiresAtMillis > 0 && now >= auth.ExpiresAtMillis {
 		delete(m.portalAuthorized, ip)
 		return false
 	}
+
+	pass, exists := m.portalPasses[auth.Code]
+	if !exists || !pass.Enabled {
+		delete(m.portalAuthorized, ip)
+		return false
+	}
+
+	// A valid portal submission reaches the datapath before Android always has
+	// a physical hotspot identity ready. Keep that freshly accepted voucher
+	// alive briefly while SessionService persists assignedDeviceId. If Android
+	// never resolves the client, fail closed when the grace window expires.
+	if strings.TrimSpace(pass.AssignedDeviceID) == "" {
+		if auth.ProvisionalUntilMillis <= 0 || now >= auth.ProvisionalUntilMillis {
+			delete(m.portalAuthorized, ip)
+			return false
+		}
+	}
+
 	if auth.QuotaRemainingBytes > 0 {
 		used := m.clientUsedLocked(ip) - auth.StartSessionBytes
 		if used >= auth.QuotaRemainingBytes {
@@ -369,16 +391,18 @@ func (m *TrafficManager) submitPortalCode(ip, rawCode string) (bool, string) {
 		expiresAt = time.Now().Add(time.Duration(pass.DurationMinutes) * time.Minute).UnixMilli()
 	}
 
+	now := time.Now()
 	m.portalAuthorized[ip] = PortalAuthorization{
-		Code:                code,
-		ExpiresAtMillis:     expiresAt,
-		QuotaRemainingBytes: pass.QuotaBytes,
-		StartSessionBytes:   m.clientUsedLocked(ip),
+		Code:                   code,
+		ExpiresAtMillis:        expiresAt,
+		QuotaRemainingBytes:    pass.QuotaBytes,
+		StartSessionBytes:      m.clientUsedLocked(ip),
+		ProvisionalUntilMillis: now.Add(portalClaimGrace).UnixMilli(),
 	}
 	m.portalClaims = append(m.portalClaims, PortalClaim{
 		IP:              ip,
 		Code:            code,
-		ClaimedAtMillis: time.Now().UnixMilli(),
+		ClaimedAtMillis: now.UnixMilli(),
 	})
 	if len(m.portalClaims) > 100 {
 		m.portalClaims = append([]PortalClaim(nil), m.portalClaims[len(m.portalClaims)-100:]...)
@@ -620,7 +644,10 @@ func portalUsagePopup(planName, speedText, usedText, remainingText, expiresText 
 </div>`, plan, used, remaining, expires, speed)
 }
 
-const portalValidationURL = "http://connectivitycheck.gstatic.com/generate_204"
+const (
+	portalValidationURL = "http://connectivitycheck.gstatic.com/generate_204"
+	portalClaimGrace     = 30 * time.Second
+)
 
 func injectPortalValidationRedirect(page string) string {
 	bridge := fmt.Sprintf(`
