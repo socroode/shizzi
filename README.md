@@ -54,7 +54,7 @@ Download the APK from the
   the captive portal. The portal and usage popup continue to support custom
   HTML/CSS and show the exact voucher speed, quota and remaining validity.
   Data-limited vouchers also expose a persistent local live-usage dashboard at
-  `http://192.0.2.2/status`, refreshing every two seconds with used data,
+  `http://192.0.2.1/status`, refreshing every two seconds with used data,
   remaining data, validity and speed. VPN following remains supported.
 - 🔐 **Stable update signing.** Release APKs can use one permanent signing
   identity so future versions install as updates instead of requiring an
