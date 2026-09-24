@@ -182,6 +182,21 @@ class SessionService : Service() {
             }
             settings = settingsStore().settings.first()
 
+            // Keep the live captive portal voucher table synchronized with
+            // DataStore on every manager sync. A one-shot refresh can be
+            // missed when a voucher is generated while the Shizuku service is
+            // reconnecting or when an old user-service instance survives an
+            // app update. Without this refresh the UI can show a voucher as
+            // Available while the portal still answers "Invalid access code".
+            runCatching {
+                controller.setPortalConfig(
+                    settings.accessPassRequired,
+                    portalConfigJson(settings),
+                )
+            }.onFailure {
+                SessionLog.warn("portal voucher sync failed: ${it.message}")
+            }
+
             if (stats.portalClaims.isNotEmpty()) {
                 stats.portalClaims
                     .distinctBy { "${it.ip}|${it.code}" }
