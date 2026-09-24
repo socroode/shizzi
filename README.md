@@ -42,15 +42,17 @@ Download the APK from the
   Normal/Priority/VIP classes, active-client limits, temporary pauses,
   persistent known devices, per-device day/week/month/total usage, quick
   Guest/Family/VIP profiles, and connection history.
-- 🎟️ **Access Pass + Captive Portal.** Generate persistent Guest/Day/VIP
-  passes and optionally require one before a hotspot client gets Internet.
-  Unauthorised clients keep DNS access but ordinary Internet traffic stays
-  blocked; HTTP captive-network checks are answered by Shizzi's local portal,
-  where the client enters the voucher on their own device. Valid vouchers are
-  bound to that device and enforce duration, data quota, and speed caps across
-  reconnects. The portal title/message are editable and the full HTML/CSS can
-  be replaced with a custom template using `{{TITLE}}`, `{{MESSAGE}}`,
-  `{{STATUS}}`, and `{{FORM_ACTION}}`.
+- 🎟️ **Voucher Studio + Captive Portal.** Build your own prepaid offers
+  instead of using fixed presets: independent download/upload values in kbps
+  or Mbps, custom data volume in MB/GB, validity in minutes/hours/days, and
+  batch generation of 1–500 unique vouchers. Offers can be saved as reusable
+  templates; generated vouchers keep their original rules even when templates
+  change later. Inventory search/filtering tracks Available, Active, Expired,
+  Exhausted and Disabled vouchers, with usage/remaining data, activation and
+  expiry details plus CSV export. Unauthorised clients keep DNS access but
+  ordinary Internet traffic stays blocked until a valid voucher is entered on
+  the captive portal. The portal and usage popup continue to support custom
+  HTML/CSS and show the exact voucher speed, quota and remaining validity.
 - 🔐 **Stable update signing.** Release APKs can use one permanent signing
   identity so future versions install as updates instead of requiring an
   uninstall. See [release signing](docs/release-signing.md).
