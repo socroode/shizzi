@@ -70,7 +70,7 @@ func TestResetStatsKeepsPolicy(t *testing.T) {
 func TestTunnelAddressesStayOutOfClientList(t *testing.T) {
 	m := newTrafficManager()
 
-	m.account("192.0.2.2", directionDownload, 100)
+	m.account("192.0.2.1", directionDownload, 100)
 	m.account("2001:db8::2", directionUpload, 50)
 
 	var snapshot trafficStatsSnapshot
@@ -94,12 +94,12 @@ func TestSharedPolicyBlocksNatTraffic(t *testing.T) {
 	m := newTrafficManager()
 	m.setSharedPolicy(ClientPolicy{QuotaBytes: 100})
 
-	if !m.waitAllowed("192.0.2.2", directionDownload, 100) {
+	if !m.waitAllowed("192.0.2.1", directionDownload, 100) {
 		t.Fatal("shared traffic should be allowed up to quota")
 	}
-	m.account("192.0.2.2", directionDownload, 100)
+	m.account("192.0.2.1", directionDownload, 100)
 
-	if m.waitAllowed("192.0.2.2", directionDownload, 1) {
+	if m.waitAllowed("192.0.2.1", directionDownload, 1) {
 		t.Fatal("shared NAT traffic should stop after quota")
 	}
 }
@@ -218,7 +218,7 @@ func TestCaptivePortalUsagePopup(t *testing.T) {
 	if !strings.Contains(page, "10.00 Mbps / 5.00 Mbps") {
 		t.Fatal("usage popup should show the voucher speed")
 	}
-	if !strings.Contains(page, "192.0.2.2") {
+	if !strings.Contains(page, "192.0.2.1") {
 		t.Fatal("usage popup should include the local refresh page")
 	}
 }
