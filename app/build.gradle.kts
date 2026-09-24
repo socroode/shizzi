@@ -60,8 +60,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 24
-        versionName = "1.2.1-voucher-sync"
+        versionCode = 25
+        versionName = "1.3.0-live-usage"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 
