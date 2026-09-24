@@ -812,6 +812,450 @@ private fun ClientPolicySheet(
     }
 }
 
+private enum class VoucherState(val label: String) {
+    AVAILABLE("Available"),
+    ACTIVE("Active"),
+    EXPIRED("Expired"),
+    EXHAUSTED("Exhausted"),
+    DISABLED("Disabled"),
+}
+
+private enum class VoucherFilter(val label: String) {
+    ALL("All"),
+    AVAILABLE("Available"),
+    ACTIVE("Active"),
+    EXPIRED("Expired"),
+    EXHAUSTED("Exhausted"),
+    DISABLED("Disabled"),
+}
+
+private fun voucherUsedBytes(pass: AccessPass, settings: Settings): Long {
+    if (pass.assignedDeviceId.isBlank()) return 0L
+    val total = settings.monthlyUsageByDevice[pass.assignedDeviceId]?.totalBytes ?: 0L
+    return (total - pass.startTotalBytes).coerceAtLeast(0L)
+}
+
+private fun voucherState(
+    pass: AccessPass,
+    settings: Settings,
+    now: Long = System.currentTimeMillis(),
+): VoucherState {
+    if (!pass.enabled) return VoucherState.DISABLED
+    if (pass.assignedDeviceId.isBlank()) return VoucherState.AVAILABLE
+    if (pass.isExpired(now)) return VoucherState.EXPIRED
+    if (pass.quotaBytes > 0L && voucherUsedBytes(pass, settings) >= pass.quotaBytes) {
+        return VoucherState.EXHAUSTED
+    }
+    return VoucherState.ACTIVE
+}
+
+private fun templateSummary(template: VoucherTemplate): String {
+    val down = if (template.downloadBps <= 0L) "∞" else {
+        when (template.downloadUnit) {
+            RateUnit.KBPS -> "${template.downloadValue} kbps"
+            RateUnit.MBPS -> "${template.downloadValue} Mbps"
+        }
+    }
+    val up = if (template.uploadBps <= 0L) "∞" else {
+        when (template.uploadUnit) {
+            RateUnit.KBPS -> "${template.uploadValue} kbps"
+            RateUnit.MBPS -> "${template.uploadValue} Mbps"
+        }
+    }
+    val quota = if (template.quotaValue <= 0L) {
+        "unlimited data"
+    } else {
+        "${template.quotaValue} ${template.quotaUnit.label}"
+    }
+    val duration = if (template.durationValue <= 0L) {
+        "no expiry"
+    } else {
+        "${template.durationValue} ${template.durationUnit.label}"
+    }
+    return "$down/$up · $quota · $duration"
+}
+
+@Composable
+private fun VoucherStudioSheet(
+    settings: Settings,
+    actions: HotspotManagerActions,
+    onDismiss: () -> Unit,
+) {
+    var name by remember { mutableStateOf("Standard") }
+    var downloadValue by remember { mutableStateOf("10") }
+    var downloadUnit by remember { mutableStateOf(RateUnit.MBPS) }
+    var uploadValue by remember { mutableStateOf("5") }
+    var uploadUnit by remember { mutableStateOf(RateUnit.MBPS) }
+    var quotaValue by remember { mutableStateOf("100") }
+    var quotaUnit by remember { mutableStateOf(DataUnit.GB) }
+    var durationValue by remember { mutableStateOf("30") }
+    var durationUnit by remember { mutableStateOf(DurationUnit.DAYS) }
+    var quantity by remember { mutableStateOf("1") }
+    var saveTemplate by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    var filter by remember { mutableStateOf(VoucherFilter.ALL) }
+
+    val now = System.currentTimeMillis()
+    val filtered = settings.accessPasses.values
+        .asSequence()
+        .filter { pass ->
+            query.isBlank() ||
+                pass.code.contains(query.trim(), ignoreCase = true) ||
+                pass.name.contains(query.trim(), ignoreCase = true)
+        }
+        .filter { pass ->
+            val state = voucherState(pass, settings, now)
+            when (filter) {
+                VoucherFilter.ALL -> true
+                VoucherFilter.AVAILABLE -> state == VoucherState.AVAILABLE
+                VoucherFilter.ACTIVE -> state == VoucherState.ACTIVE
+                VoucherFilter.EXPIRED -> state == VoucherState.EXPIRED
+                VoucherFilter.EXHAUSTED -> state == VoucherState.EXHAUSTED
+                VoucherFilter.DISABLED -> state == VoucherState.DISABLED
+            }
+        }
+        .sortedByDescending { it.createdAtMillis }
+        .take(50)
+        .toList()
+
+    fun applyTemplate(template: VoucherTemplate) {
+        name = template.name
+        downloadValue = template.downloadValue.toString()
+        downloadUnit = template.downloadUnit
+        uploadValue = template.uploadValue.toString()
+        uploadUnit = template.uploadUnit
+        quotaValue = template.quotaValue.toString()
+        quotaUnit = template.quotaUnit
+        durationValue = template.durationValue.toString()
+        durationUnit = template.durationUnit
+    }
+
+    ThemedBottomSheet(onDismiss = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.94f)
+                .imePadding(),
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = ShizziTheme.spacing.lg),
+            ) {
+                Text(
+                    text = "Voucher Studio",
+                    style = ShizziTheme.typography.heading,
+                    color = ShizziTheme.colors.onSurface,
+                )
+                Text(
+                    text = "Create your own prepaid offers. Each generated voucher keeps its " +
+                        "speed, quota and validity even if the template changes later.",
+                    style = ShizziTheme.typography.body,
+                    color = ShizziTheme.colors.onSurfaceMuted,
+                    modifier = Modifier.padding(bottom = ShizziTheme.spacing.md),
+                )
+
+                if (settings.voucherTemplates.isNotEmpty()) {
+                    SectionLabel("Saved templates")
+                    settings.voucherTemplates.values
+                        .sortedBy { it.name.lowercase() }
+                        .forEach { template ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = ShizziTheme.spacing.xs),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                SettingsLabel(
+                                    title = template.name,
+                                    subtitle = templateSummary(template),
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(onClick = { applyTemplate(template) }) {
+                                    Text("Use")
+                                }
+                                TextButton(
+                                    onClick = {
+                                        actions.onDeleteVoucherTemplate(template.id)
+                                    },
+                                ) {
+                                    Text("Delete")
+                                }
+                            }
+                        }
+                }
+
+                SectionLabel("Create vouchers")
+
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(48) },
+                    label = { Text("Offer name") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = ShizziTheme.spacing.xs),
+                )
+
+                NumberUnitField(
+                    label = "Download",
+                    value = downloadValue,
+                    unit = downloadUnit.label,
+                    onValueChange = { downloadValue = it },
+                    onToggleUnit = {
+                        downloadUnit = if (downloadUnit == RateUnit.KBPS) {
+                            RateUnit.MBPS
+                        } else {
+                            RateUnit.KBPS
+                        }
+                    },
+                )
+
+                NumberUnitField(
+                    label = "Upload",
+                    value = uploadValue,
+                    unit = uploadUnit.label,
+                    onValueChange = { uploadValue = it },
+                    onToggleUnit = {
+                        uploadUnit = if (uploadUnit == RateUnit.KBPS) {
+                            RateUnit.MBPS
+                        } else {
+                            RateUnit.KBPS
+                        }
+                    },
+                )
+
+                NumberUnitField(
+                    label = "Data volume",
+                    value = quotaValue,
+                    unit = quotaUnit.label,
+                    onValueChange = { quotaValue = it },
+                    onToggleUnit = {
+                        quotaUnit = if (quotaUnit == DataUnit.MB) DataUnit.GB else DataUnit.MB
+                    },
+                )
+
+                NumberUnitField(
+                    label = "Validity after first activation",
+                    value = durationValue,
+                    unit = durationUnit.label,
+                    onValueChange = { durationValue = it },
+                    onToggleUnit = {
+                        durationUnit = when (durationUnit) {
+                            DurationUnit.MINUTES -> DurationUnit.HOURS
+                            DurationUnit.HOURS -> DurationUnit.DAYS
+                            DurationUnit.DAYS -> DurationUnit.MINUTES
+                        }
+                    },
+                )
+
+                NumberField("Quantity (1–500)", quantity) {
+                    quantity = it
+                }
+
+                Text(
+                    text = "Use 0 for unlimited speed, unlimited data, or no expiry.",
+                    style = ShizziTheme.typography.body,
+                    color = ShizziTheme.colors.onSurfaceMuted,
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = ShizziTheme.spacing.md),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SettingsLabel(
+                        title = "Save as template",
+                        subtitle = "Reuse this offer for future voucher batches",
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(
+                        checked = saveTemplate,
+                        onCheckedChange = { saveTemplate = it },
+                    )
+                }
+
+                Button(
+                    onClick = {
+                        actions.onGenerateVouchers(
+                            name.trim(),
+                            positiveInt(downloadValue),
+                            downloadUnit,
+                            positiveInt(uploadValue),
+                            uploadUnit,
+                            positiveLong(quotaValue),
+                            quotaUnit,
+                            positiveLong(durationValue),
+                            durationUnit,
+                            positiveInt(quantity).coerceIn(1, 500),
+                            saveTemplate,
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        if (positiveInt(quantity).coerceAtLeast(1) == 1) {
+                            "Generate voucher"
+                        } else {
+                            "Generate ${positiveInt(quantity).coerceIn(1, 500)} vouchers"
+                        },
+                    )
+                }
+
+                SectionLabel("Voucher inventory")
+
+                val states = settings.accessPasses.values.groupingBy {
+                    voucherState(it, settings, now)
+                }.eachCount()
+
+                Text(
+                    text = buildString {
+                        append(states[VoucherState.AVAILABLE] ?: 0)
+                        append(" available · ")
+                        append(states[VoucherState.ACTIVE] ?: 0)
+                        append(" active · ")
+                        append(states[VoucherState.EXPIRED] ?: 0)
+                        append(" expired · ")
+                        append(states[VoucherState.EXHAUSTED] ?: 0)
+                        append(" exhausted")
+                    },
+                    style = ShizziTheme.typography.body,
+                    color = ShizziTheme.colors.onSurfaceMuted,
+                    modifier = Modifier.padding(bottom = ShizziTheme.spacing.sm),
+                )
+
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it.take(32) },
+                    label = { Text("Search code or offer") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = ShizziTheme.spacing.xs),
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(ShizziTheme.spacing.xs),
+                ) {
+                    listOf(
+                        VoucherFilter.ALL,
+                        VoucherFilter.AVAILABLE,
+                        VoucherFilter.ACTIVE,
+                    ).forEach { choice ->
+                        TextButton(onClick = { filter = choice }) {
+                            Text(if (filter == choice) "✓ ${choice.label}" else choice.label)
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(ShizziTheme.spacing.xs),
+                ) {
+                    listOf(
+                        VoucherFilter.EXPIRED,
+                        VoucherFilter.EXHAUSTED,
+                        VoucherFilter.DISABLED,
+                    ).forEach { choice ->
+                        TextButton(onClick = { filter = choice }) {
+                            Text(if (filter == choice) "✓ ${choice.label}" else choice.label)
+                        }
+                    }
+                }
+
+                if (filtered.isEmpty()) {
+                    Text(
+                        text = "No voucher matches this filter.",
+                        style = ShizziTheme.typography.body,
+                        color = ShizziTheme.colors.onSurfaceMuted,
+                        modifier = Modifier.padding(vertical = ShizziTheme.spacing.md),
+                    )
+                } else {
+                    filtered.forEach { pass ->
+                        val state = voucherState(pass, settings, now)
+                        val used = voucherUsedBytes(pass, settings)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = ShizziTheme.spacing.sm),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            SettingsLabel(
+                                title = pass.code,
+                                subtitle = buildString {
+                                    append(pass.name)
+                                    append(" · ")
+                                    append(accessPassSummary(pass))
+                                    if (pass.quotaBytes > 0L && pass.assignedDeviceId.isNotBlank()) {
+                                        append(" · ")
+                                        append(Traffic.format(used))
+                                        append(" used")
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                            )
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = state.label,
+                                    style = ShizziTheme.typography.body,
+                                    color = ShizziTheme.colors.onSurface,
+                                )
+                                TextButton(
+                                    onClick = {
+                                        actions.onSetAccessPassEnabled(pass.code, !pass.enabled)
+                                    },
+                                ) {
+                                    Text(if (pass.enabled) "Disable" else "Enable")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = ShizziTheme.spacing.md),
+            ) {
+                Text("Close")
+            }
+        }
+    }
+}
+
+@Composable
+private fun NumberUnitField(
+    label: String,
+    value: String,
+    unit: String,
+    onValueChange: (String) -> Unit,
+    onToggleUnit: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = { raw ->
+                onValueChange(raw.filter(Char::isDigit).take(9))
+            },
+            label = { Text(label) },
+            singleLine = true,
+            modifier = Modifier
+                .weight(1f)
+                .padding(vertical = ShizziTheme.spacing.xs),
+        )
+        TextButton(onClick = onToggleUnit) {
+            Text(unit)
+        }
+    }
+}
+
 @Composable
 private fun PortalCustomizationSheet(
     settings: Settings,
@@ -935,6 +1379,9 @@ private fun SaveRow(onSave: () -> Unit, onCancel: () -> Unit) {
 }
 
 private fun positiveInt(raw: String): Int = raw.toIntOrNull()?.coerceAtLeast(0) ?: 0
+
+private fun positiveLong(raw: String): Long =
+    raw.toLongOrNull()?.coerceAtLeast(0L) ?: 0L
 
 private fun megabytes(raw: String): Long =
     (raw.toLongOrNull()?.coerceAtLeast(0) ?: 0L) * 1_000_000L
