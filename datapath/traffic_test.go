@@ -222,3 +222,51 @@ func TestCaptivePortalUsagePopup(t *testing.T) {
 		t.Fatal("usage popup should include the local refresh page")
 	}
 }
+
+
+func TestLiveVoucherStatusDashboard(t *testing.T) {
+	m := newTrafficManager()
+	m.setPortalConfig(true, `{
+		"passes":[{
+			"code":"LIVE100",
+			"name":"Live 100",
+			"downloadUnit":"MBPS",
+			"uploadUnit":"KBPS",
+			"downloadBps":10000000,
+			"uploadBps":512000,
+			"quotaBytes":100000000000,
+			"durationMinutes":43200,
+			"assignedDeviceId":"",
+			"enabled":true
+		}]
+	}`)
+
+	ip := "192.168.1.24"
+	ok, _ := m.submitPortalCode(ip, "LIVE100")
+	if !ok {
+		t.Fatal("valid voucher should authorize the client")
+	}
+
+	m.account(ip, directionDownload, 25_000_000)
+	status := m.portalUsageStatusFor(ip)
+	if !status.Authorized {
+		t.Fatal("status should report the voucher as authorized")
+	}
+	if status.UsedBytes < 25_000_000 {
+		t.Fatalf("expected live usage to include current traffic, got %d", status.UsedBytes)
+	}
+	if status.RemainingBytes >= status.QuotaBytes {
+		t.Fatal("remaining data should decrease as traffic is accounted")
+	}
+	if status.Speed != "10.00 Mbps / 512 kbps" {
+		t.Fatalf("unexpected mixed-unit speed: %q", status.Speed)
+	}
+
+	page := m.renderLiveStatusPage()
+	if !strings.Contains(page, "setInterval(refreshNow,2000)") {
+		t.Fatal("live dashboard should refresh automatically every 2 seconds")
+	}
+	if !strings.Contains(page, "/status.json") {
+		t.Fatal("live dashboard should fetch local status JSON")
+	}
+}
