@@ -1490,7 +1490,7 @@ private fun formatVoucherRate(bps: Long, unit: RateUnit): String {
 
 
 private fun voucherCsv(settings: Settings): String {
-    fun csvCell(value: String): String = """ + value.replace(""", """") + """
+    fun csvCell(value: String): String = "\"" + value.replace("\"", "\"\"") + "\""
 
     return buildString {
         appendLine(
