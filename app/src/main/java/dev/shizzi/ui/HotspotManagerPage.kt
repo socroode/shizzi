@@ -1,5 +1,6 @@
 package dev.shizzi.ui
 
+import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import dev.shizzi.AccessPass
 import dev.shizzi.ClientPolicySetting
 import dev.shizzi.ClientPriority
@@ -895,6 +897,7 @@ private fun VoucherStudioSheet(
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf(VoucherFilter.ALL) }
 
+    val context = LocalContext.current
     val now = System.currentTimeMillis()
     val filtered = settings.accessPasses.values
         .asSequence()
@@ -1106,6 +1109,28 @@ private fun VoucherStudioSheet(
 
                 SectionLabel("Voucher inventory")
 
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(
+                        onClick = {
+                            val csv = voucherCsv(settings)
+                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/csv"
+                                putExtra(Intent.EXTRA_SUBJECT, "Shizzi vouchers")
+                                putExtra(Intent.EXTRA_TEXT, csv)
+                            }
+                            context.startActivity(
+                                Intent.createChooser(intent, "Export voucher CSV"),
+                            )
+                        },
+                        enabled = settings.accessPasses.isNotEmpty(),
+                    ) {
+                        Text("Export CSV")
+                    }
+                }
+
                 val states = settings.accessPasses.values.groupingBy {
                     voucherState(it, settings, now)
                 }.eachCount()
@@ -1192,6 +1217,17 @@ private fun VoucherStudioSheet(
                                         append(" · ")
                                         append(Traffic.format(used))
                                         append(" used")
+                                        append(" · ")
+                                        append(Traffic.format((pass.quotaBytes - used).coerceAtLeast(0L)))
+                                        append(" left")
+                                    }
+                                    if (pass.activatedAtMillis > 0L) {
+                                        append(" · activated ")
+                                        append(formatEventTime(pass.activatedAtMillis))
+                                    }
+                                    if (pass.expiresAtMillis() > 0L) {
+                                        append(" · expires ")
+                                        append(formatEventTime(pass.expiresAtMillis()))
                                     }
                                 },
                                 modifier = Modifier.weight(1f),
@@ -1452,6 +1488,51 @@ private fun formatVoucherRate(bps: Long, unit: RateUnit): String {
     }
 }
 
+
+private fun voucherCsv(settings: Settings): String {
+    fun csvCell(value: String): String = """ + value.replace(""", """") + """
+
+    return buildString {
+        appendLine(
+            "code,name,state,download,upload,quota_bytes,duration_minutes," +
+                "activated_at,expires_at,device_id,used_bytes,remaining_bytes",
+        )
+        val now = System.currentTimeMillis()
+        settings.accessPasses.values
+            .sortedByDescending { it.createdAtMillis }
+            .forEach { pass ->
+                val used = voucherUsedBytes(pass, settings)
+                val remaining = when {
+                    pass.quotaBytes <= 0L -> 0L
+                    else -> (pass.quotaBytes - used).coerceAtLeast(0L)
+                }
+                append(csvCell(pass.code))
+                append(',')
+                append(csvCell(pass.name))
+                append(',')
+                append(csvCell(voucherState(pass, settings, now).label))
+                append(',')
+                append(csvCell(formatVoucherRate(pass.downloadBps, pass.downloadUnit)))
+                append(',')
+                append(csvCell(formatVoucherRate(pass.uploadBps, pass.uploadUnit)))
+                append(',')
+                append(pass.quotaBytes)
+                append(',')
+                append(pass.durationMinutes)
+                append(',')
+                append(pass.activatedAtMillis)
+                append(',')
+                append(pass.expiresAtMillis())
+                append(',')
+                append(csvCell(pass.assignedDeviceId))
+                append(',')
+                append(used)
+                append(',')
+                append(remaining)
+                appendLine()
+            }
+    }
+}
 
 private fun formatEventTime(atUnixMillis: Long): String {
     if (atUnixMillis <= 0L) return ""
