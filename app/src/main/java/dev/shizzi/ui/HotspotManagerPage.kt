@@ -256,14 +256,16 @@ fun HotspotManagerPage(
                 val stored = settings.devicePolicies[deviceId]
                     ?: settings.clientPolicies[client.ip]
                 val usage = settings.monthlyUsageByDevice[deviceId]
+                val accessPass = settings.accessPasses.values.firstOrNull { pass ->
+                    pass.enabled && pass.assignedDeviceId == deviceId
+                }
 
                 ClientRow(
                     client = client,
                     displayName = stored?.name.orEmpty(),
                     priority = stored?.priority ?: ClientPriority.NORMAL,
                     usage = usage,
-                    monthlyQuota = stored?.monthlyQuotaBytes ?: 0L,
-                    pausedUntilMillis = stored?.pausedUntilMillis ?: 0L,
+                    accessPass = accessPass,
                     onClick = {
                         editingTarget = PolicyTarget(
                             deviceId = deviceId,
@@ -284,6 +286,9 @@ fun HotspotManagerPage(
 
                 offlineKnown.forEach { (deviceId, policy) ->
                     val usage = settings.monthlyUsageByDevice[deviceId]
+                    val accessPass = settings.accessPasses.values.firstOrNull { pass ->
+                        pass.enabled && pass.assignedDeviceId == deviceId
+                    }
                     SettingsChoice(
                         label = SettingsText(
                             title = policy.name.ifBlank { deviceId },
@@ -297,11 +302,7 @@ fun HotspotManagerPage(
                                 }
                             },
                         ),
-                        value = when {
-                            policy.monthlyQuotaBytes > 0 ->
-                                "${Traffic.format(policy.monthlyQuotaBytes)} / month"
-                            else -> "No monthly cap"
-                        },
+                        value = accessPass?.name?.ifBlank { accessPass.code } ?: "No voucher",
                         onClick = {
                             editingTarget = PolicyTarget(
                                 deviceId = deviceId,
@@ -382,32 +383,25 @@ fun HotspotManagerPage(
             target = target,
             stored = stored,
             usage = usage,
-            onSave = { name, down, up, quota, priority, blocked, blockOnQuota ->
+            accessPasses = settings.accessPasses,
+            onSave = { name, priority, blocked ->
+                // Clear old manual speed/quota rules when this device is saved.
+                // The voucher is now the per-device speed/data authority.
                 actions.onSetClientPolicy(
                     target.deviceId,
                     target.ip,
                     name,
-                    down,
-                    up,
-                    quota,
+                    0,
+                    0,
+                    0L,
                     priority,
                     blocked,
-                    blockOnQuota,
+                    false,
                 )
                 editingTarget = null
             },
-            onPause = { durationMillis ->
-                actions.onSetClientPause(target.deviceId, target.ip, durationMillis)
-            },
-            accessPasses = settings.accessPasses,
-            onAssignAccessPass = { code ->
-                actions.onAssignAccessPass(code, target.deviceId)
-            },
             onRevokeAccessPass = { code ->
                 actions.onRevokeAccessPass(code)
-            },
-            onResetMonthly = {
-                actions.onResetClientMonthlyUsage(target.deviceId)
             },
             onDismiss = { editingTarget = null },
         )
@@ -420,14 +414,14 @@ private fun ClientRow(
     displayName: String,
     priority: ClientPriority,
     usage: MonthlyUsageRecord?,
-    monthlyQuota: Long,
-    pausedUntilMillis: Long,
+    accessPass: AccessPass?,
     onClick: () -> Unit,
 ) {
     val now = System.currentTimeMillis()
     val state = when {
-        pausedUntilMillis > now -> "Paused"
         client.blocked -> "Blocked"
+        accessPass == null -> "Voucher required"
+        accessPass.isExpired(now) -> "Voucher expired"
         client.quotaReached -> "Quota reached"
         else -> limitsLabel(client.downloadBps, client.uploadBps)
     }
@@ -440,10 +434,7 @@ private fun ClientRow(
             subtitle = "${Traffic.format(currentMonthBytes(usage))} this month · " +
                 "${priority.displayLabel()} · $state",
         ),
-        value = when {
-            monthlyQuota > 0 -> "${Traffic.format(monthlyQuota)} / month"
-            else -> "No monthly cap"
-        },
+        value = accessPass?.name?.ifBlank { accessPass.code } ?: "No voucher",
         onClick = onClick,
     )
 }
@@ -480,22 +471,23 @@ private fun GlobalPolicySheet(
     var quotaMb by remember {
         mutableStateOf((settings.globalQuotaBytes / 1_000_000L).toString())
     }
-    var clientDown by remember { mutableStateOf(settings.defaultClientDownloadMbps.toString()) }
-    var clientUp by remember { mutableStateOf(settings.defaultClientUploadMbps.toString()) }
-    var clientQuotaMb by remember {
-        mutableStateOf((settings.defaultClientQuotaBytes / 1_000_000L).toString())
-    }
     var dynamic by remember { mutableStateOf(settings.dynamicBandwidthSharing) }
     var maxClients by remember { mutableStateOf(settings.maxClients.toString()) }
 
     ThemedBottomSheet(onDismiss = onDismiss) {
         Text(
-            text = "Hotspot Control",
+            text = "Hotspot limits",
             style = ShizziTheme.typography.heading,
             color = ShizziTheme.colors.onSurface,
         )
 
-        Spacer(Modifier.height(ShizziTheme.spacing.md))
+        Text(
+            text = "These are shared hotspot limits. A voucher speed is an individual maximum; " +
+                "dynamic sharing may give a client less when several clients are active.",
+            style = ShizziTheme.typography.body,
+            color = ShizziTheme.colors.onSurfaceMuted,
+            modifier = Modifier.padding(vertical = ShizziTheme.spacing.md),
+        )
 
         NumberField("Global download Mbps (0 = unlimited)", down) { down = it }
         NumberField("Global upload Mbps (0 = unlimited)", up) { up = it }
@@ -510,33 +502,22 @@ private fun GlobalPolicySheet(
         ) {
             SettingsLabel(
                 title = "Dynamic bandwidth sharing",
-                subtitle = "Shares the global limit by priority between active clients",
+                subtitle = "Shares available capacity by priority without exceeding voucher limits",
                 modifier = Modifier.weight(1f),
             )
             Switch(checked = dynamic, onCheckedChange = { dynamic = it })
         }
 
-        Spacer(Modifier.height(ShizziTheme.spacing.lg))
-
-        Text(
-            text = "Default per client",
-            style = ShizziTheme.typography.subheading,
-            color = ShizziTheme.colors.onSurface,
-        )
-
-        NumberField("Download Mbps (0 = unlimited)", clientDown) { clientDown = it }
-        NumberField("Upload Mbps (0 = unlimited)", clientUp) { clientUp = it }
-        NumberField("Quota MB (0 = unlimited)", clientQuotaMb) { clientQuotaMb = it }
-
         SaveRow(
             onSave = {
+                // Zero legacy per-client defaults: voucher limits are authoritative.
                 onSave(
                     positiveInt(down),
                     positiveInt(up),
                     megabytes(quotaMb),
-                    positiveInt(clientDown),
-                    positiveInt(clientUp),
-                    megabytes(clientQuotaMb),
+                    0,
+                    0,
+                    0L,
                     dynamic,
                     positiveInt(maxClients),
                 )
@@ -552,33 +533,28 @@ private fun ClientPolicySheet(
     stored: ClientPolicySetting?,
     usage: MonthlyUsageRecord?,
     accessPasses: Map<String, AccessPass>,
-    onSave: (String, Int, Int, Long, ClientPriority, Boolean, Boolean) -> Unit,
-    onPause: (Long) -> Unit,
-    onAssignAccessPass: (String) -> Unit,
+    onSave: (String, ClientPriority, Boolean) -> Unit,
     onRevokeAccessPass: (String) -> Unit,
-    onResetMonthly: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val live = target.liveClient
     val initialName = stored?.name.orEmpty()
-    val initialDown = stored?.downloadMbps
-        ?: ((live?.downloadBps ?: 0L) / 1_000_000L).toInt()
-    val initialUp = stored?.uploadMbps
-        ?: ((live?.uploadBps ?: 0L) / 1_000_000L).toInt()
-    val initialQuota = stored?.monthlyQuotaBytes ?: 0L
     val initialPriority = stored?.priority ?: ClientPriority.NORMAL
     val initialBlocked = stored?.blocked ?: false
-    val initialBlockOnQuota = stored?.blockOnQuota ?: false
 
     var name by remember(target.deviceId) { mutableStateOf(initialName) }
-    var down by remember(target.deviceId) { mutableStateOf(initialDown.toString()) }
-    var up by remember(target.deviceId) { mutableStateOf(initialUp.toString()) }
-    var quotaMb by remember(target.deviceId) {
-        mutableStateOf((initialQuota / 1_000_000L).toString())
-    }
     var priority by remember(target.deviceId) { mutableStateOf(initialPriority) }
     var blocked by remember(target.deviceId) { mutableStateOf(initialBlocked) }
-    var blockOnQuota by remember(target.deviceId) { mutableStateOf(initialBlockOnQuota) }
+
+    val activePass = accessPasses.values.firstOrNull {
+        it.assignedDeviceId == target.deviceId
+    }
+    val passUsed = activePass?.let { pass ->
+        ((usage?.totalBytes ?: 0L) - pass.startTotalBytes).coerceAtLeast(0L)
+    } ?: 0L
+    val passRemaining = activePass?.let { pass ->
+        if (pass.quotaBytes <= 0L) 0L
+        else (pass.quotaBytes - passUsed).coerceAtLeast(0L)
+    } ?: 0L
 
     ThemedBottomSheet(onDismiss = onDismiss) {
         Column(
@@ -594,222 +570,107 @@ private fun ClientPolicySheet(
                     .padding(bottom = ShizziTheme.spacing.lg),
             ) {
                 Text(
-            text = target.identity,
-            style = ShizziTheme.typography.heading,
-            color = ShizziTheme.colors.onSurface,
-        )
+                    text = target.identity,
+                    style = ShizziTheme.typography.heading,
+                    color = ShizziTheme.colors.onSurface,
+                )
 
-        Text(
-            text = if (target.ip.isBlank()) "Known device · offline" else target.ip,
-            style = ShizziTheme.typography.body,
-            color = ShizziTheme.colors.onSurfaceMuted,
-        )
-
-        Spacer(Modifier.height(ShizziTheme.spacing.md))
-
-        OutlinedTextField(
-            value = name,
-            onValueChange = { name = it.take(32) },
-            label = { Text("Device name (optional)") },
-            singleLine = true,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = ShizziTheme.spacing.xs),
-        )
-
-        Text(
-            text = "Quick profiles",
-            style = ShizziTheme.typography.subheading,
-            color = ShizziTheme.colors.onSurface,
-            modifier = Modifier.padding(top = ShizziTheme.spacing.md),
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(ShizziTheme.spacing.xs),
-        ) {
-            TextButton(
-                onClick = {
-                    down = "5"
-                    up = "2"
-                    quotaMb = "2000"
-                    priority = ClientPriority.NORMAL
-                    blockOnQuota = true
-                },
-            ) { Text("Guest") }
-            TextButton(
-                onClick = {
-                    down = "10"
-                    up = "5"
-                    quotaMb = "0"
-                    priority = ClientPriority.PRIORITY
-                },
-            ) { Text("Family") }
-            TextButton(
-                onClick = {
-                    down = "20"
-                    up = "5"
-                    quotaMb = "0"
-                    priority = ClientPriority.VIP
-                },
-            ) { Text("VIP") }
-        }
-
-        Text(
-            text = "Bandwidth presets",
-            style = ShizziTheme.typography.subheading,
-            color = ShizziTheme.colors.onSurface,
-            modifier = Modifier.padding(top = ShizziTheme.spacing.md),
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(ShizziTheme.spacing.xs),
-        ) {
-            TextButton(onClick = { down = "0"; up = "0" }) { Text("∞") }
-            TextButton(onClick = { down = "1"; up = "1" }) { Text("1/1") }
-            TextButton(onClick = { down = "5"; up = "2" }) { Text("5/2") }
-            TextButton(onClick = { down = "10"; up = "5" }) { Text("10/5") }
-        }
-
-        NumberField("Download Mbps (0 = unlimited)", down) { down = it }
-        NumberField("Upload Mbps (0 = unlimited)", up) { up = it }
-        NumberField("Monthly quota MB (0 = unlimited)", quotaMb) { quotaMb = it }
-
-        Text(
-            text = "Priority",
-            style = ShizziTheme.typography.subheading,
-            color = ShizziTheme.colors.onSurface,
-            modifier = Modifier.padding(top = ShizziTheme.spacing.md),
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(ShizziTheme.spacing.xs),
-        ) {
-            ClientPriority.entries.forEach { choice ->
-                TextButton(onClick = { priority = choice }) {
-                    Text(if (priority == choice) "✓ ${choice.displayLabel()}" else choice.displayLabel())
-                }
-            }
-        }
-
-        SectionLabel("Access pass")
-        val activePass = accessPasses.values.firstOrNull {
-            it.assignedDeviceId == target.deviceId
-        }
-        if (activePass != null) {
-            ManagerMetric(
-                title = activePass.code,
-                value = if (activePass.isExpired(System.currentTimeMillis())) "Expired" else "Active",
-                subtitle = accessPassSummary(activePass),
-            )
-            TextButton(onClick = { onRevokeAccessPass(activePass.code) }) {
-                Text("Revoke access pass")
-            }
-        } else {
-            val availablePasses = accessPasses.values
-                .filter { it.enabled && it.assignedDeviceId.isBlank() }
-                .sortedByDescending { it.createdAtMillis }
-                .take(5)
-
-            if (availablePasses.isEmpty()) {
                 Text(
-                    text = "No available access pass.",
+                    text = if (target.ip.isBlank()) "Known device · offline" else target.ip,
                     style = ShizziTheme.typography.body,
                     color = ShizziTheme.colors.onSurfaceMuted,
                 )
-            } else {
-                availablePasses.forEach { pass ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = ShizziTheme.spacing.xs),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        SettingsLabel(
-                            title = pass.code,
-                            subtitle = accessPassSummary(pass),
-                            modifier = Modifier.weight(1f),
+
+                Spacer(Modifier.height(ShizziTheme.spacing.md))
+
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(32) },
+                    label = { Text("Device name (optional)") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = ShizziTheme.spacing.xs),
+                )
+
+                SectionLabel("Voucher")
+                if (activePass != null) {
+                    ManagerMetric(
+                        title = activePass.name.ifBlank { activePass.code },
+                        value = if (activePass.isExpired(System.currentTimeMillis())) {
+                            "Expired"
+                        } else {
+                            "Active"
+                        },
+                        subtitle = "${activePass.code} · ${accessPassSummary(activePass)}",
+                    )
+                    if (activePass.quotaBytes > 0L) {
+                        ManagerMetric(
+                            title = "Voucher data",
+                            value = Traffic.format(passRemaining),
+                            subtitle = "${Traffic.format(passUsed)} used · remaining",
                         )
-                        TextButton(onClick = { onAssignAccessPass(pass.code) }) {
-                            Text("Apply")
+                    }
+                    TextButton(onClick = { onRevokeAccessPass(activePass.code) }) {
+                        Text("Revoke voucher")
+                    }
+                } else {
+                    Text(
+                        text = "No voucher is assigned. The client must enter an available " +
+                            "prepaid code in the captive portal.",
+                        style = ShizziTheme.typography.body,
+                        color = ShizziTheme.colors.onSurfaceMuted,
+                        modifier = Modifier.padding(vertical = ShizziTheme.spacing.md),
+                    )
+                }
+
+                SectionLabel("Usage")
+                ManagerMetric("Today", Traffic.format(currentDayBytes(usage)))
+                ManagerMetric("This week", Traffic.format(currentWeekBytes(usage)))
+                ManagerMetric("This month", Traffic.format(currentMonthBytes(usage)))
+                ManagerMetric("Total", Traffic.format(usage?.totalBytes ?: 0L))
+
+                SectionLabel("Dynamic sharing priority")
+                Text(
+                    text = "Priority changes only the share available during congestion. " +
+                        "It never raises the client above the voucher speed limit.",
+                    style = ShizziTheme.typography.body,
+                    color = ShizziTheme.colors.onSurfaceMuted,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(ShizziTheme.spacing.xs),
+                ) {
+                    ClientPriority.entries.forEach { choice ->
+                        TextButton(onClick = { priority = choice }) {
+                            Text(
+                                if (priority == choice) {
+                                    "✓ ${choice.displayLabel()}"
+                                } else {
+                                    choice.displayLabel()
+                                },
+                            )
                         }
                     }
                 }
-            }
-        }
 
-        SectionLabel("Usage")
-        ManagerMetric("Today", Traffic.format(currentDayBytes(usage)))
-        ManagerMetric("This week", Traffic.format(currentWeekBytes(usage)))
-        ManagerMetric("This month", Traffic.format(currentMonthBytes(usage)))
-        ManagerMetric("Total", Traffic.format(usage?.totalBytes ?: 0L))
-
-        TextButton(onClick = onResetMonthly) {
-            Text("Reset monthly usage")
-        }
-
-        SectionLabel("Temporary pause")
-        val pauseUntil = stored?.pausedUntilMillis ?: 0L
-        Text(
-            text = if (pauseUntil > System.currentTimeMillis()) {
-                "Paused until ${formatEventTime(pauseUntil)}"
-            } else {
-                "Not paused"
-            },
-            style = ShizziTheme.typography.body,
-            color = ShizziTheme.colors.onSurfaceMuted,
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(ShizziTheme.spacing.xs),
-        ) {
-            TextButton(onClick = { onPause(0L) }) { Text("Resume") }
-            TextButton(onClick = { onPause(5 * 60_000L) }) { Text("5 min") }
-            TextButton(onClick = { onPause(30 * 60_000L) }) { Text("30 min") }
-            TextButton(onClick = { onPause(60 * 60_000L) }) { Text("1 h") }
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = ShizziTheme.spacing.md),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            SettingsLabel(
-                title = "Block Internet now",
-                subtitle = "Keeps the device on Wi-Fi but stops Internet forwarding immediately",
-                modifier = Modifier.weight(1f),
-            )
-            Switch(checked = blocked, onCheckedChange = { blocked = it })
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = ShizziTheme.spacing.md),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            SettingsLabel(
-                title = "Block when quota is reached",
-                subtitle = "Keeps Internet available until the monthly quota is actually reached",
-                modifier = Modifier.weight(1f),
-            )
-            Switch(checked = blockOnQuota, onCheckedChange = { blockOnQuota = it })
-        }
-
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = ShizziTheme.spacing.md),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SettingsLabel(
+                        title = "Block Internet now",
+                        subtitle = "Administrative block; the device stays connected to Wi-Fi",
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(checked = blocked, onCheckedChange = { blocked = it })
+                }
             }
 
             SaveRow(
-                onSave = {
-                    onSave(
-                        name.trim(),
-                        positiveInt(down),
-                        positiveInt(up),
-                        megabytes(quotaMb),
-                        priority,
-                        blocked,
-                        blockOnQuota,
-                    )
-                },
+                onSave = { onSave(name.trim(), priority, blocked) },
                 onCancel = onDismiss,
             )
         }
