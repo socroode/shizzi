@@ -29,13 +29,13 @@ import dev.shizzi.AccessPass
 import dev.shizzi.ClientPolicySetting
 import dev.shizzi.ClientPriority
 import dev.shizzi.ClientTrafficStats
+import dev.shizzi.DataUnit
+import dev.shizzi.DurationUnit
 import dev.shizzi.ManagerTrafficStats
 import dev.shizzi.MonthlyUsageRecord
-import dev.shizzi.PREPAID_PASS_DOWNLOAD_MBPS
-import dev.shizzi.PREPAID_PASS_DURATION_MINUTES
-import dev.shizzi.PREPAID_PASS_QUOTA_BYTES
-import dev.shizzi.PREPAID_PASS_UPLOAD_MBPS
+import dev.shizzi.RateUnit
 import dev.shizzi.Settings
+import dev.shizzi.VoucherTemplate
 import dev.shizzi.Traffic
 import dev.shizzi.UiStatus
 import dev.shizzi.ui.theme.ScreenPadding
@@ -53,7 +53,10 @@ data class HotspotManagerActions(
     val onSetManagerOptions: (Boolean, Int) -> Unit,
     val onSetAccessPassRequired: (Boolean) -> Unit,
     val onSetPortalCustomization: (String, String, String) -> Unit,
-    val onCreateAccessPass: (String, Int, Int, Long, Long) -> Unit,
+    val onGenerateVouchers:
+        (String, Int, RateUnit, Int, RateUnit, Long, DataUnit, Long, DurationUnit, Int, Boolean) -> Unit,
+    val onDeleteVoucherTemplate: (String) -> Unit,
+    val onSetAccessPassEnabled: (String, Boolean) -> Unit,
     val onAssignAccessPass: (String, String) -> Unit,
     val onRevokeAccessPass: (String) -> Unit,
     val onSetClientPolicy:
@@ -82,6 +85,7 @@ fun HotspotManagerPage(
 ) {
     var editGlobal by remember { mutableStateOf(false) }
     var editPortal by remember { mutableStateOf(false) }
+    var editVoucherStudio by remember { mutableStateOf(false) }
     var editingTarget by remember { mutableStateOf<PolicyTarget?>(null) }
     val now = System.currentTimeMillis()
     val activeClients = stats.clients.filter {
@@ -178,48 +182,51 @@ fun HotspotManagerPage(
                 onClick = { editPortal = true },
             )
 
+            val availableVouchers = settings.accessPasses.values.count {
+                it.enabled && it.assignedDeviceId.isBlank()
+            }
+            val activeVouchers = settings.accessPasses.values.count { pass ->
+                voucherState(pass, settings, now) == VoucherState.ACTIVE
+            }
+            val exhaustedVouchers = settings.accessPasses.values.count { pass ->
+                voucherState(pass, settings, now) == VoucherState.EXHAUSTED
+            }
+
             SettingsChoice(
                 label = SettingsText(
-                    title = "Prepaid voucher",
-                    subtitle = "30 days · 100 GB · 10/5 Mbps",
+                    title = "Voucher Studio",
+                    subtitle = "Custom speed, data, validity, templates and batch generation",
                 ),
-                value = "Create",
-                onClick = {
-                    actions.onCreateAccessPass(
-                        "Prepaid 30 days",
-                        PREPAID_PASS_DOWNLOAD_MBPS,
-                        PREPAID_PASS_UPLOAD_MBPS,
-                        PREPAID_PASS_QUOTA_BYTES,
-                        PREPAID_PASS_DURATION_MINUTES,
-                    )
-                },
+                value = "Open",
+                onClick = { editVoucherStudio = true },
             )
 
-            if (settings.accessPasses.isEmpty()) {
-                Text(
-                    text = "No access pass yet. Create one with a preset above.",
-                    style = ShizziTheme.typography.body,
-                    color = ShizziTheme.colors.onSurfaceMuted,
-                    modifier = Modifier.padding(vertical = ShizziTheme.spacing.sm),
+            ManagerMetric(
+                title = "Voucher inventory",
+                value = "${settings.accessPasses.size}",
+                subtitle = "$availableVouchers available · $activeVouchers active · " +
+                    "$exhaustedVouchers exhausted",
+            )
+
+            if (settings.voucherTemplates.isNotEmpty()) {
+                ManagerMetric(
+                    title = "Saved templates",
+                    value = settings.voucherTemplates.size.toString(),
+                    subtitle = settings.voucherTemplates.values
+                        .sortedBy { it.name.lowercase() }
+                        .take(3)
+                        .joinToString(" · ") { it.name },
                 )
-            } else {
+            }
+
+            if (settings.accessPasses.isNotEmpty()) {
                 settings.accessPasses.values
                     .sortedByDescending { it.createdAtMillis }
-                    .take(8)
+                    .take(5)
                     .forEach { pass ->
-                        val assignedName = settings.devicePolicies[pass.assignedDeviceId]
-                            ?.name
-                            .orEmpty()
-                        val stateText = when {
-                            !pass.enabled -> "Disabled"
-                            pass.assignedDeviceId.isBlank() -> "Available"
-                            pass.isExpired(now) -> "Expired"
-                            assignedName.isNotBlank() -> "Used by $assignedName"
-                            else -> "Used"
-                        }
                         ManagerMetric(
                             title = pass.code,
-                            value = stateText,
+                            value = voucherState(pass, settings, now).label,
                             subtitle = accessPassSummary(pass),
                         )
                     }
@@ -340,6 +347,14 @@ fun HotspotManagerPage(
                 editGlobal = false
             },
             onDismiss = { editGlobal = false },
+        )
+    }
+
+    if (editVoucherStudio) {
+        VoucherStudioSheet(
+            settings = settings,
+            actions = actions,
+            onDismiss = { editVoucherStudio = false },
         )
     }
 
@@ -963,9 +978,11 @@ private fun currentWeekBytes(record: MonthlyUsageRecord?): Long {
 }
 
 private fun accessPassSummary(pass: AccessPass): String {
-    val speed = when {
-        pass.downloadMbps <= 0 && pass.uploadMbps <= 0 -> "unlimited speed"
-        else -> "${pass.downloadMbps}/${pass.uploadMbps} Mbps"
+    val speed = if (pass.downloadBps <= 0L && pass.uploadBps <= 0L) {
+        "unlimited speed"
+    } else {
+        "${formatVoucherRate(pass.downloadBps, pass.downloadUnit)}/" +
+            formatVoucherRate(pass.uploadBps, pass.uploadUnit)
     }
     val quota = when {
         pass.quotaBytes <= 0L -> "unlimited data"
@@ -973,15 +990,21 @@ private fun accessPassSummary(pass: AccessPass): String {
     }
     val duration = when {
         pass.durationMinutes <= 0L -> "no expiry"
-        pass.durationMinutes < 60L -> "${pass.durationMinutes} min"
-        pass.durationMinutes % 1_440L == 0L -> {
-            val days = pass.durationMinutes / 1_440L
-            if (days == 1L) "1 day" else "$days days"
-        }
-        else -> "${pass.durationMinutes / 60L} h"
+        pass.durationUnit == DurationUnit.MINUTES -> "${pass.durationMinutes} min"
+        pass.durationUnit == DurationUnit.HOURS -> "${pass.durationMinutes / 60L} h"
+        else -> "${pass.durationMinutes / 1_440L} days"
     }
     return "$speed · $quota · $duration"
 }
+
+private fun formatVoucherRate(bps: Long, unit: RateUnit): String {
+    if (bps <= 0L) return "∞"
+    return when (unit) {
+        RateUnit.KBPS -> "${bps / 1_000L} kbps"
+        RateUnit.MBPS -> "${bps / 1_000_000L} Mbps"
+    }
+}
+
 
 private fun formatEventTime(atUnixMillis: Long): String {
     if (atUnixMillis <= 0L) return ""
