@@ -16,10 +16,14 @@ import (
 type PortalPass struct {
 	Code             string `json:"code"`
 	Name             string `json:"name"`
-	DownloadMbps     int64  `json:"downloadMbps"`
-	UploadMbps       int64  `json:"uploadMbps"`
+	DownloadBps      int64  `json:"downloadBps"`
+	UploadBps        int64  `json:"uploadBps"`
+	DownloadUnit     string `json:"downloadUnit"`
+	UploadUnit       string `json:"uploadUnit"`
 	QuotaBytes       int64  `json:"quotaBytes"`
+	QuotaUnit        string `json:"quotaUnit"`
 	DurationMinutes  int64  `json:"durationMinutes"`
+	DurationUnit     string `json:"durationUnit"`
 	AssignedDeviceID string `json:"assignedDeviceId"`
 	Enabled          bool   `json:"enabled"`
 }
@@ -242,7 +246,11 @@ func (m *TrafficManager) renderPortalPage(clientIP string, success bool, statusM
 	if auth, ok := m.portalAuthorized[clientIP]; ok {
 		if pass, exists := m.portalPasses[auth.Code]; exists {
 			planName = pass.Name
-			speedText = fmt.Sprintf("%d/%d Mbps", pass.DownloadMbps, pass.UploadMbps)
+			speedText = fmt.Sprintf(
+				"%s / %s",
+				formatPortalRate(pass.DownloadBps, pass.DownloadUnit),
+				formatPortalRate(pass.UploadBps, pass.UploadUnit),
+			)
 
 			sessionUsed := (m.clientUsedLocked(clientIP) - auth.StartSessionBytes)
 			if sessionUsed < 0 {
@@ -333,6 +341,23 @@ func (m *TrafficManager) renderPortalPage(clientIP string, success bool, statusM
 		}
 	}
 	return rendered
+}
+
+func formatPortalRate(bps int64, preferredUnit string) string {
+	if bps <= 0 {
+		return "Illimité"
+	}
+	switch strings.ToUpper(strings.TrimSpace(preferredUnit)) {
+	case "KBPS":
+		return fmt.Sprintf("%d kbps", bps/1_000)
+	case "MBPS":
+		return fmt.Sprintf("%.2f Mbps", float64(bps)/1_000_000.0)
+	default:
+		if bps < 1_000_000 {
+			return fmt.Sprintf("%d kbps", bps/1_000)
+		}
+		return fmt.Sprintf("%.2f Mbps", float64(bps)/1_000_000.0)
+	}
 }
 
 func formatPortalBytes(value int64) string {
