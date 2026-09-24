@@ -53,6 +53,9 @@ Download the APK from the
   ordinary Internet traffic stays blocked until a valid voucher is entered on
   the captive portal. The portal and usage popup continue to support custom
   HTML/CSS and show the exact voucher speed, quota and remaining validity.
+  Data-limited vouchers also expose a persistent local live-usage dashboard at
+  `http://192.0.2.2/status`, refreshing every two seconds with used data,
+  remaining data, validity and speed. VPN following remains supported.
 - 🔐 **Stable update signing.** Release APKs can use one permanent signing
   identity so future versions install as updates instead of requiring an
   uninstall. See [release signing](docs/release-signing.md).
