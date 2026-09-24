@@ -201,11 +201,13 @@ class SessionService : Service() {
                 stats.portalClaims
                     .distinctBy { "${it.ip}|${it.code}" }
                     .forEach { claim ->
+                        // The portal request itself is not counted as ordinary forwarded
+                        // traffic, so the claim IP can be absent from the aggregated client
+                        // snapshot. When exactly one physical client is tethered, that device is
+                        // the only safe owner for the accepted voucher regardless of whether the
+                        // datapath exposed its private address or the shared TUN address.
                         val claimant = stats.clients.firstOrNull { it.ip == claim.ip }
-                            ?: when (claim.ip) {
-                                "192.0.2.2", "2001:db8::2" -> stats.clients.singleOrNull()
-                                else -> null
-                            }
+                            ?: stats.clients.singleOrNull()
                         val deviceId = claimant?.let { client ->
                             client.deviceId.lowercase().ifBlank { client.ip }
                         }.orEmpty()
@@ -294,7 +296,25 @@ class SessionService : Service() {
                     else -> (accessPass.quotaBytes - passUsed).coerceAtLeast(0L)
                 }
 
-                if (settings.accessPassRequired) {
+                // A freshly accepted voucher can exist in the datapath for one sync cycle
+                // before Android has resolved the portal IP back to the physical tethered
+                // device. Do not revoke that already-authorized portal session while the
+                // claim is still valid and waiting for attribution.
+                val pendingClaim = stats.portalClaims.firstOrNull { claim ->
+                    claim.ip == client.ip || stats.clients.size == 1
+                }
+                val pendingClaimPass = pendingClaim?.let { claim ->
+                    settings.accessPasses[claim.code.trim().uppercase()]
+                }
+                val keepPendingAuthorization =
+                    accessPass == null &&
+                        pendingClaimPass?.enabled == true &&
+                        (
+                            pendingClaimPass.assignedDeviceId.isBlank() ||
+                                pendingClaimPass.assignedDeviceId == deviceId
+                        )
+
+                if (settings.accessPassRequired && !keepPendingAuthorization) {
                     runCatching {
                         controller.setPortalClientAccess(
                             ip = client.ip,
@@ -309,6 +329,11 @@ class SessionService : Service() {
                                 it.message,
                         )
                     }
+                } else if (keepPendingAuthorization) {
+                    SessionLog.info(
+                        "portal claim ${pendingClaim?.code} pending device attribution; " +
+                            "preserving accepted access for $deviceId/${client.ip}",
+                    )
                 }
 
                 val monthlyQuota = policy.monthlyQuotaBytes
@@ -321,10 +346,11 @@ class SessionService : Service() {
                     else -> client.totalBytes +
                         (accessPass.quotaBytes - passUsed).coerceAtLeast(0L)
                 }
+                // A voucher is the commercial quota authority. Legacy/manual
+                // per-device quotas remain only as a fallback when no voucher is assigned.
                 val effectiveSessionQuota = when {
-                    monthlySessionQuota <= 0L -> passSessionQuota
-                    passSessionQuota <= 0L -> monthlySessionQuota
-                    else -> minOf(monthlySessionQuota, passSessionQuota)
+                    accessPass != null -> passSessionQuota
+                    else -> monthlySessionQuota
                 }
 
                 val monthlyBlocked =
@@ -335,12 +361,14 @@ class SessionService : Service() {
                     isActive && settings.maxClients > 0 && deviceId !in admittedIds
 
                 fun passCappedBps(policyMbps: Int, passBps: Long): Long {
-                    val policyBps = policyMbps.toLong().coerceAtLeast(0L) * 1_000_000L
-                    return when {
-                        !passValid || passBps <= 0L -> policyBps
-                        policyBps <= 0L -> passBps
-                        else -> minOf(policyBps, passBps)
+                    // With a voucher, its advertised speed is the per-device ceiling.
+                    // Dynamic sharing may reduce the real rate below that ceiling, but
+                    // a legacy/manual client limit must never silently make the voucher
+                    // slower. A zero voucher rate means unlimited before global sharing.
+                    if (accessPass != null) {
+                        return if (passValid) passBps.coerceAtLeast(0L) else 0L
                     }
+                    return policyMbps.toLong().coerceAtLeast(0L) * 1_000_000L
                 }
 
                 fun effectiveRate(globalMbps: Int, clientBps: Long): Long {
@@ -379,9 +407,8 @@ class SessionService : Service() {
                         ),
                         quotaBytes = effectiveSessionQuota,
                         blocked = policy.blocked ||
-                            paused ||
-                            monthlyBlocked ||
-                            overClientLimit,
+                            overClientLimit ||
+                            (accessPass == null && (paused || monthlyBlocked)),
                     )
                 }.onFailure { failure ->
                     SessionLog.warn(
