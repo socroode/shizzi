@@ -1,5 +1,7 @@
 package dev.shizzi.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -1135,6 +1137,9 @@ private fun VoucherStudioSheet(
                     voucherState(it, settings, now)
                 }.eachCount()
 
+                val totalVoucherUsage = settings.accessPasses.values.sumOf {
+                    voucherUsedBytes(it, settings)
+                }
                 Text(
                     text = buildString {
                         append(states[VoucherState.AVAILABLE] ?: 0)
@@ -1144,7 +1149,9 @@ private fun VoucherStudioSheet(
                         append(states[VoucherState.EXPIRED] ?: 0)
                         append(" expired · ")
                         append(states[VoucherState.EXHAUSTED] ?: 0)
-                        append(" exhausted")
+                        append(" exhausted · ")
+                        append(Traffic.format(totalVoucherUsage))
+                        append(" consumed")
                     },
                     style = ShizziTheme.typography.body,
                     color = ShizziTheme.colors.onSurfaceMuted,
@@ -1238,6 +1245,18 @@ private fun VoucherStudioSheet(
                                     style = ShizziTheme.typography.body,
                                     color = ShizziTheme.colors.onSurface,
                                 )
+                                TextButton(
+                                    onClick = {
+                                        val clipboard = context.getSystemService(
+                                            ClipboardManager::class.java,
+                                        )
+                                        clipboard?.setPrimaryClip(
+                                            ClipData.newPlainText("Shizzi voucher", pass.code),
+                                        )
+                                    },
+                                ) {
+                                    Text("Copy")
+                                }
                                 TextButton(
                                     onClick = {
                                         actions.onSetAccessPassEnabled(pass.code, !pass.enabled)
