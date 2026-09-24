@@ -60,8 +60,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 22
-        versionName = "1.1.3-captive-validation"
+        versionCode = 23
+        versionName = "1.2.0-voucher-studio"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 
