@@ -157,31 +157,79 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun createAccessPass(
+    fun generateVouchers(
         name: String,
-        downloadMbps: Int,
-        uploadMbps: Int,
-        quotaBytes: Long,
-        durationMinutes: Long,
+        downloadValue: Int,
+        downloadUnit: RateUnit,
+        uploadValue: Int,
+        uploadUnit: RateUnit,
+        quotaValue: Long,
+        quotaUnit: DataUnit,
+        durationValue: Long,
+        durationUnit: DurationUnit,
+        quantity: Int,
+        saveAsTemplate: Boolean,
     ) {
         viewModelScope.launch {
-            val existing = settingsStore.settings.first().accessPasses.keys
-            var code: String
-            do {
-                code = generateAccessPassCode()
-            } while (code in existing)
+            val snapshot = settingsStore.settings.first()
+            val existing = snapshot.accessPasses.keys.toMutableSet()
+            val count = quantity.coerceIn(1, 500)
+            val templateName = name.trim().ifBlank { "Voucher" }.take(48)
 
-            settingsStore.upsertAccessPass(
-                AccessPass(
-                    code = code,
-                    name = "Prepaid 30 days",
-                    downloadMbps = PREPAID_PASS_DOWNLOAD_MBPS,
-                    uploadMbps = PREPAID_PASS_UPLOAD_MBPS,
-                    quotaBytes = PREPAID_PASS_QUOTA_BYTES,
-                    durationMinutes = PREPAID_PASS_DURATION_MINUTES,
-                    createdAtMillis = System.currentTimeMillis(),
-                ),
+            val template = VoucherTemplate(
+                id = "tpl-" + System.currentTimeMillis().toString(36),
+                name = templateName,
+                downloadValue = downloadValue.coerceAtLeast(0),
+                downloadUnit = downloadUnit,
+                uploadValue = uploadValue.coerceAtLeast(0),
+                uploadUnit = uploadUnit,
+                quotaValue = quotaValue.coerceAtLeast(0L),
+                quotaUnit = quotaUnit,
+                durationValue = durationValue.coerceAtLeast(0L),
+                durationUnit = durationUnit,
+                createdAtMillis = System.currentTimeMillis(),
             )
+
+            val passes = buildList {
+                repeat(count) {
+                    var code: String
+                    do {
+                        code = generateAccessPassCode()
+                    } while (!existing.add(code))
+
+                    add(
+                        AccessPass(
+                            code = code,
+                            name = template.name,
+                            downloadBps = template.downloadBps,
+                            uploadBps = template.uploadBps,
+                            downloadUnit = template.downloadUnit,
+                            uploadUnit = template.uploadUnit,
+                            quotaBytes = template.quotaBytes,
+                            quotaUnit = template.quotaUnit,
+                            durationMinutes = template.durationMinutes,
+                            durationUnit = template.durationUnit,
+                            createdAtMillis = System.currentTimeMillis(),
+                        ),
+                    )
+                }
+            }
+
+            settingsStore.upsertAccessPasses(passes)
+            if (saveAsTemplate) settingsStore.saveVoucherTemplate(template)
+            refreshLivePortalConfig()
+        }
+    }
+
+    fun deleteVoucherTemplate(id: String) {
+        viewModelScope.launch {
+            settingsStore.deleteVoucherTemplate(id)
+        }
+    }
+
+    fun setAccessPassEnabled(code: String, enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStore.setAccessPassEnabled(code, enabled)
             refreshLivePortalConfig()
         }
     }
