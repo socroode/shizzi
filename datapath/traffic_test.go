@@ -215,7 +215,7 @@ func TestCaptivePortalUsagePopup(t *testing.T) {
 	if !strings.Contains(page, "100.00 GB") {
 		t.Fatal("usage popup should show remaining prepaid data")
 	}
-	if !strings.Contains(page, "10/5 Mbps") {
+	if !strings.Contains(page, "10.00 Mbps / 5.00 Mbps") {
 		t.Fatal("usage popup should show the voucher speed")
 	}
 	if !strings.Contains(page, "192.0.2.2") {
