@@ -48,6 +48,22 @@ type portalConfigPayload struct {
 	Passes  []PortalPass `json:"passes"`
 }
 
+type portalUsageStatus struct {
+	Authorized       bool   `json:"authorized"`
+	Code             string `json:"code"`
+	Plan             string `json:"plan"`
+	Speed            string `json:"speed"`
+	QuotaBytes       int64  `json:"quotaBytes"`
+	UsedBytes        int64  `json:"usedBytes"`
+	RemainingBytes   int64  `json:"remainingBytes"`
+	UsedText         string `json:"usedText"`
+	RemainingText    string `json:"remainingText"`
+	PercentUsed      int64  `json:"percentUsed"`
+	ExpiresAtMillis  int64  `json:"expiresAtMillis"`
+	ExpiresText      string `json:"expiresText"`
+	LimitedData      bool   `json:"limitedData"`
+}
+
 func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 	var payload portalConfigPayload
 	if strings.TrimSpace(raw) != "" {
@@ -152,6 +168,180 @@ func (m *TrafficManager) clientUsedLocked(ip string) int64 {
 	return client.UpBytes + client.DownBytes
 }
 
+func (m *TrafficManager) portalUsageStatusFor(ip string) portalUsageStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	status := portalUsageStatus{}
+	auth, ok := m.portalAuthorized[ip]
+	if !ok {
+		return status
+	}
+	pass, exists := m.portalPasses[auth.Code]
+	if !exists {
+		return status
+	}
+
+	status.Authorized = m.portalAuthorizedLocked(ip)
+	status.Code = auth.Code
+	status.Plan = pass.Name
+	status.Speed = fmt.Sprintf(
+		"%s / %s",
+		formatPortalRate(pass.DownloadBps, pass.DownloadUnit),
+		formatPortalRate(pass.UploadBps, pass.UploadUnit),
+	)
+	status.QuotaBytes = pass.QuotaBytes
+	status.LimitedData = pass.QuotaBytes > 0
+	status.ExpiresAtMillis = auth.ExpiresAtMillis
+
+	sessionUsed := m.clientUsedLocked(ip) - auth.StartSessionBytes
+	if sessionUsed < 0 {
+		sessionUsed = 0
+	}
+
+	if pass.QuotaBytes > 0 {
+		remaining := auth.QuotaRemainingBytes - sessionUsed
+		if remaining < 0 {
+			remaining = 0
+		}
+		used := pass.QuotaBytes - remaining
+		if used < 0 {
+			used = 0
+		}
+		if used > pass.QuotaBytes {
+			used = pass.QuotaBytes
+		}
+		status.UsedBytes = used
+		status.RemainingBytes = remaining
+		status.UsedText = formatPortalBytes(used)
+		status.RemainingText = formatPortalBytes(remaining)
+		status.PercentUsed = used * 100 / pass.QuotaBytes
+	} else {
+		status.UsedBytes = sessionUsed
+		status.UsedText = formatPortalBytes(sessionUsed)
+		status.RemainingText = "Illimité"
+	}
+
+	if auth.ExpiresAtMillis > 0 {
+		status.ExpiresText = formatPortalTimeRemaining(
+			auth.ExpiresAtMillis - time.Now().UnixMilli(),
+		)
+	} else {
+		status.ExpiresText = "Sans expiration"
+	}
+	return status
+}
+
+func writePortalResponse(conn net.Conn, contentType string, body []byte) {
+	headers := fmt.Sprintf(
+		"HTTP/1.1 200 OK\r\nContent-Type: %s\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nConnection: close\r\nContent-Length: %d\r\n\r\n",
+		contentType,
+		len(body),
+	)
+	_, _ = io.WriteString(conn, headers)
+	_, _ = conn.Write(body)
+}
+
+func (m *TrafficManager) servePortalStatusJSON(conn net.Conn, clientIP string) {
+	status := m.portalUsageStatusFor(clientIP)
+	body, err := json.Marshal(status)
+	if err != nil {
+		body = []byte("{}")
+	}
+	writePortalResponse(conn, "application/json; charset=utf-8", body)
+}
+
+func (m *TrafficManager) renderLiveStatusPage() string {
+	return `<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Suivi consommation Shizzi</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:#0b0b0c;color:#f7f7f8;font-family:system-ui,-apple-system,sans-serif;padding:22px}
+.wrap{width:min(100%,520px);margin:0 auto}
+.card{background:#1c1b1f;border-radius:24px;padding:24px;box-shadow:0 18px 60px #0008}
+h1{font-size:26px;margin:0 0 4px}
+.sub{color:#aaa3ad;margin:0 0 22px}
+.plan{font-size:18px;font-weight:700;margin-bottom:4px}
+.code{font-size:13px;color:#8d8790;margin-bottom:20px}
+.row{display:flex;justify-content:space-between;gap:18px;padding:12px 0;border-bottom:1px solid #ffffff12}
+.row span{color:#bbb5bd}.row strong{text-align:right}
+.meter{height:14px;background:#37333a;border-radius:999px;overflow:hidden;margin:18px 0 8px}
+.meter span{display:block;height:100%;width:0;background:#34d1c6;transition:width .5s ease}
+.percent{text-align:right;color:#aaa3ad;font-size:13px}
+.live{display:inline-flex;align-items:center;gap:7px;color:#34d1c6;font-size:13px;margin-top:18px}
+.dot{width:8px;height:8px;border-radius:50%;background:#34d1c6;box-shadow:0 0 12px #34d1c6}
+.offline{color:#ff9a9a}
+button{width:100%;margin-top:22px;border:0;border-radius:14px;padding:14px;font:inherit;font-weight:700;background:#34d1c6;color:#07110f}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="card">
+<h1>Votre consommation</h1>
+<p class="sub">Mise à jour automatique en temps réel</p>
+<div class="plan" id="plan">Chargement…</div>
+<div class="code" id="code"></div>
+<div class="meter"><span id="bar"></span></div>
+<div class="percent" id="percent"></div>
+<div class="row"><span>Utilisé</span><strong id="used">—</strong></div>
+<div class="row"><span>Restant</span><strong id="remaining">—</strong></div>
+<div class="row"><span>Validité restante</span><strong id="expires">—</strong></div>
+<div class="row"><span>Débit</span><strong id="speed">—</strong></div>
+<div class="live" id="live"><span class="dot"></span><span>Actualisation toutes les 2 secondes</span></div>
+<button onclick="refreshNow()">Actualiser maintenant</button>
+</div>
+</div>
+<script>
+async function refreshNow(){
+  try{
+    const r=await fetch('/status.json?ts='+Date.now(),{cache:'no-store'});
+    const s=await r.json();
+    if(!s.code){
+      document.getElementById('plan').textContent='Aucun voucher actif';
+      document.getElementById('code').textContent='';
+      document.getElementById('used').textContent='—';
+      document.getElementById('remaining').textContent='—';
+      document.getElementById('expires').textContent='—';
+      document.getElementById('speed').textContent='—';
+      document.getElementById('bar').style.width='0%';
+      document.getElementById('percent').textContent='';
+      return;
+    }
+    document.getElementById('plan').textContent=s.plan || 'Voucher';
+    document.getElementById('code').textContent=s.code;
+    document.getElementById('used').textContent=s.usedText || '0 MB';
+    document.getElementById('remaining').textContent=s.remainingText || '—';
+    document.getElementById('expires').textContent=s.expiresText || '—';
+    document.getElementById('speed').textContent=s.speed || '—';
+    const p=Math.max(0,Math.min(100,s.percentUsed||0));
+    document.getElementById('bar').style.width=(s.limitedData?p:0)+'%';
+    document.getElementById('percent').textContent=s.limitedData ? p+' % utilisé' : 'Données illimitées';
+    const live=document.getElementById('live');
+    if(s.authorized){
+      live.className='live';
+      live.innerHTML='<span class="dot"></span><span>Connexion active · mise à jour toutes les 2 secondes</span>';
+    }else{
+      live.className='live offline';
+      live.textContent='Accès expiré ou quota épuisé';
+    }
+  }catch(e){
+    const live=document.getElementById('live');
+    live.className='live offline';
+    live.textContent='Suivi temporairement indisponible';
+  }
+}
+refreshNow();
+setInterval(refreshNow,2000);
+</script>
+</body>
+</html>`
+}
+
 func (m *TrafficManager) submitPortalCode(ip, rawCode string) (bool, string) {
 	code := normalizePortalCode(rawCode)
 	if code == "" {
@@ -207,6 +397,19 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	}
 	defer req.Body.Close()
 
+	switch req.URL.Path {
+	case "/status.json":
+		m.servePortalStatusJSON(conn, clientIP)
+		return
+	case "/status":
+		writePortalResponse(
+			conn,
+			"text/html; charset=utf-8",
+			[]byte(m.renderLiveStatusPage()),
+		)
+		return
+	}
+
 	ok := m.portalAuthorizedFor(clientIP)
 	message := ""
 	if ok && req.Method == http.MethodGet {
@@ -222,14 +425,7 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	if ok && req.Method == http.MethodPost {
 		page = injectPortalValidationRedirect(page)
 	}
-	status := "200 OK"
-	headers := fmt.Sprintf(
-		"HTTP/1.1 %s\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nConnection: close\r\nContent-Length: %d\r\n\r\n",
-		status,
-		len([]byte(page)),
-	)
-	_, _ = io.WriteString(conn, headers)
-	_, _ = io.WriteString(conn, page)
+	writePortalResponse(conn, "text/html; charset=utf-8", []byte(page))
 }
 
 func (m *TrafficManager) renderPortalPage(clientIP string, success bool, statusMessage string) string {
@@ -418,7 +614,7 @@ func portalUsagePopup(planName, speedText, usedText, remainingText, expiresText 
     <div class="row"><span>Restant</span><strong>%s</strong></div>
     <div class="row"><span>Validité restante</span><strong>%s</strong></div>
     <div class="row"><span>Débit</span><strong>%s</strong></div>
-    <a href="http://192.0.2.2/" style="display:block;margin-top:18px;text-align:center;color:#d1d5db;text-decoration:none">Actualiser ma consommation</a>
+    <a href="http://192.0.2.2/status" target="_blank" rel="noopener" style="display:block;margin-top:18px;text-align:center;color:#d1d5db;text-decoration:none">Ouvrir le suivi en direct</a>
     <button type="button" onclick="if(window.shizziFinishLogin){window.shizziFinishLogin()}else{window.location.replace('http://connectivitycheck.gstatic.com/generate_204')}">Continuer</button>
   </div>
 </div>`, plan, used, remaining, expires, speed)
@@ -431,12 +627,9 @@ func injectPortalValidationRedirect(page string) string {
 <script>
 (function(){
   var target=%q;
-  var timer=null;
   window.shizziFinishLogin=function(){
-    if(timer){clearTimeout(timer);}
     window.location.replace(target);
   };
-  timer=setTimeout(window.shizziFinishLogin,3000);
 })();
 </script>
 <noscript><p style="text-align:center"><a href="%s">Continuer vers Internet</a></p></noscript>`,
