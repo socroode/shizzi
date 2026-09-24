@@ -41,18 +41,52 @@ data class ConnectionEvent(
 )
 
 
-const val PREPAID_PASS_DOWNLOAD_MBPS = 10
-const val PREPAID_PASS_UPLOAD_MBPS = 5
-const val PREPAID_PASS_QUOTA_BYTES = 100_000_000_000L
-const val PREPAID_PASS_DURATION_MINUTES = 43_200L
+enum class RateUnit(val label: String, val multiplier: Long) {
+    KBPS("kbps", 1_000L),
+    MBPS("Mbps", 1_000_000L),
+}
+
+enum class DataUnit(val label: String, val multiplier: Long) {
+    MB("MB", 1_000_000L),
+    GB("GB", 1_000_000_000L),
+}
+
+enum class DurationUnit(val label: String, val minutes: Long) {
+    MINUTES("min", 1L),
+    HOURS("hours", 60L),
+    DAYS("days", 1_440L),
+}
+
+data class VoucherTemplate(
+    val id: String,
+    val name: String,
+    val downloadValue: Int,
+    val downloadUnit: RateUnit,
+    val uploadValue: Int,
+    val uploadUnit: RateUnit,
+    val quotaValue: Long,
+    val quotaUnit: DataUnit,
+    val durationValue: Long,
+    val durationUnit: DurationUnit,
+    val createdAtMillis: Long = 0L,
+) {
+    val downloadBps: Long get() = downloadValue.toLong().coerceAtLeast(0L) * downloadUnit.multiplier
+    val uploadBps: Long get() = uploadValue.toLong().coerceAtLeast(0L) * uploadUnit.multiplier
+    val quotaBytes: Long get() = quotaValue.coerceAtLeast(0L) * quotaUnit.multiplier
+    val durationMinutes: Long get() = durationValue.coerceAtLeast(0L) * durationUnit.minutes
+}
 
 data class AccessPass(
     val code: String,
     val name: String = "",
-    val downloadMbps: Int = 0,
-    val uploadMbps: Int = 0,
-    val quotaBytes: Long = 0,
-    val durationMinutes: Long = 0,
+    val downloadBps: Long = 0L,
+    val uploadBps: Long = 0L,
+    val downloadUnit: RateUnit = RateUnit.MBPS,
+    val uploadUnit: RateUnit = RateUnit.MBPS,
+    val quotaBytes: Long = 0L,
+    val quotaUnit: DataUnit = DataUnit.GB,
+    val durationMinutes: Long = 0L,
+    val durationUnit: DurationUnit = DurationUnit.DAYS,
     val createdAtMillis: Long = 0,
     val assignedDeviceId: String = "",
     val activatedAtMillis: Long = 0,
@@ -67,6 +101,16 @@ data class AccessPass(
     fun isExpired(nowMillis: Long): Boolean {
         val expires = expiresAtMillis()
         return expires > 0L && nowMillis >= expires
+    }
+
+    fun downloadDisplayValue(): Long = when (downloadUnit) {
+        RateUnit.KBPS -> downloadBps / 1_000L
+        RateUnit.MBPS -> downloadBps / 1_000_000L
+    }
+
+    fun uploadDisplayValue(): Long = when (uploadUnit) {
+        RateUnit.KBPS -> uploadBps / 1_000L
+        RateUnit.MBPS -> uploadBps / 1_000_000L
     }
 }
 
@@ -325,10 +369,14 @@ fun encodeAccessPasses(passes: Map<String, AccessPass>): String =
                 JSONObject().apply {
                     put("code", pass.code)
                     put("name", pass.name)
-                    put("downloadMbps", pass.downloadMbps)
-                    put("uploadMbps", pass.uploadMbps)
+                    put("downloadBps", pass.downloadBps)
+                    put("uploadBps", pass.uploadBps)
+                    put("downloadUnit", pass.downloadUnit.name)
+                    put("uploadUnit", pass.uploadUnit.name)
                     put("quotaBytes", pass.quotaBytes)
+                    put("quotaUnit", pass.quotaUnit.name)
                     put("durationMinutes", pass.durationMinutes)
+                    put("durationUnit", pass.durationUnit.name)
                     put("createdAtMillis", pass.createdAtMillis)
                     put("assignedDeviceId", pass.assignedDeviceId)
                     put("activatedAtMillis", pass.activatedAtMillis)
@@ -346,28 +394,102 @@ fun decodeAccessPasses(raw: String?): Map<String, AccessPass> {
             val item = array.optJSONObject(index) ?: continue
             val code = item.optString("code").trim().uppercase()
             if (code.isBlank()) continue
-            val pass = AccessPass(
-                code = code,
-                name = item.optString("name"),
-                downloadMbps = item.optInt("downloadMbps").coerceAtLeast(0),
-                uploadMbps = item.optInt("uploadMbps").coerceAtLeast(0),
-                quotaBytes = item.optLong("quotaBytes").coerceAtLeast(0L),
-                durationMinutes = item.optLong("durationMinutes").coerceAtLeast(0L),
-                createdAtMillis = item.optLong("createdAtMillis").coerceAtLeast(0L),
-                assignedDeviceId = item.optString("assignedDeviceId").lowercase(),
-                activatedAtMillis = item.optLong("activatedAtMillis").coerceAtLeast(0L),
-                startTotalBytes = item.optLong("startTotalBytes").coerceAtLeast(0L),
-                enabled = if (item.has("enabled")) item.optBoolean("enabled") else true,
+
+            val legacyDownload = item.optInt("downloadMbps").coerceAtLeast(0).toLong() * 1_000_000L
+            val legacyUpload = item.optInt("uploadMbps").coerceAtLeast(0).toLong() * 1_000_000L
+            put(
+                code,
+                AccessPass(
+                    code = code,
+                    name = item.optString("name"),
+                    downloadBps = if (item.has("downloadBps")) {
+                        item.optLong("downloadBps").coerceAtLeast(0L)
+                    } else {
+                        legacyDownload
+                    },
+                    uploadBps = if (item.has("uploadBps")) {
+                        item.optLong("uploadBps").coerceAtLeast(0L)
+                    } else {
+                        legacyUpload
+                    },
+                    downloadUnit = runCatching {
+                        RateUnit.valueOf(item.optString("downloadUnit"))
+                    }.getOrDefault(RateUnit.MBPS),
+                    uploadUnit = runCatching {
+                        RateUnit.valueOf(item.optString("uploadUnit"))
+                    }.getOrDefault(RateUnit.MBPS),
+                    quotaBytes = item.optLong("quotaBytes").coerceAtLeast(0L),
+                    quotaUnit = runCatching {
+                        DataUnit.valueOf(item.optString("quotaUnit"))
+                    }.getOrDefault(DataUnit.GB),
+                    durationMinutes = item.optLong("durationMinutes").coerceAtLeast(0L),
+                    durationUnit = runCatching {
+                        DurationUnit.valueOf(item.optString("durationUnit"))
+                    }.getOrDefault(DurationUnit.DAYS),
+                    createdAtMillis = item.optLong("createdAtMillis").coerceAtLeast(0L),
+                    assignedDeviceId = item.optString("assignedDeviceId").lowercase(),
+                    activatedAtMillis = item.optLong("activatedAtMillis").coerceAtLeast(0L),
+                    startTotalBytes = item.optLong("startTotalBytes").coerceAtLeast(0L),
+                    enabled = if (item.has("enabled")) item.optBoolean("enabled") else true,
+                ),
             )
-            if (
-                pass.downloadMbps != PREPAID_PASS_DOWNLOAD_MBPS ||
-                pass.uploadMbps != PREPAID_PASS_UPLOAD_MBPS ||
-                pass.quotaBytes != PREPAID_PASS_QUOTA_BYTES ||
-                pass.durationMinutes != PREPAID_PASS_DURATION_MINUTES
-            ) {
-                continue
-            }
-            put(code, pass)
+        }
+    }
+}
+
+fun encodeVoucherTemplates(templates: Map<String, VoucherTemplate>): String =
+    JSONArray().apply {
+        templates.values.sortedBy { it.name.lowercase() }.forEach { template ->
+            put(
+                JSONObject().apply {
+                    put("id", template.id)
+                    put("name", template.name)
+                    put("downloadValue", template.downloadValue)
+                    put("downloadUnit", template.downloadUnit.name)
+                    put("uploadValue", template.uploadValue)
+                    put("uploadUnit", template.uploadUnit.name)
+                    put("quotaValue", template.quotaValue)
+                    put("quotaUnit", template.quotaUnit.name)
+                    put("durationValue", template.durationValue)
+                    put("durationUnit", template.durationUnit.name)
+                    put("createdAtMillis", template.createdAtMillis)
+                },
+            )
+        }
+    }.toString()
+
+fun decodeVoucherTemplates(raw: String?): Map<String, VoucherTemplate> {
+    val array = runCatching { JSONArray(raw.orEmpty()) }.getOrNull() ?: return emptyMap()
+    return buildMap {
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            val id = item.optString("id").trim()
+            val name = item.optString("name").trim()
+            if (id.isBlank() || name.isBlank()) continue
+            put(
+                id,
+                VoucherTemplate(
+                    id = id,
+                    name = name,
+                    downloadValue = item.optInt("downloadValue").coerceAtLeast(0),
+                    downloadUnit = runCatching {
+                        RateUnit.valueOf(item.optString("downloadUnit"))
+                    }.getOrDefault(RateUnit.MBPS),
+                    uploadValue = item.optInt("uploadValue").coerceAtLeast(0),
+                    uploadUnit = runCatching {
+                        RateUnit.valueOf(item.optString("uploadUnit"))
+                    }.getOrDefault(RateUnit.MBPS),
+                    quotaValue = item.optLong("quotaValue").coerceAtLeast(0L),
+                    quotaUnit = runCatching {
+                        DataUnit.valueOf(item.optString("quotaUnit"))
+                    }.getOrDefault(DataUnit.GB),
+                    durationValue = item.optLong("durationValue").coerceAtLeast(0L),
+                    durationUnit = runCatching {
+                        DurationUnit.valueOf(item.optString("durationUnit"))
+                    }.getOrDefault(DurationUnit.DAYS),
+                    createdAtMillis = item.optLong("createdAtMillis").coerceAtLeast(0L),
+                ),
+            )
         }
     }
 }
@@ -386,10 +508,14 @@ fun portalConfigJson(settings: Settings): String =
                         JSONObject().apply {
                             put("code", pass.code)
                             put("name", pass.name)
-                            put("downloadMbps", pass.downloadMbps)
-                            put("uploadMbps", pass.uploadMbps)
+                            put("downloadBps", pass.downloadBps)
+                            put("uploadBps", pass.uploadBps)
+                            put("downloadUnit", pass.downloadUnit.name)
+                            put("uploadUnit", pass.uploadUnit.name)
                             put("quotaBytes", pass.quotaBytes)
+                            put("quotaUnit", pass.quotaUnit.name)
                             put("durationMinutes", pass.durationMinutes)
+                            put("durationUnit", pass.durationUnit.name)
                             put("assignedDeviceId", pass.assignedDeviceId)
                             put("enabled", pass.enabled)
                         },
