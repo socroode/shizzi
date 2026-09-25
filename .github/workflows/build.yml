@@ -123,6 +123,13 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
+      - name: Upload Shizzi Conso APK
+        uses: actions/upload-artifact@v5
+        with:
+          name: shizzi-conso-v1.0
+          path: conso/build/outputs/apk/debug/conso-debug.apk
+          if-no-files-found: error
+
       - name: Upload permanently signed release APK
         if: ${{ env.SHIZZI_KEYSTORE_B64 != '' }}
         uses: actions/upload-artifact@v5
