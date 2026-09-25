@@ -5,6 +5,28 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-09-24
+
+### Fixed
+
+- The TUN/tethering compatibility probe now follows the same startup order as
+  the production session: stop the downstream, clear stale test-network state,
+  create and publish the new TUN, attach the datapath, prefer test networks,
+  then restart Wi-Fi tethering.
+- Stale Shizzi `testtunN` networks are torn down before a new probe TUN is
+  created, preventing Android from remaining attached to the previous test
+  network (for example `testtun8` while the current run owns `testtun9`).
+- Q5 now evaluates the owned TUN after the downstream restart instead of
+  intentionally testing the obsolete pre-TUN restart sequence.
+
+### Compatibility
+
+- Shizzi Conso remains **v1.1.0** and requires no update.
+- Existing Conso routes remain unchanged: `/`, `/status`, `/status.json`,
+  `/account/login`, and `/account/recharge`.
+- Prepaid accounts, vouchers, balances, validity and existing DataStore records
+  remain unchanged from Shizzi 1.6.0/1.7.1.
+
 ## [1.7.1] - 2026-09-24
 
 ### Fixed
