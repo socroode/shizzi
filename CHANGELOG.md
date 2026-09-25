@@ -5,6 +5,19 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.3] - 2026-09-25
+
+### Fixed
+
+- Switched the Shizzi test network and TUN to IPv4-only after device testing showed that the previous dual-stack path could leave YouTube and Messenger waiting tens of seconds before falling back to IPv4.
+- Removed the IPv6 TUN address and IPv6 DNS advertisement from the active tethering path while keeping TCP, UDP/QUIC, MTU 1500, VPN handling, vouchers, quotas, prepaid accounts and traffic shaping unchanged.
+- Updated the compatibility probe so Q6 verifies that the published Shizzi test network has no routable IPv6 address or IPv6 DNS server.
+
+### Compatibility
+
+- Shizzi Conso remains **v1.2.0** and requires no update.
+- Existing prepaid accounts, vouchers, balances, validity and DataStore records remain unchanged from Shizzi 1.7.2.
+
 ## [1.7.2] - 2026-09-24
 
 ### Fixed
