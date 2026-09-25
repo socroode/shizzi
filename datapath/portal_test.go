@@ -223,3 +223,34 @@ func TestPrepaidAccountMovesToNewClient(t *testing.T) {
 		t.Fatal("new client did not receive the account session")
 	}
 }
+
+
+func TestAccountPanelShowsAllocatedRateAndValidity(t *testing.T) {
+	manager := newTrafficManager()
+	now := time.Now().UnixMilli()
+	manager.setPortalConfig(true, fmt.Sprintf(`{
+	  "accounts": [{
+	    "number": "25494159",
+	    "pin": "583921",
+	    "name": "TAIANA",
+	    "enabled": true,
+	    "dataBalanceBytes": 1082000000,
+	    "dataExpiresAtMillis": %d,
+	    "dataDownloadBps": 1000000,
+	    "dataUploadBps": 1000000
+	  }]
+	}`, now+30*24*60*60*1000))
+
+	if ok, msg := manager.submitPortalAccountLogin("192.168.43.10", "25494159", "583921"); !ok {
+		t.Fatalf("account login rejected: %s", msg)
+	}
+	manager.mu.Lock()
+	panel := manager.portalAccountPanelLocked("192.168.43.10")
+	manager.mu.Unlock()
+
+	for _, expected := range []string{"TAIANA", "1.08 GB", "1.00 Mbps", "Validité restante", "Voir ma consommation en direct"} {
+		if !strings.Contains(panel, expected) {
+			t.Fatalf("account panel missing %q: %s", expected, panel)
+		}
+	}
+}
