@@ -5,6 +5,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Shizzi Conso 1.1.0
+
+- Added an account-oriented launcher for Shizzi 1.6 prepaid accounts.
+- The normal Wi-Fi captive window remains the place where the customer signs in with account number + PIN.
+- Added one-tap browser access to the live account usage page.
+- Added one-tap browser access to the local account/recharge page, including when the account has 0 MB and Internet is blocked.
+- Kept Shizzi Conso lightweight: it does not store balances, vouchers, or hotspot administration data.
+
+
 ## [1.6.0] - 2026-09-24
 
 ### Added
