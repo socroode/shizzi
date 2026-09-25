@@ -87,8 +87,7 @@ class ProbeRunner(private val context: Context) {
         val group = SessionResources(testNetworkApi, context.connectivityManager())
         resources = group
 
-        preferTestNetworksBeforeTunExists(report)
-        if (attemptTethering) restartDownstreamBeforeTun(report)
+        if (attemptTethering) prepareFreshProbeStartup()
 
         val acquired = runCatching {
             group.acquire(tunAddresses(), TEST_NETWORK_DNS_SERVERS, availabilityTimeoutMs)
@@ -100,31 +99,49 @@ class ProbeRunner(private val context: Context) {
         )
     }
 
-    private fun preferTestNetworksBeforeTunExists(report: ProbeReportBuilder) {
-        runCatching { TetheringPreferenceApi(context).setPreferTestNetworks(true) }
+    private fun prepareFreshProbeStartup() {
+        val control = DownstreamControl(context)
+
+        runCatching { control.stopWifiTethering() }
             .onFailure { failure ->
-                report.recordFail(
-                    "Q4pre",
-                    "Can the preference be set before the TUN is created?",
-                    "${failure.javaClass.simpleName}: ${failure.message}",
+                SessionLog.warn(
+                    "probe startup: could not stop hotspot before TUN creation: ${failure.message}",
                 )
             }
-    }
 
-    private fun restartDownstreamBeforeTun(report: ProbeReportBuilder) {
-        val control = DownstreamControl(context)
-        val didStop = control.stopWifiTethering()
-        val (didStart, startDetail) = control.startWifiTethering()
+        runCatching { TetheringPreferenceApi(context).setPreferTestNetworks(false) }
+            .onFailure { failure ->
+                SessionLog.warn(
+                    "probe startup: could not clear test-network preference: ${failure.message}",
+                )
+            }
 
-        didStartDownstream = didStop || didStart
+        val group = resources ?: return
+        val staleBefore = group.staleShizziInterfaces()
+        if (staleBefore.isNotEmpty()) {
+            SessionLog.warn("probe startup: stale Shizzi test networks=$staleBefore")
+            val requested = group.releaseStaleShizziNetworks()
+            if (requested.isNotEmpty()) {
+                SessionLog.info("probe startup: teardown requested for $requested")
+            }
 
-        if (!didStart) {
-            report.recordFail(
-                "Q5pre",
-                "Can the downstream restart before the TUN is created?",
-                "stopped=$didStop, opPackage=${control.opPackageName}, start=$startDetail",
-            )
+            val deadline = System.currentTimeMillis() + STALE_TUN_RELEASE_WAIT_MS
+            while (
+                System.currentTimeMillis() < deadline &&
+                group.staleShizziInterfaces().isNotEmpty()
+            ) {
+                Thread.sleep(STALE_TUN_POLL_MS)
+            }
+
+            val remaining = group.staleShizziInterfaces()
+            if (remaining.isNotEmpty()) {
+                SessionLog.warn("probe startup: competing Shizzi networks remain $remaining")
+            } else {
+                SessionLog.info("probe startup: stale Shizzi networks released")
+            }
         }
+
+        Thread.sleep(PROBE_STARTUP_SETTLE_MS)
     }
 
     private fun onTunAcquired(
@@ -276,11 +293,26 @@ class ProbeRunner(private val context: Context) {
         )
 
         val restartDetail = when {
-            attemptTethering -> "downstream restarted before TUN creation"
+            attemptTethering -> restartDownstreamAfterTun()
             else -> "no restart: observing the running downstream"
         }
         observeUpstream(report, interfaceName, restartDetail)
         probeIpv6Surface(report)
+    }
+
+    private fun restartDownstreamAfterTun(): String {
+        val control = DownstreamControl(context)
+        val didStop = runCatching { control.stopWifiTethering() }.getOrDefault(false)
+        val (didStart, startDetail) = runCatching { control.startWifiTethering() }
+            .getOrElse { failure -> false to "${failure.javaClass.simpleName}: ${failure.message}" }
+
+        didStartDownstream = didStop || didStart
+
+        return when {
+            didStart -> "downstream restarted after TUN creation; start=$startDetail"
+            else -> "downstream restart after TUN creation failed; " +
+                "stopped=$didStop, opPackage=${control.opPackageName}, start=$startDetail"
+        }
     }
 
     private fun observeUpstream(
@@ -442,5 +474,8 @@ class ProbeRunner(private val context: Context) {
                 "(this is what populates UpstreamNetworkMonitor.mNetworkMap)"
 
         const val CALLBACK_WAIT_MS = 5_000L
+        const val PROBE_STARTUP_SETTLE_MS = 500L
+        const val STALE_TUN_RELEASE_WAIT_MS = 3_000L
+        const val STALE_TUN_POLL_MS = 200L
     }
 }
