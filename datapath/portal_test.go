@@ -1,11 +1,11 @@
 package datapath
 
 import (
+	"strings"
 	"testing"
-	"time"
 )
 
-const testPortalConfig = `{
+const portablePassConfig = `{
   "passes": [{
     "code": "ECO123",
     "name": "Eco",
@@ -13,106 +13,88 @@ const testPortalConfig = `{
     "uploadBps": 1000000,
     "quotaBytes": 12000000000,
     "durationMinutes": 43200,
-    "assignedDeviceId": "",
+    "usedBytes": 1000000,
+    "expiresAtMillis": 0,
     "enabled": true
   }]
 }`
 
-func TestPortalVoucherSurvivesPendingDeviceAssignment(t *testing.T) {
+func TestPortableVoucherTransfersToNewClient(t *testing.T) {
 	manager := newTrafficManager()
-	manager.setPortalConfig(true, testPortalConfig)
+	manager.setPortalConfig(true, portablePassConfig)
 
-	ok, message := manager.submitPortalCode("192.0.2.2", "eco123")
+	ok, message := manager.submitPortalCode("192.168.43.10", "eco123")
 	if !ok {
-		t.Fatalf("voucher rejected: %s", message)
+		t.Fatalf("first login rejected: %s", message)
+	}
+	if !manager.portalAuthorizedFor("192.168.43.10") {
+		t.Fatal("first client was not authorized")
 	}
 
-	// SessionService refreshes the live voucher table before Android may have a
-	// physical client identity. That refresh must not invalidate the voucher.
-	manager.setPortalConfig(true, testPortalConfig)
-	if !manager.portalAuthorizedFor("192.0.2.2") {
-		t.Fatal("fresh voucher lost authorization while assignment was pending")
+	ok, message = manager.submitPortalCode("192.168.43.20", "ECO123")
+	if !ok {
+		t.Fatalf("portable login rejected on second client: %s", message)
+	}
+	if manager.portalAuthorizedFor("192.168.43.10") {
+		t.Fatal("old client stayed authorized after voucher transfer")
+	}
+	if !manager.portalAuthorizedFor("192.168.43.20") {
+		t.Fatal("new client did not receive transferred voucher")
 	}
 }
 
-func TestPortalVoucherBecomesDurableAfterAssignment(t *testing.T) {
+func TestPortableVoucherKeepsPersistedQuotaUsage(t *testing.T) {
 	manager := newTrafficManager()
-	manager.setPortalConfig(true, testPortalConfig)
-
-	ok, _ := manager.submitPortalCode("192.0.2.2", "ECO123")
-	if !ok {
-		t.Fatal("voucher rejected")
-	}
-
-	assigned := `{
+	manager.setPortalConfig(true, `{
       "passes": [{
-        "code": "ECO123",
-        "name": "Eco",
-        "downloadBps": 2000000,
-        "uploadBps": 1000000,
-        "quotaBytes": 12000000000,
-        "durationMinutes": 43200,
-        "assignedDeviceId": "aa:bb:cc:dd:ee:ff",
+        "code": "DATA1",
+        "quotaBytes": 1000,
+        "usedBytes": 900,
+        "durationMinutes": 60,
         "enabled": true
       }]
-    }`
-	manager.setPortalConfig(true, assigned)
+    }`)
 
-	manager.mu.Lock()
-	auth := manager.portalAuthorized["192.0.2.2"]
-	auth.ProvisionalUntilMillis = time.Now().Add(-time.Second).UnixMilli()
-	manager.portalAuthorized["192.0.2.2"] = auth
-	manager.mu.Unlock()
-
-	if !manager.portalAuthorizedFor("192.0.2.2") {
-		t.Fatal("persisted voucher should remain authorized after provisional grace")
+	ok, message := manager.submitPortalCode("192.168.43.2", "DATA1")
+	if !ok {
+		t.Fatalf("voucher rejected with remaining data: %s", message)
+	}
+	auth := manager.portalAuthorized["192.168.43.2"]
+	if auth.QuotaRemainingBytes != 100 {
+		t.Fatalf("remaining quota=%d, want 100", auth.QuotaRemainingBytes)
 	}
 }
 
-func TestPortalVoucherFailsClosedWhenAssignmentNeverArrives(t *testing.T) {
+func TestPortableVoucherRejectsExhaustedBalance(t *testing.T) {
 	manager := newTrafficManager()
-	manager.setPortalConfig(true, testPortalConfig)
-
-	ok, _ := manager.submitPortalCode("192.0.2.2", "ECO123")
-	if !ok {
-		t.Fatal("voucher rejected")
-	}
-
-	manager.mu.Lock()
-	auth := manager.portalAuthorized["192.0.2.2"]
-	auth.ProvisionalUntilMillis = time.Now().Add(-time.Second).UnixMilli()
-	manager.portalAuthorized["192.0.2.2"] = auth
-	manager.mu.Unlock()
-
-	if manager.portalAuthorizedFor("192.0.2.2") {
-		t.Fatal("unassigned voucher stayed authorized after provisional grace")
-	}
-}
-
-func TestDisabledVoucherRevokesLiveAuthorization(t *testing.T) {
-	manager := newTrafficManager()
-	manager.setPortalConfig(true, testPortalConfig)
-
-	ok, _ := manager.submitPortalCode("192.0.2.2", "ECO123")
-	if !ok {
-		t.Fatal("voucher rejected")
-	}
-
-	disabled := `{
+	manager.setPortalConfig(true, `{
       "passes": [{
-        "code": "ECO123",
-        "name": "Eco",
-        "downloadBps": 2000000,
-        "uploadBps": 1000000,
-        "quotaBytes": 12000000000,
-        "durationMinutes": 43200,
-        "assignedDeviceId": "",
-        "enabled": false
+        "code": "EMPTY",
+        "quotaBytes": 1000,
+        "usedBytes": 1000,
+        "durationMinutes": 60,
+        "enabled": true
       }]
-    }`
-	manager.setPortalConfig(true, disabled)
+    }`)
 
-	if manager.portalAuthorizedFor("192.0.2.2") {
-		t.Fatal("disabled voucher remained authorized")
+	if ok, _ := manager.submitPortalCode("192.168.43.2", "EMPTY"); ok {
+		t.Fatal("exhausted voucher was accepted")
+	}
+}
+
+func TestPortalAuthorizationSnapshotReportsVoucherSession(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portablePassConfig)
+
+	if ok, message := manager.submitPortalCode("192.168.43.2", "ECO123"); !ok {
+		t.Fatalf("voucher rejected: %s", message)
+	}
+	manager.account("192.168.43.2", directionDownload, 1234)
+
+	raw := manager.statsJSON()
+	for _, expected := range []string{"portalAuthorizations", "ECO123", "1234"} {
+		if !strings.Contains(raw, expected) {
+			t.Fatalf("authorization snapshot missing %q: %s", expected, raw)
+		}
 	}
 }
