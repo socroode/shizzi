@@ -19,11 +19,18 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Q5 now evaluates the owned TUN after the downstream restart instead of
   intentionally testing the obsolete pre-TUN restart sequence.
 
+### Shizzi Conso 1.2.0
+
+- Simplified the app to a single **OUVRIR LA CONNEXION COMPTE** action.
+- Removed the direct **MA CONSOMMATION** and **RECHARGER MON COMPTE** shortcuts.
+- The account page remains the single customer entry point for login, active
+  plan, balance, speed, validity, recharge and live consumption.
+- The launcher still opens `http://192.0.2.1/`, so existing Shizzi account
+  and recharge routes remain unchanged.
+
 ### Compatibility
 
-- Shizzi Conso remains **v1.1.0** and requires no update.
-- Existing Conso routes remain unchanged: `/`, `/status`, `/status.json`,
-  `/account/login`, and `/account/recharge`.
+- Shizzi Conso **v1.2.0** is designed for Shizzi Hotspot 1.7.2.
 - Prepaid accounts, vouchers, balances, validity and existing DataStore records
   remain unchanged from Shizzi 1.6.0/1.7.1.
 
