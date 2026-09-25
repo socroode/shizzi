@@ -174,6 +174,24 @@ class SessionService : Service() {
                 )
             }
 
+            stats.portalAccountAuthorizations.forEach { authorization ->
+                settingsStore().checkpointPrepaidAccountUsage(
+                    number = authorization.accountNumber,
+                    authorizationStartedAtMillis = authorization.startedAtMillis,
+                    sessionDataUsedBytes = authorization.sessionDataUsedBytes,
+                )
+            }
+
+            stats.portalRechargeClaims
+                .distinctBy { it.accountNumber + ":" + it.code }
+                .forEach { claim ->
+                    settingsStore().redeemAccessPassToAccount(
+                        accountNumber = claim.accountNumber,
+                        code = claim.code,
+                        claimedAtMillis = claim.claimedAtMillis,
+                    )
+                }
+
             stats.portalClaims
                 .distinctBy { it.code }
                 .forEach { claim ->
@@ -207,7 +225,7 @@ class SessionService : Service() {
                     settings.accessPassRequired,
                     portalConfigJson(settings),
                 )
-                if (stats.portalClaims.isNotEmpty()) {
+                if (stats.portalClaims.isNotEmpty() || stats.portalRechargeClaims.isNotEmpty()) {
                     controller.clearPortalClaims()
                 }
             }.onFailure {
@@ -291,6 +309,32 @@ class SessionService : Service() {
                     else -> (accessPass.quotaBytes - passUsed).coerceAtLeast(0L)
                 }
 
+                val accountAuthorization = stats.portalAccountAuthorizations.firstOrNull {
+                    it.ip == client.ip
+                } ?: if (stats.clients.size == 1) {
+                    stats.portalAccountAuthorizations.firstOrNull {
+                        it.ip == "192.0.2.2" || it.ip == "2001:db8::2"
+                    }
+                } else {
+                    null
+                }
+                val prepaidAccount = accountAuthorization
+                    ?.accountNumber
+                    ?.let(settings.prepaidAccounts::get)
+                    ?.takeIf { it.enabled }
+                val accountValid = prepaidAccount?.hasInternet(now) == true
+                val credentialValid = accountValid || passValid
+                val credentialDownloadBps = when {
+                    accountAuthorization != null && prepaidAccount != null ->
+                        prepaidAccount.currentDownloadBps(now)
+                    else -> accessPass?.downloadBps ?: 0L
+                }
+                val credentialUploadBps = when {
+                    accountAuthorization != null && prepaidAccount != null ->
+                        prepaidAccount.currentUploadBps(now)
+                    else -> accessPass?.uploadBps ?: 0L
+                }
+
                 if (
                     settings.accessPassRequired &&
                     accessPass != null &&
@@ -322,6 +366,11 @@ class SessionService : Service() {
                     else -> client.totalBytes + (monthlyQuota - monthlyUsed).coerceAtLeast(0L)
                 }
                 val passSessionQuota = when {
+                    accountAuthorization != null &&
+                        prepaidAccount != null &&
+                        prepaidAccount.hasData(now) &&
+                        !prepaidAccount.hasUnlimited(now) ->
+                        client.totalBytes + prepaidAccount.dataBalanceBytes.coerceAtLeast(0L)
                     accessPass == null || accessPass.quotaBytes <= 0L -> 0L
                     else -> client.totalBytes +
                         (accessPass.quotaBytes - passUsed).coerceAtLeast(0L)
@@ -346,7 +395,7 @@ class SessionService : Service() {
                 fun passCappedBps(policyMbps: Int, passBps: Long): Long {
                     val policyBps = policyMbps.toLong().coerceAtLeast(0L) * 1_000_000L
                     return when {
-                        settings.accessPassRequired && passValid ->
+                        settings.accessPassRequired && credentialValid ->
                             passBps.coerceAtLeast(0L)
                         else -> policyBps
                     }
@@ -368,11 +417,11 @@ class SessionService : Service() {
 
                 val cappedDownload = passCappedBps(
                     policy.downloadMbps,
-                    accessPass?.downloadBps ?: 0L,
+                    credentialDownloadBps,
                 )
                 val cappedUpload = passCappedBps(
                     policy.uploadMbps,
-                    accessPass?.uploadBps ?: 0L,
+                    credentialUploadBps,
                 )
 
                 runCatching {
