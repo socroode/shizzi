@@ -270,3 +270,50 @@ func TestLiveVoucherStatusDashboard(t *testing.T) {
 		t.Fatal("live dashboard should fetch local status JSON")
 	}
 }
+
+
+func TestExhaustedVoucherRemainsVisibleOnStatusPage(t *testing.T) {
+	m := newTrafficManager()
+	m.setPortalConfig(true, `{
+		"passes":[{
+			"code":"LIMIT100",
+			"name":"100 MB test",
+			"downloadUnit":"MBPS",
+			"uploadUnit":"MBPS",
+			"downloadBps":1000000,
+			"uploadBps":1000000,
+			"quotaBytes":100000000,
+			"usedBytes":0,
+			"durationMinutes":43200,
+			"assignedDeviceId":"",
+			"enabled":true
+		}]
+	}`)
+
+	ip := "192.168.1.25"
+	ok, _ := m.submitPortalCode(ip, "LIMIT100")
+	if !ok {
+		t.Fatal("valid voucher should authorize the client")
+	}
+
+	m.mu.Lock()
+	auth := m.portalAuthorized[ip]
+	auth.SessionUsedBytes = 100000000
+	m.portalAuthorized[ip] = auth
+	m.mu.Unlock()
+
+	if m.portalAuthorizedFor(ip) {
+		t.Fatal("quota-exhausted voucher must no longer authorize Internet access")
+	}
+
+	status := m.portalUsageStatusFor(ip)
+	if status.Code != "LIMIT100" {
+		t.Fatalf("status page lost exhausted voucher identity: %+v", status)
+	}
+	if status.Authorized {
+		t.Fatal("exhausted voucher must be shown as inactive")
+	}
+	if status.PercentUsed != 100 || status.RemainingBytes != 0 {
+		t.Fatalf("expected 100%% used and zero remaining: %+v", status)
+	}
+}
