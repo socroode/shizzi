@@ -56,12 +56,12 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "dev.shizzi"
+        applicationId = "dev.shizzi.ipv4diag"
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 31
-        versionName = "1.7.2"
+        versionCode = 32
+        versionName = "1.7.3-ipv4diag"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 
