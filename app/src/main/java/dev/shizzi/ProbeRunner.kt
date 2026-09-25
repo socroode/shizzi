@@ -370,19 +370,19 @@ class ProbeRunner(private val context: Context) {
     private fun probeIpv6Surface(report: ProbeReportBuilder) {
         val network = resources?.acquiredNetwork
         val properties = network?.let { context.connectivityManager().getLinkProperties(it) }
-        val hasIpv6Address = properties?.linkAddresses
-            ?.any { it.address is Inet6Address }
+        val hasRoutableIpv6Address = properties?.linkAddresses
+            ?.any { it.address is Inet6Address && !it.address.isLinkLocalAddress }
             ?: false
         val hasIpv6Dns = properties?.dnsServers
             ?.any { it is Inet6Address }
             ?: false
-        val ipv4Only = properties != null && !hasIpv6Address && !hasIpv6Dns
+        val ipv4Only = properties != null && !hasRoutableIpv6Address && !hasIpv6Dns
 
         report.record(
             id = "Q6",
             question = QUESTION_IPV6,
             outcome = if (ipv4Only) ProbeOutcome.PASS else ProbeOutcome.FAIL,
-            detail = "IPv4-only diagnostic: ipv6Address=$hasIpv6Address; " +
+            detail = "IPv4-only diagnostic: routableIpv6Address=$hasRoutableIpv6Address; " +
                 "ipv6Dns=$hasIpv6Dns; linkProperties=${properties ?: "unavailable"}",
         )
     }
