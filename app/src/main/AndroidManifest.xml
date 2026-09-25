@@ -24,7 +24,7 @@
         android:name=".App"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
-        android:label="Shizzi IPv4 Diagnostic"
+        android:label="Shizzi Hotspot Manager"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Shizzi">
