@@ -305,53 +305,108 @@ class SettingsStore(private val context: Context) {
         }
     }
 
-    suspend fun assignAccessPass(code: String, deviceId: String) {
+    suspend fun migrateAccessPassesToPortable() {
+        context.dataStore.edit { preferences ->
+            val passes = decodeAccessPasses(preferences[ACCESS_PASSES]).toMutableMap()
+            if (passes.isEmpty()) return@edit
+
+            val usage = decodeMonthlyUsage(preferences[MONTHLY_USAGE])
+            var changed = false
+
+            passes.keys.toList().forEach { key ->
+                val pass = passes[key] ?: return@forEach
+                if (pass.assignedDeviceId.isBlank() && pass.startTotalBytes == 0L) {
+                    return@forEach
+                }
+
+                val legacyTotal = usage[pass.assignedDeviceId]?.totalBytes
+                    ?: pass.startTotalBytes
+                val legacyUsed =
+                    (legacyTotal - pass.startTotalBytes).coerceAtLeast(0L)
+
+                passes[key] = pass.copy(
+                    assignedDeviceId = "",
+                    startTotalBytes = 0L,
+                    usedBytes = maxOf(pass.usedBytes, legacyUsed),
+                    lastAuthorizationStartedAtMillis = 0L,
+                    lastAuthorizationSessionBytes = 0L,
+                )
+                changed = true
+            }
+
+            if (changed) {
+                preferences[ACCESS_PASSES] = encodeAccessPasses(passes)
+            }
+        }
+    }
+
+    suspend fun activateAccessPass(code: String, claimedAtMillis: Long) {
         val normalizedCode = code.trim().uppercase()
-        val normalizedDevice = deviceId.lowercase()
-        if (normalizedCode.isBlank() || normalizedDevice.isBlank()) return
+        if (normalizedCode.isBlank()) return
 
         context.dataStore.edit { preferences ->
             val passes = decodeAccessPasses(preferences[ACCESS_PASSES]).toMutableMap()
             val pass = passes[normalizedCode] ?: return@edit
             if (!pass.enabled) return@edit
-            if (
-                pass.assignedDeviceId.isNotBlank() &&
-                pass.assignedDeviceId != normalizedDevice
-            ) {
-                return@edit
-            }
-            if (
-                pass.assignedDeviceId == normalizedDevice &&
-                pass.activatedAtMillis > 0L
-            ) {
-                return@edit
-            }
 
-            val usage = decodeMonthlyUsage(preferences[MONTHLY_USAGE])
-            val startTotal = usage[normalizedDevice]?.totalBytes ?: 0L
-            val now = System.currentTimeMillis()
-
-            passes.keys.toList().forEach { key ->
-                val existing = passes[key] ?: return@forEach
-                if (existing.assignedDeviceId == normalizedDevice && key != normalizedCode) {
-                    passes[key] = existing.copy(
-                        assignedDeviceId = "",
-                        activatedAtMillis = 0L,
-                        startTotalBytes = 0L,
-                    )
-                }
+            val activation = when {
+                pass.activatedAtMillis > 0L -> pass.activatedAtMillis
+                claimedAtMillis > 0L -> claimedAtMillis
+                else -> System.currentTimeMillis()
             }
 
             passes[normalizedCode] = pass.copy(
-                assignedDeviceId = normalizedDevice,
-                activatedAtMillis = now,
-                startTotalBytes = startTotal,
+                activatedAtMillis = activation,
+                assignedDeviceId = "",
+                startTotalBytes = 0L,
             )
             preferences[ACCESS_PASSES] = encodeAccessPasses(passes)
         }
     }
 
-    suspend fun revokeAccessPass(code: String) {
+    suspend fun checkpointAccessPassUsage(
+        code: String,
+        authorizationStartedAtMillis: Long,
+        sessionUsedBytes: Long,
+    ) {
+        val normalizedCode = code.trim().uppercase()
+        if (
+            normalizedCode.isBlank() ||
+            authorizationStartedAtMillis <= 0L ||
+            sessionUsedBytes < 0L
+        ) {
+            return
+        }
+
+        context.dataStore.edit { preferences ->
+            val passes = decodeAccessPasses(preferences[ACCESS_PASSES]).toMutableMap()
+            val pass = passes[normalizedCode] ?: return@edit
+            if (!pass.enabled) return@edit
+
+            val previous = when {
+                pass.lastAuthorizationStartedAtMillis == authorizationStartedAtMillis ->
+                    pass.lastAuthorizationSessionBytes
+                else -> 0L
+            }
+            val delta = (sessionUsedBytes - previous).coerceAtLeast(0L)
+            val nextUsed = when {
+                pass.quotaBytes > 0L ->
+                    (pass.usedBytes + delta).coerceAtMost(pass.quotaBytes)
+                else -> pass.usedBytes + delta
+            }
+
+            passes[normalizedCode] = pass.copy(
+                usedBytes = nextUsed,
+                lastAuthorizationStartedAtMillis = authorizationStartedAtMillis,
+                lastAuthorizationSessionBytes = sessionUsedBytes,
+                assignedDeviceId = "",
+                startTotalBytes = 0L,
+            )
+            preferences[ACCESS_PASSES] = encodeAccessPasses(passes)
+        }
+    }
+
+    suspend fun revokeAccessPass(code: String) {    suspend fun revokeAccessPass(code: String) {
         val normalizedCode = code.trim().uppercase()
         if (normalizedCode.isBlank()) return
         context.dataStore.edit { preferences ->
@@ -361,6 +416,9 @@ class SettingsStore(private val context: Context) {
                 assignedDeviceId = "",
                 activatedAtMillis = 0L,
                 startTotalBytes = 0L,
+                usedBytes = 0L,
+                lastAuthorizationStartedAtMillis = 0L,
+                lastAuthorizationSessionBytes = 0L,
             )
             preferences[ACCESS_PASSES] = encodeAccessPasses(passes)
         }
