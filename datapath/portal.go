@@ -161,7 +161,8 @@ func (m *TrafficManager) portalAuthorizedLocked(ip string) bool {
 
 	now := time.Now().UnixMilli()
 	if auth.ExpiresAtMillis > 0 && now >= auth.ExpiresAtMillis {
-		delete(m.portalAuthorized, ip)
+		// Keep the record for the local status page. Returning false is enough
+		// to block ordinary Internet traffic.
 		return false
 	}
 
@@ -172,7 +173,8 @@ func (m *TrafficManager) portalAuthorizedLocked(ip string) bool {
 	}
 
 	if pass.ExpiresAtMillis > 0 && now >= pass.ExpiresAtMillis {
-		delete(m.portalAuthorized, ip)
+		// Preserve the pass association so the client can still see that the
+		// voucher expired on the local usage page.
 		return false
 	}
 
@@ -182,7 +184,9 @@ func (m *TrafficManager) portalAuthorizedLocked(ip string) bool {
 			unpersisted = 0
 		}
 		if pass.UsedBytes+unpersisted >= pass.QuotaBytes {
-			delete(m.portalAuthorized, ip)
+			// Preserve the exhausted voucher for read-only status display.
+			// portalAuthorizedLocked still returns false, so Internet access
+			// remains blocked immediately at the quota boundary.
 			return false
 		}
 	}
