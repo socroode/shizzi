@@ -1,5 +1,7 @@
 import java.util.Properties
 
+val migrationBuild = providers.gradleProperty("migrationBuild").orNull == "true"
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -60,8 +62,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 32
-        versionName = "1.7.3"
+        versionCode = if (migrationBuild) 31 else 32
+        versionName = if (migrationBuild) "1.7.3-migration" else "1.7.3"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 
@@ -93,6 +95,7 @@ android {
         }
 
         release {
+            isDebuggable = migrationBuild
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
