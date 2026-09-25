@@ -113,11 +113,12 @@ type TrafficManager struct {
 	portalTitle      string
 	portalMessage    string
 	portalHTML       string
-	portalPasses         map[string]PortalPass
-	portalAccounts       map[string]PortalAccount
-	portalAuthorized     map[string]PortalAuthorization
-	portalClaims         []PortalClaim
-	portalRechargeClaims []PortalRechargeClaim
+	portalPasses          map[string]PortalPass
+	portalAccounts        map[string]PortalAccount
+	portalAuthorized      map[string]PortalAuthorization
+	portalAccountSessions map[string]PortalAccountSession
+	portalClaims          []PortalClaim
+	portalRechargeClaims  []PortalRechargeClaim
 }
 
 func newTrafficManager() *TrafficManager {
@@ -132,6 +133,7 @@ func newTrafficManager() *TrafficManager {
 		portalPasses:                make(map[string]PortalPass),
 		portalAccounts:              make(map[string]PortalAccount),
 		portalAuthorized:            make(map[string]PortalAuthorization),
+		portalAccountSessions:       make(map[string]PortalAccountSession),
 	}
 }
 
