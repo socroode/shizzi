@@ -166,7 +166,7 @@ func TestCaptivePortalVoucherAuthorizesClient(t *testing.T) {
 	}
 }
 
-func TestCaptivePortalRejectsAssignedVoucher(t *testing.T) {
+func TestCaptivePortalIgnoresLegacyDeviceAssignment(t *testing.T) {
 	m := newTrafficManager()
 	m.setPortalConfig(true, `{
 		"passes":[{
@@ -177,8 +177,8 @@ func TestCaptivePortalRejectsAssignedVoucher(t *testing.T) {
 	}`)
 
 	ok, _ := m.submitPortalCode("192.168.1.22", "USED1234")
-	if ok {
-		t.Fatal("an already assigned access code must not be reusable")
+	if !ok {
+		t.Fatal("legacy device assignment must not prevent a prepaid code from moving")
 	}
 }
 
