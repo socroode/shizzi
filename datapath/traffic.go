@@ -283,6 +283,11 @@ func (m *TrafficManager) account(ip string, dir direction, byteCount int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if auth, ok := m.portalAuthorized[ip]; ok {
+		auth.SessionUsedBytes += int64(byteCount)
+		m.portalAuthorized[ip] = auth
+	}
+
 	if dir == directionDownload {
 		m.totalDownBytes += int64(byteCount)
 		if isSharedTunnelAddress(ip) {
@@ -374,17 +379,13 @@ func (m *TrafficManager) statsJSON() string {
 		if !m.portalAuthorizedLocked(ip) {
 			continue
 		}
-		sessionUsed := m.clientUsedLocked(ip) - auth.StartSessionBytes
-		if sessionUsed < 0 {
-			sessionUsed = 0
-		}
 		snapshot.PortalAuthorizations = append(
 			snapshot.PortalAuthorizations,
 			portalAuthorizationSnapshot{
 				IP:               ip,
 				Code:             auth.Code,
 				StartedAtMillis:  auth.StartedAtMillis,
-				SessionUsedBytes: sessionUsed,
+				SessionUsedBytes: auth.SessionUsedBytes,
 			},
 		)
 	}
