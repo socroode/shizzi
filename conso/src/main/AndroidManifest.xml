@@ -5,7 +5,7 @@
         android:icon="@drawable/ic_launcher"
         android:label="Shizzi Conso"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Translucent.NoTitleBar">
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
             android:name=".MainActivity"
             android:excludeFromRecents="true"
