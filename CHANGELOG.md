@@ -5,6 +5,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-24
+
+### Changed
+
+- Prepaid voucher codes are now portable balances rather than device-bound
+  credentials. A code can move from a tablet to a phone without resetting its
+  original activation time, remaining validity or cumulative data usage.
+- Entering an already-active code on another client transfers the live
+  authorization to the new client; the previous device returns to the captive
+  portal.
+- Voucher quota accounting is now stored on the voucher itself instead of being
+  derived from a device's lifetime traffic counter.
+- Existing device-bound vouchers are migrated automatically: activation time is
+  preserved, legacy usage is carried forward when it can be derived, and the
+  stored device identifier is cleared.
+
 ## [1.4.0] - 2026-09-24
 
 ### Fixed
