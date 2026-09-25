@@ -37,6 +37,7 @@ import dev.shizzi.DataUnit
 import dev.shizzi.DurationUnit
 import dev.shizzi.ManagerTrafficStats
 import dev.shizzi.MonthlyUsageRecord
+import dev.shizzi.PrepaidAccount
 import dev.shizzi.RateUnit
 import dev.shizzi.Settings
 import dev.shizzi.VoucherTemplate
@@ -63,6 +64,9 @@ data class HotspotManagerActions(
     val onSetAccessPassEnabled: (String, Boolean) -> Unit,
     val onAssignAccessPass: (String, String) -> Unit,
     val onRevokeAccessPass: (String) -> Unit,
+    val onCreatePrepaidAccount: (String, String) -> Unit,
+    val onSetPrepaidAccountEnabled: (String, Boolean) -> Unit,
+    val onResetPrepaidAccountPin: (String) -> Unit,
     val onSetClientPolicy:
         (String, String, String, Int, Int, Long, ClientPriority, Boolean, Boolean) -> Unit,
     val onSetClientPause: (String, String, Long) -> Unit,
@@ -90,6 +94,7 @@ fun HotspotManagerPage(
     var editGlobal by remember { mutableStateOf(false) }
     var editPortal by remember { mutableStateOf(false) }
     var editVoucherStudio by remember { mutableStateOf(false) }
+    var editAccounts by remember { mutableStateOf(false) }
     var editingTarget by remember { mutableStateOf<PolicyTarget?>(null) }
     val now = System.currentTimeMillis()
     val activeClients = stats.clients.filter {
@@ -236,6 +241,28 @@ fun HotspotManagerPage(
                     }
             }
 
+            SectionLabel("Prepaid accounts")
+
+            SettingsChoice(
+                label = SettingsText(
+                    title = "Account editor",
+                    subtitle = "Permanent account + PIN; coupons become one-use recharges",
+                ),
+                value = settings.prepaidAccounts.size.toString() + " account(s)",
+                onClick = { editAccounts = true },
+            )
+
+            settings.prepaidAccounts.values
+                .sortedByDescending { it.createdAtMillis }
+                .take(3)
+                .forEach { account ->
+                    ManagerMetric(
+                        title = account.name.ifBlank { "Compte " + account.number },
+                        value = account.number,
+                        subtitle = prepaidAccountSummary(account, now),
+                    )
+                }
+
             SectionLabel("Clients")
 
             if (activeClients.isEmpty()) {
@@ -369,6 +396,14 @@ fun HotspotManagerPage(
             settings = settings,
             actions = actions,
             onDismiss = { editVoucherStudio = false },
+        )
+    }
+
+    if (editAccounts) {
+        AccountEditorSheet(
+            settings = settings,
+            actions = actions,
+            onDismiss = { editAccounts = false },
         )
     }
 
@@ -691,6 +726,7 @@ private fun ClientPolicySheet(
 
 private enum class VoucherState(val label: String) {
     AVAILABLE("Available"),
+    REDEEMED("Redeemed"),
     ACTIVE("Active"),
     EXPIRED("Expired"),
     EXHAUSTED("Exhausted"),
@@ -715,6 +751,7 @@ private fun voucherState(
     now: Long = System.currentTimeMillis(),
 ): VoucherState {
     if (!pass.enabled) return VoucherState.DISABLED
+    if (pass.redeemedAccountNumber.isNotBlank()) return VoucherState.REDEEMED
     if (pass.activatedAtMillis <= 0L) return VoucherState.AVAILABLE
     if (pass.isExpired(now)) return VoucherState.EXPIRED
     if (pass.quotaBytes > 0L && voucherUsedBytes(pass, settings) >= pass.quotaBytes) {
@@ -1016,6 +1053,8 @@ private fun VoucherStudioSheet(
                         append(" available · ")
                         append(states[VoucherState.ACTIVE] ?: 0)
                         append(" active · ")
+                        append(states[VoucherState.REDEEMED] ?: 0)
+                        append(" recharged · ")
                         append(states[VoucherState.EXPIRED] ?: 0)
                         append(" expired · ")
                         append(states[VoucherState.EXHAUSTED] ?: 0)
@@ -1245,7 +1284,8 @@ private fun PortalCustomizationSheet(
                 )
                 Text(
                     text = "Leave empty for the built-in page. Supported placeholders: " +
-                        "{{TITLE}}, {{MESSAGE}}, {{STATUS}}, {{FORM_ACTION}}.",
+                        "{{TITLE}}, {{MESSAGE}}, {{STATUS}}, {{FORM_ACTION}}, " +
+                        "{{ACCOUNT_PANEL}}, {{VOUCHER_FORM}}.",
                     style = ShizziTheme.typography.body,
                     color = ShizziTheme.colors.onSurfaceMuted,
                 )
