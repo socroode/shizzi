@@ -36,8 +36,8 @@ object HiddenApiCatalog {
             memberName = "createTunInterface",
             since = 29,
             notes = "Two overloads exist, taking LinkAddress[] and " +
-                "Collection<LinkAddress>. Both are probed. This IPv4-only diagnostic " +
-                "build passes only the IPv4 TUN address.",
+                "Collection<LinkAddress>. Both are probed. Shizzi 1.7.3 " +
+                "passes only the IPv4 TUN address.",
         ),
         HiddenApiPath(
             id = "TestNetworkManager.setupTestNetwork",
@@ -45,8 +45,8 @@ object HiddenApiCatalog {
             memberName = "setupTestNetwork",
             since = 29,
             notes = "The (LinkProperties, boolean, IBinder) overload is used so " +
-                "DNS can be supplied explicitly. This IPv4-only diagnostic " +
-                "build supplies IPv4 DNS only; falls back to " +
+                "DNS can be supplied explicitly. Shizzi 1.7.3 " +
+                "supplies IPv4 DNS only; falls back to " +
                 "(String iface, IBinder binder). Requires MANAGE_TEST_NETWORKS, " +
                 "held by shell UID 2000.",
         ),
