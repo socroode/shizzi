@@ -48,6 +48,7 @@ data class Settings(
     val accessPassRequired: Boolean = false,
     val accessPasses: Map<String, AccessPass> = emptyMap(),
     val voucherTemplates: Map<String, VoucherTemplate> = emptyMap(),
+    val prepaidAccounts: Map<String, PrepaidAccount> = emptyMap(),
     val portalTitle: String = "Shizzi Hotspot",
     val portalMessage: String = "Enter your access code to go online.",
     val portalHtml: String = "",
@@ -433,6 +434,104 @@ class SettingsStore(private val context: Context) {
         }
     }
 
+
+    suspend fun upsertPrepaidAccount(account: PrepaidAccount) {
+        val number = account.number.filter(Char::isDigit)
+        if (number.isBlank() || account.pin.isBlank()) return
+        context.dataStore.edit { preferences ->
+            val accounts = decodePrepaidAccounts(preferences[PREPAID_ACCOUNTS]).toMutableMap()
+            accounts[number] = account.copy(
+                number = number,
+                pin = account.pin.filter(Char::isDigit).take(12),
+                name = account.name.trim().take(48),
+            )
+            preferences[PREPAID_ACCOUNTS] = encodePrepaidAccounts(accounts)
+        }
+    }
+
+    suspend fun setPrepaidAccountEnabled(number: String, enabled: Boolean) {
+        val normalized = number.filter(Char::isDigit)
+        if (normalized.isBlank()) return
+        context.dataStore.edit { preferences ->
+            val accounts = decodePrepaidAccounts(preferences[PREPAID_ACCOUNTS]).toMutableMap()
+            val account = accounts[normalized] ?: return@edit
+            accounts[normalized] = account.copy(enabled = enabled)
+            preferences[PREPAID_ACCOUNTS] = encodePrepaidAccounts(accounts)
+        }
+    }
+
+    suspend fun resetPrepaidAccountPin(number: String, newPin: String) {
+        val normalized = number.filter(Char::isDigit)
+        val pin = newPin.filter(Char::isDigit).take(12)
+        if (normalized.isBlank() || pin.isBlank()) return
+        context.dataStore.edit { preferences ->
+            val accounts = decodePrepaidAccounts(preferences[PREPAID_ACCOUNTS]).toMutableMap()
+            val account = accounts[normalized] ?: return@edit
+            accounts[normalized] = account.copy(pin = pin)
+            preferences[PREPAID_ACCOUNTS] = encodePrepaidAccounts(accounts)
+        }
+    }
+
+    suspend fun checkpointPrepaidAccountUsage(
+        number: String,
+        authorizationStartedAtMillis: Long,
+        sessionDataUsedBytes: Long,
+    ) {
+        val normalized = number.filter(Char::isDigit)
+        if (normalized.isBlank() || authorizationStartedAtMillis <= 0L || sessionDataUsedBytes < 0L) {
+            return
+        }
+        context.dataStore.edit { preferences ->
+            val accounts = decodePrepaidAccounts(preferences[PREPAID_ACCOUNTS]).toMutableMap()
+            val account = accounts[normalized] ?: return@edit
+            val previous = when {
+                account.lastAuthorizationStartedAtMillis == authorizationStartedAtMillis ->
+                    account.lastAuthorizationSessionDataBytes
+                else -> 0L
+            }
+            val delta = (sessionDataUsedBytes - previous).coerceAtLeast(0L)
+            accounts[normalized] = account.copy(
+                dataBalanceBytes = (account.dataBalanceBytes - delta).coerceAtLeast(0L),
+                lastAuthorizationStartedAtMillis = authorizationStartedAtMillis,
+                lastAuthorizationSessionDataBytes = sessionDataUsedBytes,
+            )
+            preferences[PREPAID_ACCOUNTS] = encodePrepaidAccounts(accounts)
+        }
+    }
+
+    suspend fun redeemAccessPassToAccount(
+        accountNumber: String,
+        code: String,
+        claimedAtMillis: Long,
+    ) {
+        val number = accountNumber.filter(Char::isDigit)
+        val normalizedCode = code.trim().uppercase()
+        if (number.isBlank() || normalizedCode.isBlank()) return
+        context.dataStore.edit { preferences ->
+            val accounts = decodePrepaidAccounts(preferences[PREPAID_ACCOUNTS]).toMutableMap()
+            val passes = decodeAccessPasses(preferences[ACCESS_PASSES]).toMutableMap()
+            val account = accounts[number] ?: return@edit
+            val pass = passes[normalizedCode] ?: return@edit
+            if (
+                !account.enabled ||
+                !pass.enabled ||
+                pass.redeemedAccountNumber.isNotBlank() ||
+                pass.activatedAtMillis > 0L ||
+                pass.usedBytes > 0L
+            ) {
+                return@edit
+            }
+            val now = claimedAtMillis.takeIf { it > 0L } ?: System.currentTimeMillis()
+            accounts[number] = applyRechargeToAccount(account, pass, now)
+            passes[normalizedCode] = pass.copy(
+                redeemedAccountNumber = number,
+                redeemedAtMillis = now,
+            )
+            preferences[PREPAID_ACCOUNTS] = encodePrepaidAccounts(accounts)
+            preferences[ACCESS_PASSES] = encodeAccessPasses(passes)
+        }
+    }
+
     suspend fun appendConnectionEvents(events: List<ConnectionEvent>) {
         if (events.isEmpty()) return
         context.dataStore.edit { preferences ->
@@ -466,6 +565,63 @@ class SettingsStore(private val context: Context) {
 
 }
 
+
+private const val FOREVER_MILLIS = Long.MAX_VALUE / 4L
+
+private fun safeAddValue(base: Long, delta: Long): Long {
+    if (base >= FOREVER_MILLIS || delta >= FOREVER_MILLIS) return FOREVER_MILLIS
+    return if (Long.MAX_VALUE - base < delta) FOREVER_MILLIS else base + delta
+}
+
+private fun applyRechargeToAccount(
+    original: PrepaidAccount,
+    pass: AccessPass,
+    now: Long,
+): PrepaidAccount {
+    val unlimitedActive = original.unlimitedUntilMillis > now
+    val dataExpired = original.dataExpiresAtMillis > 0L && now >= original.dataExpiresAtMillis
+    val currentDataBalance = if (dataExpired && !unlimitedActive) {
+        0L
+    } else {
+        original.dataBalanceBytes.coerceAtLeast(0L)
+    }
+    val currentDataExpiry = if (currentDataBalance <= 0L) 0L else original.dataExpiresAtMillis
+    val durationMillis = when {
+        pass.durationMinutes <= 0L -> 0L
+        pass.durationMinutes > FOREVER_MILLIS / 60_000L -> FOREVER_MILLIS
+        else -> pass.durationMinutes * 60_000L
+    }
+
+    return if (pass.quotaBytes > 0L) {
+        val activationBase = if (unlimitedActive) original.unlimitedUntilMillis else now
+        val expiry = if (durationMillis <= 0L) 0L else safeAddValue(activationBase, durationMillis)
+        original.copy(
+            dataBalanceBytes = safeAddValue(currentDataBalance, pass.quotaBytes),
+            dataExpiresAtMillis = expiry,
+            dataDownloadBps = pass.downloadBps.coerceAtLeast(0L),
+            dataUploadBps = pass.uploadBps.coerceAtLeast(0L),
+        )
+    } else {
+        val base = if (unlimitedActive) original.unlimitedUntilMillis else now
+        val nextUnlimitedUntil =
+            if (durationMillis <= 0L) FOREVER_MILLIS else safeAddValue(base, durationMillis)
+        val shiftedDataExpiry = when {
+            currentDataBalance <= 0L -> 0L
+            currentDataExpiry <= 0L -> 0L
+            durationMillis <= 0L -> currentDataExpiry
+            else -> safeAddValue(currentDataExpiry, durationMillis)
+        }
+        original.copy(
+            dataBalanceBytes = currentDataBalance,
+            dataExpiresAtMillis = shiftedDataExpiry,
+            unlimitedUntilMillis = nextUnlimitedUntil,
+            unlimitedDownloadBps = pass.downloadBps.coerceAtLeast(0L),
+            unlimitedUploadBps = pass.uploadBps.coerceAtLeast(0L),
+            unlimitedPlanName = pass.name,
+        )
+    }
+}
+
 internal val THEME = stringPreferencesKey("theme")
 internal val DESIGN = stringPreferencesKey("design")
 internal val ACCENT = stringPreferencesKey("accent")
@@ -488,6 +644,7 @@ internal val CONNECTION_HISTORY = stringPreferencesKey("connection_history")
 internal val ACCESS_PASS_REQUIRED = booleanPreferencesKey("access_pass_required")
 internal val ACCESS_PASSES = stringPreferencesKey("access_passes")
 internal val VOUCHER_TEMPLATES = stringPreferencesKey("voucher_templates")
+internal val PREPAID_ACCOUNTS = stringPreferencesKey("prepaid_accounts")
 internal val PORTAL_TITLE = stringPreferencesKey("portal_title")
 internal val PORTAL_MESSAGE = stringPreferencesKey("portal_message")
 internal val PORTAL_HTML = stringPreferencesKey("portal_html")
@@ -520,6 +677,7 @@ internal fun toSettings(preferences: Preferences) = Settings(
     accessPassRequired = preferences[ACCESS_PASS_REQUIRED] ?: false,
     accessPasses = decodeAccessPasses(preferences[ACCESS_PASSES]),
     voucherTemplates = decodeVoucherTemplates(preferences[VOUCHER_TEMPLATES]),
+    prepaidAccounts = decodePrepaidAccounts(preferences[PREPAID_ACCOUNTS]),
     portalTitle = preferences[PORTAL_TITLE] ?: "Shizzi Hotspot",
     portalMessage = preferences[PORTAL_MESSAGE] ?: "Enter your access code to go online.",
     portalHtml = preferences[PORTAL_HTML].orEmpty(),
