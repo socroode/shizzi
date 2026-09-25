@@ -80,6 +80,9 @@ jobs:
           cd datapath
           CGO_ENABLED=1 GOOS=android GOARCH=arm64 CC="$CC" go vet ./...
 
+      - name: Test Android compatibility
+        run: ./gradlew testDebugUnitTest --no-daemon
+
       - name: Build debug APK
         run: ./gradlew assembleDebug --no-daemon
 
@@ -134,7 +137,7 @@ jobs:
         if: ${{ env.SHIZZI_KEYSTORE_B64 != '' }}
         uses: actions/upload-artifact@v5
         with:
-          name: shizzi-v1.6.0-signed
+          name: shizzi-v1.7.0-signed
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
@@ -142,7 +145,7 @@ jobs:
         if: ${{ env.SHIZZI_KEYSTORE_B64 == '' }}
         uses: actions/upload-artifact@v5
         with:
-          name: shizzi-v1.6.0-unsigned
+          name: shizzi-v1.7.0-unsigned
           path: app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
 
