@@ -246,7 +246,7 @@ func TestAccountPanelShowsAllocatedRateAndValidity(t *testing.T) {
 		t.Fatalf("account login rejected: %s", msg)
 	}
 	manager.mu.Lock()
-	panel := manager.portalAccountPanelLocked("192.168.43.10")
+	panel := manager.portalAccountPanelLocked("192.168.43.10", "")
 	manager.mu.Unlock()
 
 	for _, expected := range []string{"TAIANA", "1.08 GB", "1.00 Mbps", "Validité restante", "Voir ma consommation en direct"} {
