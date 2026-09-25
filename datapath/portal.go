@@ -495,25 +495,26 @@ func (m *TrafficManager) renderPortalPage(clientIP string, success bool, statusM
 				formatPortalRate(pass.UploadBps, pass.UploadUnit),
 			)
 
-			sessionUsed := (m.clientUsedLocked(clientIP) - auth.StartSessionBytes)
-			if sessionUsed < 0 {
-				sessionUsed = 0
+			unpersisted := auth.SessionUsedBytes - auth.AccountedSessionBytes
+			if unpersisted < 0 {
+				unpersisted = 0
 			}
 			totalQuota := pass.QuotaBytes
 			remaining := int64(0)
 			if totalQuota > 0 {
-				remaining = auth.QuotaRemainingBytes - sessionUsed
-				if remaining < 0 {
-					remaining = 0
-				}
-				used := totalQuota - remaining
+				used := pass.UsedBytes + unpersisted
 				if used < 0 {
 					used = 0
 				}
+				if used > totalQuota {
+					used = totalQuota
+				}
+				remaining = totalQuota - used
 				usedText = formatPortalBytes(used)
 				remainingText = formatPortalBytes(remaining)
 			} else {
-				usedText = formatPortalBytes(sessionUsed)
+				used := pass.UsedBytes + unpersisted
+				usedText = formatPortalBytes(used)
 				remainingText = "Illimité"
 			}
 
