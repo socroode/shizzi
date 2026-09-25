@@ -178,7 +178,7 @@ class SessionResources(
             }
 
             val addresses = properties.linkAddresses.map { it.address }
-            if (SHIZZI_V4 !in addresses || SHIZZI_V6 !in addresses) {
+            if (SHIZZI_V4 !in addresses) {
                 return@mapNotNull null
             }
 
@@ -238,7 +238,5 @@ class SessionResources(
         val TEST_TUN_PATTERN = Regex("^testtun\\d+$")
         val SHIZZI_V4: java.net.InetAddress =
             java.net.InetAddress.getByName("192.0.2.2")
-        val SHIZZI_V6: java.net.InetAddress =
-            java.net.InetAddress.getByName("2001:db8::2")
     }
 }
