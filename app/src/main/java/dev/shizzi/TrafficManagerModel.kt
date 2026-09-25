@@ -95,6 +95,8 @@ data class AccessPass(
     val usedBytes: Long = 0,
     val lastAuthorizationStartedAtMillis: Long = 0,
     val lastAuthorizationSessionBytes: Long = 0,
+    val redeemedAccountNumber: String = "",
+    val redeemedAtMillis: Long = 0L,
     val enabled: Boolean = true,
 ) {
     fun expiresAtMillis(): Long = when {
@@ -115,6 +117,42 @@ data class AccessPass(
     fun uploadDisplayValue(): Long = when (uploadUnit) {
         RateUnit.KBPS -> uploadBps / 1_000L
         RateUnit.MBPS -> uploadBps / 1_000_000L
+    }
+}
+
+data class PrepaidAccount(
+    val number: String,
+    val pin: String,
+    val name: String = "",
+    val enabled: Boolean = true,
+    val dataBalanceBytes: Long = 0L,
+    val dataExpiresAtMillis: Long = 0L,
+    val dataDownloadBps: Long = 0L,
+    val dataUploadBps: Long = 0L,
+    val unlimitedUntilMillis: Long = 0L,
+    val unlimitedDownloadBps: Long = 0L,
+    val unlimitedUploadBps: Long = 0L,
+    val unlimitedPlanName: String = "",
+    val createdAtMillis: Long = 0L,
+    val lastAuthorizationStartedAtMillis: Long = 0L,
+    val lastAuthorizationSessionDataBytes: Long = 0L,
+) {
+    fun hasUnlimited(nowMillis: Long): Boolean =
+        enabled && unlimitedUntilMillis > nowMillis
+    fun hasData(nowMillis: Long): Boolean =
+        enabled && dataBalanceBytes > 0L &&
+            (dataExpiresAtMillis <= 0L || nowMillis < dataExpiresAtMillis)
+    fun hasInternet(nowMillis: Long): Boolean =
+        hasUnlimited(nowMillis) || hasData(nowMillis)
+    fun currentDownloadBps(nowMillis: Long): Long = when {
+        hasUnlimited(nowMillis) -> unlimitedDownloadBps
+        hasData(nowMillis) -> dataDownloadBps
+        else -> 0L
+    }
+    fun currentUploadBps(nowMillis: Long): Long = when {
+        hasUnlimited(nowMillis) -> unlimitedUploadBps
+        hasData(nowMillis) -> dataUploadBps
+        else -> 0L
     }
 }
 
@@ -148,6 +186,20 @@ data class PortalAuthorizationStatus(
     val sessionUsedBytes: Long,
 )
 
+data class PortalRechargeClaim(
+    val ip: String,
+    val accountNumber: String,
+    val code: String,
+    val claimedAtMillis: Long,
+)
+
+data class PortalAccountAuthorizationStatus(
+    val ip: String,
+    val accountNumber: String,
+    val startedAtMillis: Long,
+    val sessionDataUsedBytes: Long,
+)
+
 data class ManagerTrafficStats(
     val globalDownloadBps: Long = 0,
     val globalUploadBps: Long = 0,
@@ -159,6 +211,8 @@ data class ManagerTrafficStats(
     val clients: List<ClientTrafficStats> = emptyList(),
     val portalClaims: List<PortalClaim> = emptyList(),
     val portalAuthorizations: List<PortalAuthorizationStatus> = emptyList(),
+    val portalRechargeClaims: List<PortalRechargeClaim> = emptyList(),
+    val portalAccountAuthorizations: List<PortalAccountAuthorizationStatus> = emptyList(),
 ) {
     val totalBytes: Long get() = totalUpBytes + totalDownBytes
 }
@@ -210,6 +264,38 @@ fun parseManagerTrafficStats(raw: String?): ManagerTrafficStats {
                 }
             }
         }.orEmpty(),
+        portalRechargeClaims = root.optJSONArray("portalRechargeClaims")?.let { array ->
+            buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    add(
+                        PortalRechargeClaim(
+                            ip = item.optString("ip"),
+                            accountNumber = item.optString("accountNumber").filter(Char::isDigit),
+                            code = item.optString("code").trim().uppercase(),
+                            claimedAtMillis = item.optLong("claimedAtMillis"),
+                        ),
+                    )
+                }
+            }
+        }.orEmpty(),
+        portalAccountAuthorizations =
+            root.optJSONArray("portalAccountAuthorizations")?.let { array ->
+                buildList {
+                    for (index in 0 until array.length()) {
+                        val item = array.optJSONObject(index) ?: continue
+                        add(
+                            PortalAccountAuthorizationStatus(
+                                ip = item.optString("ip"),
+                                accountNumber = item.optString("accountNumber").filter(Char::isDigit),
+                                startedAtMillis = item.optLong("startedAtMillis"),
+                                sessionDataUsedBytes =
+                                    item.optLong("sessionDataUsedBytes").coerceAtLeast(0L),
+                            ),
+                        )
+                    }
+                }
+            }.orEmpty(),
     )
 }
 
@@ -411,6 +497,8 @@ fun encodeAccessPasses(passes: Map<String, AccessPass>): String =
                     put("usedBytes", pass.usedBytes)
                     put("lastAuthorizationStartedAtMillis", pass.lastAuthorizationStartedAtMillis)
                     put("lastAuthorizationSessionBytes", pass.lastAuthorizationSessionBytes)
+                    put("redeemedAccountNumber", pass.redeemedAccountNumber)
+                    put("redeemedAtMillis", pass.redeemedAtMillis)
                     put("enabled", pass.enabled)
                 },
             )
@@ -465,6 +553,9 @@ fun decodeAccessPasses(raw: String?): Map<String, AccessPass> {
                         item.optLong("lastAuthorizationStartedAtMillis").coerceAtLeast(0L),
                     lastAuthorizationSessionBytes =
                         item.optLong("lastAuthorizationSessionBytes").coerceAtLeast(0L),
+                    redeemedAccountNumber =
+                        item.optString("redeemedAccountNumber").filter(Char::isDigit),
+                    redeemedAtMillis = item.optLong("redeemedAtMillis").coerceAtLeast(0L),
                     enabled = if (item.has("enabled")) item.optBoolean("enabled") else true,
                 ),
             )
@@ -530,6 +621,65 @@ fun decodeVoucherTemplates(raw: String?): Map<String, VoucherTemplate> {
 }
 
 
+
+fun encodePrepaidAccounts(accounts: Map<String, PrepaidAccount>): String =
+    JSONArray().apply {
+        accounts.values.sortedBy { it.number }.forEach { account ->
+            put(
+                JSONObject().apply {
+                    put("number", account.number)
+                    put("pin", account.pin)
+                    put("name", account.name)
+                    put("enabled", account.enabled)
+                    put("dataBalanceBytes", account.dataBalanceBytes)
+                    put("dataExpiresAtMillis", account.dataExpiresAtMillis)
+                    put("dataDownloadBps", account.dataDownloadBps)
+                    put("dataUploadBps", account.dataUploadBps)
+                    put("unlimitedUntilMillis", account.unlimitedUntilMillis)
+                    put("unlimitedDownloadBps", account.unlimitedDownloadBps)
+                    put("unlimitedUploadBps", account.unlimitedUploadBps)
+                    put("unlimitedPlanName", account.unlimitedPlanName)
+                    put("createdAtMillis", account.createdAtMillis)
+                    put("lastAuthorizationStartedAtMillis", account.lastAuthorizationStartedAtMillis)
+                    put("lastAuthorizationSessionDataBytes", account.lastAuthorizationSessionDataBytes)
+                },
+            )
+        }
+    }.toString()
+
+fun decodePrepaidAccounts(raw: String?): Map<String, PrepaidAccount> {
+    val array = runCatching { JSONArray(raw.orEmpty()) }.getOrNull() ?: return emptyMap()
+    return buildMap {
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            val number = item.optString("number").filter(Char::isDigit)
+            if (number.isBlank()) continue
+            put(
+                number,
+                PrepaidAccount(
+                    number = number,
+                    pin = item.optString("pin").filter(Char::isDigit),
+                    name = item.optString("name").trim(),
+                    enabled = if (item.has("enabled")) item.optBoolean("enabled") else true,
+                    dataBalanceBytes = item.optLong("dataBalanceBytes").coerceAtLeast(0L),
+                    dataExpiresAtMillis = item.optLong("dataExpiresAtMillis").coerceAtLeast(0L),
+                    dataDownloadBps = item.optLong("dataDownloadBps").coerceAtLeast(0L),
+                    dataUploadBps = item.optLong("dataUploadBps").coerceAtLeast(0L),
+                    unlimitedUntilMillis = item.optLong("unlimitedUntilMillis").coerceAtLeast(0L),
+                    unlimitedDownloadBps = item.optLong("unlimitedDownloadBps").coerceAtLeast(0L),
+                    unlimitedUploadBps = item.optLong("unlimitedUploadBps").coerceAtLeast(0L),
+                    unlimitedPlanName = item.optString("unlimitedPlanName").trim(),
+                    createdAtMillis = item.optLong("createdAtMillis").coerceAtLeast(0L),
+                    lastAuthorizationStartedAtMillis =
+                        item.optLong("lastAuthorizationStartedAtMillis").coerceAtLeast(0L),
+                    lastAuthorizationSessionDataBytes =
+                        item.optLong("lastAuthorizationSessionDataBytes").coerceAtLeast(0L),
+                ),
+            )
+        }
+    }
+}
+
 fun portalConfigJson(settings: Settings): String =
     JSONObject().apply {
         put("title", settings.portalTitle)
@@ -551,11 +701,34 @@ fun portalConfigJson(settings: Settings): String =
                             put("quotaUnit", pass.quotaUnit.name)
                             put("durationMinutes", pass.durationMinutes)
                             put("durationUnit", pass.durationUnit.name)
+                            put("activatedAtMillis", pass.activatedAtMillis)
                             put("usedBytes", pass.usedBytes)
                             put("expiresAtMillis", pass.expiresAtMillis())
+                            put("redeemedAccountNumber", pass.redeemedAccountNumber)
+                            put("redeemedAtMillis", pass.redeemedAtMillis)
                             put("enabled", pass.enabled)
                         },
                     )
                 }
+        })
+        put("accounts", JSONArray().apply {
+            settings.prepaidAccounts.values.sortedBy { it.number }.forEach { account ->
+                put(
+                    JSONObject().apply {
+                        put("number", account.number)
+                        put("pin", account.pin)
+                        put("name", account.name)
+                        put("enabled", account.enabled)
+                        put("dataBalanceBytes", account.dataBalanceBytes)
+                        put("dataExpiresAtMillis", account.dataExpiresAtMillis)
+                        put("dataDownloadBps", account.dataDownloadBps)
+                        put("dataUploadBps", account.dataUploadBps)
+                        put("unlimitedUntilMillis", account.unlimitedUntilMillis)
+                        put("unlimitedDownloadBps", account.unlimitedDownloadBps)
+                        put("unlimitedUploadBps", account.unlimitedUploadBps)
+                        put("unlimitedPlanName", account.unlimitedPlanName)
+                    },
+                )
+            }
         })
     }.toString()
