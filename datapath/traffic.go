@@ -113,9 +113,11 @@ type TrafficManager struct {
 	portalTitle      string
 	portalMessage    string
 	portalHTML       string
-	portalPasses     map[string]PortalPass
-	portalAuthorized map[string]PortalAuthorization
-	portalClaims     []PortalClaim
+	portalPasses         map[string]PortalPass
+	portalAccounts       map[string]PortalAccount
+	portalAuthorized     map[string]PortalAuthorization
+	portalClaims         []PortalClaim
+	portalRechargeClaims []PortalRechargeClaim
 }
 
 func newTrafficManager() *TrafficManager {
@@ -128,6 +130,7 @@ func newTrafficManager() *TrafficManager {
 		sharedUploadLimiter:         newBandwidthLimiter(0),
 		clients:                     make(map[string]*clientTraffic),
 		portalPasses:                make(map[string]PortalPass),
+		portalAccounts:              make(map[string]PortalAccount),
 		portalAuthorized:            make(map[string]PortalAuthorization),
 	}
 }
@@ -284,7 +287,13 @@ func (m *TrafficManager) account(ip string, dir direction, byteCount int) {
 	defer m.mu.Unlock()
 
 	if auth, ok := m.portalAuthorized[ip]; ok {
-		auth.SessionUsedBytes += int64(byteCount)
+		if auth.AccountNumber != "" {
+			if m.portalAccountUsesMeteredDataLocked(auth, time.Now().UnixMilli()) {
+				auth.SessionDataUsedBytes += int64(byteCount)
+			}
+		} else {
+			auth.SessionUsedBytes += int64(byteCount)
+		}
 		m.portalAuthorized[ip] = auth
 	}
 
@@ -335,8 +344,10 @@ type trafficStatsSnapshot struct {
 	SharedUpBytes               int64                         `json:"sharedUpBytes"`
 	SharedDownBytes             int64                         `json:"sharedDownBytes"`
 	Clients                     []clientStatsSnapshot         `json:"clients"`
-	PortalClaims                []PortalClaim                 `json:"portalClaims,omitempty"`
-	PortalAuthorizations        []portalAuthorizationSnapshot `json:"portalAuthorizations,omitempty"`
+	PortalClaims                []PortalClaim                        `json:"portalClaims,omitempty"`
+	PortalAuthorizations        []portalAuthorizationSnapshot        `json:"portalAuthorizations,omitempty"`
+	PortalRechargeClaims        []PortalRechargeClaim                `json:"portalRechargeClaims,omitempty"`
+	PortalAccountAuthorizations []portalAccountAuthorizationSnapshot `json:"portalAccountAuthorizations,omitempty"`
 }
 
 type portalAuthorizationSnapshot struct {
@@ -344,6 +355,13 @@ type portalAuthorizationSnapshot struct {
 	Code             string `json:"code"`
 	StartedAtMillis  int64  `json:"startedAtMillis"`
 	SessionUsedBytes int64  `json:"sessionUsedBytes"`
+}
+
+type portalAccountAuthorizationSnapshot struct {
+	IP                   string `json:"ip"`
+	AccountNumber        string `json:"accountNumber"`
+	StartedAtMillis      int64  `json:"startedAtMillis"`
+	SessionDataUsedBytes int64  `json:"sessionDataUsedBytes"`
 }
 
 type clientStatsSnapshot struct {
@@ -373,9 +391,23 @@ func (m *TrafficManager) statsJSON() string {
 		Clients:                     make([]clientStatsSnapshot, 0, len(m.clients)),
 		PortalClaims:                append([]PortalClaim(nil), m.portalClaims...),
 		PortalAuthorizations:        make([]portalAuthorizationSnapshot, 0, len(m.portalAuthorized)),
+		PortalRechargeClaims:        append([]PortalRechargeClaim(nil), m.portalRechargeClaims...),
+		PortalAccountAuthorizations: make([]portalAccountAuthorizationSnapshot, 0, len(m.portalAuthorized)),
 	}
 
 	for ip, auth := range m.portalAuthorized {
+		if auth.AccountNumber != "" {
+			snapshot.PortalAccountAuthorizations = append(
+				snapshot.PortalAccountAuthorizations,
+				portalAccountAuthorizationSnapshot{
+					IP:                   ip,
+					AccountNumber:        auth.AccountNumber,
+					StartedAtMillis:      auth.StartedAtMillis,
+					SessionDataUsedBytes: auth.SessionDataUsedBytes,
+				},
+			)
+			continue
+		}
 		if !m.portalAuthorizedLocked(ip) {
 			continue
 		}
