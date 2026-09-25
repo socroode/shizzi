@@ -5,6 +5,27 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-09-24
+
+### Fixed
+
+- Prepaid account login now creates a local browser/captive-session token in
+  addition to the existing client-IP authorization.
+- Account recharge can recover the authenticated account when Android changes
+  the portal request address between login and `/account/recharge`.
+- The recharge form carries the local session token, and the portal also keeps
+  it in a local HTTP cookie for normal browser navigation.
+- A new login for the same account invalidates the previous browser session,
+  preserving the one-active-device account rule.
+
+### Compatibility
+
+- Shizzi Conso remains **v1.1.0** and requires no update.
+- Existing Conso routes are unchanged: `/`, `/status`, `/status.json`,
+  `/account/login`, and `/account/recharge`.
+- Shizzi 1.6.0/1.7.0 prepaid accounts, vouchers, balances, validity and settings
+  remain stored in the same DataStore format.
+
 ## [1.7.0] - 2026-09-24
 
 ### Added
