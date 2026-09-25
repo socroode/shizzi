@@ -88,9 +88,13 @@ data class AccessPass(
     val durationMinutes: Long = 0L,
     val durationUnit: DurationUnit = DurationUnit.DAYS,
     val createdAtMillis: Long = 0,
+    // Legacy device fields are retained only for migration from older builds.
     val assignedDeviceId: String = "",
     val activatedAtMillis: Long = 0,
     val startTotalBytes: Long = 0,
+    val usedBytes: Long = 0,
+    val lastAuthorizationStartedAtMillis: Long = 0,
+    val lastAuthorizationSessionBytes: Long = 0,
     val enabled: Boolean = true,
 ) {
     fun expiresAtMillis(): Long = when {
@@ -137,6 +141,13 @@ data class PortalClaim(
     val claimedAtMillis: Long,
 )
 
+data class PortalAuthorizationStatus(
+    val ip: String,
+    val code: String,
+    val startedAtMillis: Long,
+    val sessionUsedBytes: Long,
+)
+
 data class ManagerTrafficStats(
     val globalDownloadBps: Long = 0,
     val globalUploadBps: Long = 0,
@@ -147,6 +158,7 @@ data class ManagerTrafficStats(
     val sharedDownBytes: Long = 0,
     val clients: List<ClientTrafficStats> = emptyList(),
     val portalClaims: List<PortalClaim> = emptyList(),
+    val portalAuthorizations: List<PortalAuthorizationStatus> = emptyList(),
 ) {
     val totalBytes: Long get() = totalUpBytes + totalDownBytes
 }
@@ -178,6 +190,21 @@ fun parseManagerTrafficStats(raw: String?): ManagerTrafficStats {
                             ip = item.optString("ip"),
                             code = item.optString("code"),
                             claimedAtMillis = item.optLong("claimedAtMillis"),
+                        ),
+                    )
+                }
+            }
+        }.orEmpty(),
+        portalAuthorizations = root.optJSONArray("portalAuthorizations")?.let { array ->
+            buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    add(
+                        PortalAuthorizationStatus(
+                            ip = item.optString("ip"),
+                            code = item.optString("code").trim().uppercase(),
+                            startedAtMillis = item.optLong("startedAtMillis"),
+                            sessionUsedBytes = item.optLong("sessionUsedBytes").coerceAtLeast(0L),
                         ),
                     )
                 }
@@ -381,6 +408,9 @@ fun encodeAccessPasses(passes: Map<String, AccessPass>): String =
                     put("assignedDeviceId", pass.assignedDeviceId)
                     put("activatedAtMillis", pass.activatedAtMillis)
                     put("startTotalBytes", pass.startTotalBytes)
+                    put("usedBytes", pass.usedBytes)
+                    put("lastAuthorizationStartedAtMillis", pass.lastAuthorizationStartedAtMillis)
+                    put("lastAuthorizationSessionBytes", pass.lastAuthorizationSessionBytes)
                     put("enabled", pass.enabled)
                 },
             )
@@ -430,6 +460,11 @@ fun decodeAccessPasses(raw: String?): Map<String, AccessPass> {
                     assignedDeviceId = item.optString("assignedDeviceId").lowercase(),
                     activatedAtMillis = item.optLong("activatedAtMillis").coerceAtLeast(0L),
                     startTotalBytes = item.optLong("startTotalBytes").coerceAtLeast(0L),
+                    usedBytes = item.optLong("usedBytes").coerceAtLeast(0L),
+                    lastAuthorizationStartedAtMillis =
+                        item.optLong("lastAuthorizationStartedAtMillis").coerceAtLeast(0L),
+                    lastAuthorizationSessionBytes =
+                        item.optLong("lastAuthorizationSessionBytes").coerceAtLeast(0L),
                     enabled = if (item.has("enabled")) item.optBoolean("enabled") else true,
                 ),
             )
@@ -516,7 +551,8 @@ fun portalConfigJson(settings: Settings): String =
                             put("quotaUnit", pass.quotaUnit.name)
                             put("durationMinutes", pass.durationMinutes)
                             put("durationUnit", pass.durationUnit.name)
-                            put("assignedDeviceId", pass.assignedDeviceId)
+                            put("usedBytes", pass.usedBytes)
+                            put("expiresAtMillis", pass.expiresAtMillis())
                             put("enabled", pass.enabled)
                         },
                     )
