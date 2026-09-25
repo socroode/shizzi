@@ -248,6 +248,46 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+
+    fun createPrepaidAccount(name: String, requestedPin: String) {
+        viewModelScope.launch {
+            val snapshot = settingsStore.settings.first()
+            var number: String
+            do {
+                number = generateAccountNumber()
+            } while (number in snapshot.prepaidAccounts)
+
+            val pin = requestedPin
+                .filter(Char::isDigit)
+                .take(12)
+                .ifBlank { generateAccountPin() }
+
+            settingsStore.upsertPrepaidAccount(
+                PrepaidAccount(
+                    number = number,
+                    pin = pin,
+                    name = name.trim().ifBlank { "Client" }.take(48),
+                    createdAtMillis = System.currentTimeMillis(),
+                ),
+            )
+            refreshLivePortalConfig()
+        }
+    }
+
+    fun setPrepaidAccountEnabled(number: String, enabled: Boolean) {
+        viewModelScope.launch {
+            settingsStore.setPrepaidAccountEnabled(number, enabled)
+            refreshLivePortalConfig()
+        }
+    }
+
+    fun resetPrepaidAccountPin(number: String) {
+        viewModelScope.launch {
+            settingsStore.resetPrepaidAccountPin(number, generateAccountPin())
+            refreshLivePortalConfig()
+        }
+    }
+
     private suspend fun refreshLivePortalConfig() {
         if (!SessionService.isSessionUp) return
         val current = settingsStore.settings.first()
@@ -469,6 +509,17 @@ class SessionViewModel(application: Application) : AndroidViewModel(application)
             onCleared(diagnostics.clearLog())
         }
     }
+
+    private fun generateAccountNumber(): String =
+        buildString(8) {
+            append(1 + ACCESS_PASS_RANDOM.nextInt(9))
+            repeat(7) { append(ACCESS_PASS_RANDOM.nextInt(10)) }
+        }
+
+    private fun generateAccountPin(): String =
+        buildString(6) {
+            repeat(6) { append(ACCESS_PASS_RANDOM.nextInt(10)) }
+        }
 
     private fun generateAccessPassCode(): String {
         val alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
