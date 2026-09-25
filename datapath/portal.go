@@ -24,9 +24,34 @@ type PortalPass struct {
 	QuotaUnit       string `json:"quotaUnit"`
 	DurationMinutes int64  `json:"durationMinutes"`
 	DurationUnit    string `json:"durationUnit"`
-	UsedBytes       int64  `json:"usedBytes"`
-	ExpiresAtMillis int64  `json:"expiresAtMillis"`
-	Enabled         bool   `json:"enabled"`
+	ActivatedAtMillis     int64  `json:"activatedAtMillis"`
+	UsedBytes             int64  `json:"usedBytes"`
+	ExpiresAtMillis       int64  `json:"expiresAtMillis"`
+	RedeemedAccountNumber string `json:"redeemedAccountNumber"`
+	RedeemedAtMillis      int64  `json:"redeemedAtMillis"`
+	Enabled               bool   `json:"enabled"`
+}
+
+type PortalAccount struct {
+	Number               string `json:"number"`
+	Pin                  string `json:"pin"`
+	Name                 string `json:"name"`
+	Enabled              bool   `json:"enabled"`
+	DataBalanceBytes     int64  `json:"dataBalanceBytes"`
+	DataExpiresAtMillis  int64  `json:"dataExpiresAtMillis"`
+	DataDownloadBps      int64  `json:"dataDownloadBps"`
+	DataUploadBps        int64  `json:"dataUploadBps"`
+	UnlimitedUntilMillis int64  `json:"unlimitedUntilMillis"`
+	UnlimitedDownloadBps int64  `json:"unlimitedDownloadBps"`
+	UnlimitedUploadBps   int64  `json:"unlimitedUploadBps"`
+	UnlimitedPlanName    string `json:"unlimitedPlanName"`
+}
+
+type PortalRechargeClaim struct {
+	IP              string `json:"ip"`
+	AccountNumber   string `json:"accountNumber"`
+	Code            string `json:"code"`
+	ClaimedAtMillis int64  `json:"claimedAtMillis"`
 }
 
 type PortalClaim struct {
@@ -36,23 +61,30 @@ type PortalClaim struct {
 }
 
 type PortalAuthorization struct {
-	Code                  string
-	ExpiresAtMillis       int64
-	QuotaRemainingBytes   int64
-	StartedAtMillis       int64
-	SessionUsedBytes      int64
-	AccountedSessionBytes int64
+	Code                      string
+	AccountNumber             string
+	ExpiresAtMillis           int64
+	QuotaRemainingBytes       int64
+	StartedAtMillis           int64
+	SessionUsedBytes          int64
+	AccountedSessionBytes     int64
+	SessionDataUsedBytes      int64
+	AccountedSessionDataBytes int64
 }
 
 type portalConfigPayload struct {
 	Title   string       `json:"title"`
 	Message string       `json:"message"`
 	HTML    string       `json:"html"`
-	Passes  []PortalPass `json:"passes"`
+	Passes   []PortalPass    `json:"passes"`
+	Accounts []PortalAccount `json:"accounts"`
 }
 
 type portalUsageStatus struct {
 	Authorized       bool   `json:"authorized"`
+	Authenticated    bool   `json:"authenticated"`
+	AccountNumber    string `json:"accountNumber"`
+	AccountName      string `json:"accountName"`
 	Code             string `json:"code"`
 	Plan             string `json:"plan"`
 	Speed            string `json:"speed"`
@@ -92,6 +124,25 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 	}
 	m.portalPasses = nextPasses
 
+	nextAccounts := make(map[string]PortalAccount)
+	for _, account := range payload.Accounts {
+		number := normalizePortalAccountNumber(account.Number)
+		if number == "" {
+			continue
+		}
+		account.Number = number
+		account.Pin = strings.TrimSpace(account.Pin)
+		nextAccounts[number] = account
+	}
+	m.portalAccounts = nextAccounts
+	for ip, auth := range m.portalAuthorized {
+		if auth.AccountNumber == "" {
+			continue
+		}
+		auth.AccountedSessionDataBytes = auth.SessionDataUsedBytes
+		m.portalAuthorized[ip] = auth
+	}
+
 	if !required {
 		m.portalAuthorized = make(map[string]PortalAuthorization)
 	}
@@ -101,6 +152,7 @@ func (m *TrafficManager) clearPortalClaims() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.portalClaims = nil
+	m.portalRechargeClaims = nil
 }
 
 func (m *TrafficManager) setPortalClientAccess(
@@ -160,6 +212,9 @@ func (m *TrafficManager) portalAuthorizedLocked(ip string) bool {
 	}
 
 	now := time.Now().UnixMilli()
+	if auth.AccountNumber != "" {
+		return m.portalAccountInternetAllowedLocked(auth, now)
+	}
 	if auth.ExpiresAtMillis > 0 && now >= auth.ExpiresAtMillis {
 		// Keep the record for the local status page. Returning false is enough
 		// to block ordinary Internet traffic.
@@ -193,6 +248,121 @@ func (m *TrafficManager) portalAuthorizedLocked(ip string) bool {
 	return true
 }
 
+
+const portalForeverMillis int64 = 2305843009213693951
+
+func normalizePortalAccountNumber(raw string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, raw)
+}
+
+func safePortalAdd(base, delta int64) int64 {
+	if base >= portalForeverMillis || delta >= portalForeverMillis {
+		return portalForeverMillis
+	}
+	if delta > 0 && base > portalForeverMillis-delta {
+		return portalForeverMillis
+	}
+	return base + delta
+}
+
+func (m *TrafficManager) portalAccountStateLocked(
+	auth PortalAuthorization,
+	now int64,
+) (PortalAccount, string, int64, bool) {
+	account, ok := m.portalAccounts[auth.AccountNumber]
+	if !ok || !account.Enabled {
+		return PortalAccount{}, "", 0, false
+	}
+	if account.UnlimitedUntilMillis > now {
+		return account, "unlimited", 0, true
+	}
+	unpersisted := auth.SessionDataUsedBytes - auth.AccountedSessionDataBytes
+	if unpersisted < 0 {
+		unpersisted = 0
+	}
+	remaining := account.DataBalanceBytes - unpersisted
+	if remaining < 0 {
+		remaining = 0
+	}
+	if remaining > 0 &&
+		(account.DataExpiresAtMillis <= 0 || now < account.DataExpiresAtMillis) {
+		return account, "data", remaining, true
+	}
+	return account, "", remaining, true
+}
+
+func (m *TrafficManager) portalAccountInternetAllowedLocked(
+	auth PortalAuthorization,
+	now int64,
+) bool {
+	_, kind, _, exists := m.portalAccountStateLocked(auth, now)
+	return exists && kind != ""
+}
+
+func (m *TrafficManager) portalAccountUsesMeteredDataLocked(
+	auth PortalAuthorization,
+	now int64,
+) bool {
+	_, kind, remaining, exists := m.portalAccountStateLocked(auth, now)
+	return exists && kind == "data" && remaining > 0
+}
+
+func applyPortalRecharge(account PortalAccount, pass PortalPass, now int64) PortalAccount {
+	unlimitedActive := account.UnlimitedUntilMillis > now
+	dataExpired := account.DataExpiresAtMillis > 0 && now >= account.DataExpiresAtMillis
+	if dataExpired && !unlimitedActive {
+		account.DataBalanceBytes = 0
+		account.DataExpiresAtMillis = 0
+	}
+
+	durationMillis := int64(0)
+	if pass.DurationMinutes > 0 {
+		if pass.DurationMinutes > portalForeverMillis/60000 {
+			durationMillis = portalForeverMillis
+		} else {
+			durationMillis = pass.DurationMinutes * 60000
+		}
+	}
+
+	if pass.QuotaBytes > 0 {
+		account.DataBalanceBytes = safePortalAdd(account.DataBalanceBytes, pass.QuotaBytes)
+		base := now
+		if unlimitedActive {
+			base = account.UnlimitedUntilMillis
+		}
+		if durationMillis <= 0 {
+			account.DataExpiresAtMillis = 0
+		} else {
+			account.DataExpiresAtMillis = safePortalAdd(base, durationMillis)
+		}
+		account.DataDownloadBps = pass.DownloadBps
+		account.DataUploadBps = pass.UploadBps
+		return account
+	}
+
+	base := now
+	if unlimitedActive {
+		base = account.UnlimitedUntilMillis
+	}
+	if durationMillis <= 0 {
+		account.UnlimitedUntilMillis = portalForeverMillis
+	} else {
+		account.UnlimitedUntilMillis = safePortalAdd(base, durationMillis)
+		if account.DataBalanceBytes > 0 && account.DataExpiresAtMillis > 0 {
+			account.DataExpiresAtMillis = safePortalAdd(account.DataExpiresAtMillis, durationMillis)
+		}
+	}
+	account.UnlimitedDownloadBps = pass.DownloadBps
+	account.UnlimitedUploadBps = pass.UploadBps
+	account.UnlimitedPlanName = pass.Name
+	return account
+}
+
 func (m *TrafficManager) clientUsedLocked(ip string) int64 {
 	if isSharedTunnelAddress(ip) {
 		return m.sharedUpBytes + m.sharedDownBytes
@@ -210,6 +380,57 @@ func (m *TrafficManager) portalUsageStatusFor(ip string) portalUsageStatus {
 	if !ok {
 		return status
 	}
+	if auth.AccountNumber != "" {
+		account, kind, remaining, exists := m.portalAccountStateLocked(auth, time.Now().UnixMilli())
+		if !exists {
+			return status
+		}
+		status.Authenticated = true
+		status.AccountNumber = account.Number
+		status.AccountName = account.Name
+		status.Authorized = kind != ""
+		status.Plan = account.Name
+		if status.Plan == "" {
+			status.Plan = "Compte Shizzi"
+		}
+		switch kind {
+		case "unlimited":
+			if account.UnlimitedPlanName != "" {
+				status.Plan = account.UnlimitedPlanName
+			}
+			status.Speed = fmt.Sprintf(
+				"%s / %s",
+				formatPortalRate(account.UnlimitedDownloadBps, ""),
+				formatPortalRate(account.UnlimitedUploadBps, ""),
+			)
+			status.RemainingText = "Illimité"
+			status.ExpiresAtMillis = account.UnlimitedUntilMillis
+		case "data":
+			status.Speed = fmt.Sprintf(
+				"%s / %s",
+				formatPortalRate(account.DataDownloadBps, ""),
+				formatPortalRate(account.DataUploadBps, ""),
+			)
+			status.LimitedData = true
+			status.RemainingBytes = remaining
+			status.RemainingText = formatPortalBytes(remaining)
+			status.UsedBytes = auth.SessionDataUsedBytes
+			status.UsedText = formatPortalBytes(auth.SessionDataUsedBytes)
+			status.ExpiresAtMillis = account.DataExpiresAtMillis
+		default:
+			status.Plan = "Compte sans forfait"
+			status.RemainingText = "0 MB"
+			status.UsedText = "0 MB"
+			status.ExpiresText = "Recharge requise"
+		}
+		if status.ExpiresText == "" && status.ExpiresAtMillis > 0 {
+			status.ExpiresText = formatPortalTimeRemaining(status.ExpiresAtMillis - time.Now().UnixMilli())
+		} else if status.ExpiresText == "" {
+			status.ExpiresText = "Sans expiration"
+		}
+		return status
+	}
+
 	pass, exists := m.portalPasses[auth.Code]
 	if !exists {
 		return status
@@ -335,8 +556,8 @@ async function refreshNow(){
   try{
     const r=await fetch('/status.json?ts='+Date.now(),{cache:'no-store'});
     const s=await r.json();
-    if(!s.code){
-      document.getElementById('plan').textContent='Aucun voucher actif';
+    if(!s.code && !s.accountNumber){
+      document.getElementById('plan').textContent='Aucun accès actif';
       document.getElementById('code').textContent='';
       document.getElementById('used').textContent='—';
       document.getElementById('remaining').textContent='—';
@@ -346,8 +567,8 @@ async function refreshNow(){
       document.getElementById('percent').textContent='';
       return;
     }
-    document.getElementById('plan').textContent=s.plan || 'Voucher';
-    document.getElementById('code').textContent=s.code;
+    document.getElementById('plan').textContent=s.plan || 'Compte Shizzi';
+    document.getElementById('code').textContent=s.accountNumber ? 'Compte '+s.accountNumber : s.code;
     document.getElementById('used').textContent=s.usedText || '0 MB';
     document.getElementById('remaining').textContent=s.remainingText || '—';
     document.getElementById('expires').textContent=s.expiresText || '—';
@@ -386,7 +607,7 @@ func (m *TrafficManager) submitPortalCode(ip, rawCode string) (bool, string) {
 	defer m.mu.Unlock()
 
 	pass, ok := m.portalPasses[code]
-	if !ok || !pass.Enabled {
+	if !ok || !pass.Enabled || pass.RedeemedAccountNumber != "" {
 		return false, "Invalid access code."
 	}
 
@@ -438,6 +659,150 @@ func (m *TrafficManager) submitPortalCode(ip, rawCode string) (bool, string) {
 	return true, "Access granted. You can now use the Internet."
 }
 
+
+func (m *TrafficManager) submitPortalAccountLogin(ip, rawNumber, rawPin string) (bool, string) {
+	number := normalizePortalAccountNumber(rawNumber)
+	pin := strings.TrimSpace(rawPin)
+	if number == "" || pin == "" {
+		return false, "Numéro de compte et PIN requis."
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	account, ok := m.portalAccounts[number]
+	if !ok || !account.Enabled || account.Pin != pin {
+		return false, "Compte ou PIN invalide."
+	}
+
+	for otherIP, auth := range m.portalAuthorized {
+		if otherIP != ip && auth.AccountNumber == number {
+			delete(m.portalAuthorized, otherIP)
+		}
+	}
+
+	now := time.Now().UnixMilli()
+	m.portalAuthorized[ip] = PortalAuthorization{
+		AccountNumber:   number,
+		StartedAtMillis: now,
+	}
+	if account.UnlimitedUntilMillis > now ||
+		(account.DataBalanceBytes > 0 &&
+			(account.DataExpiresAtMillis <= 0 || now < account.DataExpiresAtMillis)) {
+		return true, "Compte connecté. Accès Internet actif."
+	}
+	return true, "Compte connecté. Rechargez votre compte pour accéder à Internet."
+}
+
+func (m *TrafficManager) submitPortalRecharge(ip, rawCode string) (bool, string) {
+	code := normalizePortalCode(rawCode)
+	if code == "" {
+		return false, "Code de recharge requis."
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	auth, ok := m.portalAuthorized[ip]
+	if !ok || auth.AccountNumber == "" {
+		return false, "Connectez d'abord votre compte Shizzi."
+	}
+	account, ok := m.portalAccounts[auth.AccountNumber]
+	if !ok || !account.Enabled {
+		return false, "Compte indisponible."
+	}
+	pass, ok := m.portalPasses[code]
+	if !ok || !pass.Enabled || pass.RedeemedAccountNumber != "" ||
+		pass.ActivatedAtMillis > 0 || pass.UsedBytes > 0 {
+		return false, "Coupon invalide ou déjà utilisé."
+	}
+
+	unpersisted := auth.SessionDataUsedBytes - auth.AccountedSessionDataBytes
+	if unpersisted > 0 {
+		account.DataBalanceBytes -= unpersisted
+		if account.DataBalanceBytes < 0 {
+			account.DataBalanceBytes = 0
+		}
+		auth.AccountedSessionDataBytes = auth.SessionDataUsedBytes
+	}
+
+	now := time.Now().UnixMilli()
+	account = applyPortalRecharge(account, pass, now)
+	pass.RedeemedAccountNumber = account.Number
+	pass.RedeemedAtMillis = now
+	m.portalAccounts[account.Number] = account
+	m.portalPasses[code] = pass
+	m.portalAuthorized[ip] = auth
+
+	m.portalRechargeClaims = append(m.portalRechargeClaims, PortalRechargeClaim{
+		IP:              ip,
+		AccountNumber:   account.Number,
+		Code:            code,
+		ClaimedAtMillis: now,
+	})
+	if len(m.portalRechargeClaims) > 100 {
+		m.portalRechargeClaims = append(
+			[]PortalRechargeClaim(nil),
+			m.portalRechargeClaims[len(m.portalRechargeClaims)-100:]...,
+		)
+	}
+
+	if pass.QuotaBytes > 0 {
+		return true, fmt.Sprintf(
+			"Recharge acceptée. Nouveau solde: %s.",
+			formatPortalBytes(account.DataBalanceBytes),
+		)
+	}
+	return true, "Recharge illimitée acceptée."
+}
+
+func (m *TrafficManager) portalAccountPanelLocked(clientIP string) string {
+	if len(m.portalAccounts) == 0 {
+		return ""
+	}
+	auth, ok := m.portalAuthorized[clientIP]
+	if !ok || auth.AccountNumber == "" {
+		return "<section class=\"account-box\"><h2>Compte prépayé</h2>" +
+			"<form action=\"/account/login\" method=\"post\">" +
+			"<input name=\"account\" inputmode=\"numeric\" autocomplete=\"username\" placeholder=\"Numéro de compte\" required>" +
+			"<input name=\"pin\" inputmode=\"numeric\" autocomplete=\"current-password\" placeholder=\"PIN\" required>" +
+			"<button type=\"submit\">Se connecter</button></form></section>"
+	}
+	account, exists := m.portalAccounts[auth.AccountNumber]
+	if !exists {
+		return ""
+	}
+	now := time.Now().UnixMilli()
+	_, kind, remaining, _ := m.portalAccountStateLocked(auth, now)
+	displayName := account.Name
+	if displayName == "" {
+		displayName = "Compte Shizzi"
+	}
+	plan := "Aucun forfait actif"
+	detail := "Vous restez connecté au réseau local et pouvez recharger."
+	if kind == "unlimited" {
+		plan = account.UnlimitedPlanName
+		if plan == "" {
+			plan = "Illimité"
+		}
+		detail = "Validité: " + formatPortalTimeRemaining(account.UnlimitedUntilMillis-now)
+	} else if kind == "data" {
+		plan = "Forfait Data"
+		detail = formatPortalBytes(remaining) + " restants"
+	}
+	return fmt.Sprintf(
+		"<section class=\"account-box\"><h2>%s</h2>"+
+			"<p>Compte <strong>%s</strong></p><p><strong>%s</strong><br>%s</p>"+
+			"<form action=\"/account/recharge\" method=\"post\">"+
+			"<input name=\"code\" autocomplete=\"one-time-code\" autocapitalize=\"characters\" placeholder=\"Code de recharge\" required>"+
+			"<button type=\"submit\">Recharger</button></form></section>",
+		html.EscapeString(displayName),
+		html.EscapeString(account.Number),
+		html.EscapeString(plan),
+		html.EscapeString(detail),
+	)
+}
+
 func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
@@ -461,19 +826,32 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 		return
 	}
 
-	ok := m.portalAuthorizedFor(clientIP)
+	internetOK := m.portalAuthorizedFor(clientIP)
+	actionOK := false
 	message := ""
-	if ok && req.Method == http.MethodGet {
+	if internetOK && req.Method == http.MethodGet {
 		message = "Accès actif."
 	}
 	if req.Method == http.MethodPost {
 		body, _ := io.ReadAll(io.LimitReader(req.Body, 16*1024))
 		values, _ := url.ParseQuery(string(body))
-		ok, message = m.submitPortalCode(clientIP, values.Get("code"))
+		switch req.URL.Path {
+		case "/account/login":
+			actionOK, message = m.submitPortalAccountLogin(
+				clientIP,
+				values.Get("account"),
+				values.Get("pin"),
+			)
+		case "/account/recharge":
+			actionOK, message = m.submitPortalRecharge(clientIP, values.Get("code"))
+		default:
+			actionOK, message = m.submitPortalCode(clientIP, values.Get("code"))
+		}
+		internetOK = m.portalAuthorizedFor(clientIP)
 	}
 
-	page := m.renderPortalPage(clientIP, ok, message)
-	if ok && req.Method == http.MethodPost {
+	page := m.renderPortalPage(clientIP, internetOK || actionOK, message)
+	if internetOK && req.Method == http.MethodPost {
 		page = injectPortalValidationRedirect(page)
 	}
 	writePortalResponse(conn, "text/html; charset=utf-8", []byte(page))
@@ -484,6 +862,8 @@ func (m *TrafficManager) renderPortalPage(clientIP string, success bool, statusM
 	title := m.portalTitle
 	message := m.portalMessage
 	custom := m.portalHTML
+	accountPanel := m.portalAccountPanelLocked(clientIP)
+	accountMode := len(m.portalAccounts) > 0
 
 	planName := ""
 	speedText := ""
@@ -579,6 +959,21 @@ func (m *TrafficManager) renderPortalPage(clientIP string, success bool, statusM
 		"{{USAGE_POPUP}}", usagePopup,
 	)
 	rendered := replacer.Replace(custom)
+	voucherForm := ""
+	if !accountMode {
+		voucherForm = "<form action=\"/login\" method=\"post\">" +
+			"<input name=\"code\" autocomplete=\"one-time-code\" autocapitalize=\"characters\" placeholder=\"Access code\" required>" +
+			"<button type=\"submit\">Connect</button></form>"
+	}
+	rendered = strings.ReplaceAll(rendered, "{{ACCOUNT_PANEL}}", accountPanel)
+	rendered = strings.ReplaceAll(rendered, "{{VOUCHER_FORM}}", voucherForm)
+	if accountPanel != "" && !strings.Contains(custom, "{{ACCOUNT_PANEL}}") {
+		if index := strings.LastIndex(strings.ToLower(rendered), "</body>"); index >= 0 {
+			rendered = rendered[:index] + accountPanel + rendered[index:]
+		} else {
+			rendered += accountPanel
+		}
+	}
 
 	if usagePopup != "" && !strings.Contains(custom, "{{USAGE_POPUP}}") {
 		if strings.Contains(strings.ToLower(rendered), "</body>") {
@@ -719,6 +1114,9 @@ button{border:0;background:#f9fafb;color:#111827;font-weight:700;cursor:pointer}
 .status{margin:14px 0;padding:12px;border-radius:12px}
 .status.error{background:#7f1d1d}
 .status.success{background:#14532d}
+.account-box{margin-top:16px;padding-top:8px;border-top:1px solid #ffffff22}
+.account-box h2{font-size:20px;margin:12px 0 4px}
+.account-box p{margin:6px 0}
 small{display:block;margin-top:18px;color:#9ca3af}
 </style>
 </head>
@@ -727,10 +1125,8 @@ small{display:block;margin-top:18px;color:#9ca3af}
 <h1>{{TITLE}}</h1>
 <p>{{MESSAGE}}</p>
 {{STATUS}}
-<form action="{{FORM_ACTION}}" method="post">
-<input name="code" autocomplete="one-time-code" autocapitalize="characters" placeholder="Access code" required>
-<button type="submit">Connect</button>
-</form>
+{{ACCOUNT_PANEL}}
+{{VOUCHER_FORM}}
 <small>Powered by Shizzi</small>
 </main>
 </body>
