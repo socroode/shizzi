@@ -255,3 +255,101 @@ func TestAccountPanelShowsAllocatedRateAndValidity(t *testing.T) {
 		}
 	}
 }
+
+
+func TestAccountSessionAllowsRechargeAcrossPortalIPChange(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, `{
+	  "accounts": [{
+	    "number": "63057303",
+	    "pin": "583921",
+	    "name": "RONIU",
+	    "enabled": true
+	  }],
+	  "passes": [{
+	    "code": "MZW4DVK",
+	    "name": "Data 1-1",
+	    "quotaBytes": 1000000000,
+	    "durationMinutes": 43200,
+	    "downloadBps": 1000000,
+	    "uploadBps": 1000000,
+	    "enabled": true
+	  }]
+	}`)
+
+	ok, message, token := manager.submitPortalAccountLoginWithSession(
+		"192.168.43.10",
+		"63057303",
+		"583921",
+	)
+	if !ok || token == "" {
+		t.Fatalf("account login failed: ok=%v token=%q message=%s", ok, token, message)
+	}
+
+	ok, message = manager.submitPortalRechargeWithSession(
+		"2001:db8::2",
+		"MZW4DVK",
+		token,
+	)
+	if !ok {
+		t.Fatalf("recharge after client IP change failed: %s", message)
+	}
+
+	account := manager.portalAccounts["63057303"]
+	if account.DataBalanceBytes != 1000000000 {
+		t.Fatalf("data balance=%d, want 1000000000", account.DataBalanceBytes)
+	}
+	if account.DataDownloadBps != 1000000 || account.DataUploadBps != 1000000 {
+		t.Fatalf(
+			"rate=%d/%d, want 1000000/1000000",
+			account.DataDownloadBps,
+			account.DataUploadBps,
+		)
+	}
+	if manager.portalPasses["MZW4DVK"].RedeemedAccountNumber != "63057303" {
+		t.Fatal("coupon was not redeemed to the logged-in account")
+	}
+}
+
+func TestFreshAccountLoginInvalidatesPreviousBrowserSession(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, `{
+	  "accounts": [{
+	    "number": "63057303",
+	    "pin": "583921",
+	    "enabled": true
+	  }],
+	  "passes": [{
+	    "code": "DATA1",
+	    "quotaBytes": 1000000000,
+	    "durationMinutes": 43200,
+	    "enabled": true
+	  }]
+	}`)
+
+	ok, _, firstToken := manager.submitPortalAccountLoginWithSession(
+		"192.168.43.10",
+		"63057303",
+		"583921",
+	)
+	if !ok || firstToken == "" {
+		t.Fatal("first account session was not created")
+	}
+
+	ok, _, secondToken := manager.submitPortalAccountLoginWithSession(
+		"192.168.43.20",
+		"63057303",
+		"583921",
+	)
+	if !ok || secondToken == "" || secondToken == firstToken {
+		t.Fatal("second account login did not replace the first session")
+	}
+
+	if ok, _ := manager.submitPortalRechargeWithSession(
+		"192.168.43.10",
+		"DATA1",
+		firstToken,
+	); ok {
+		t.Fatal("invalidated first browser session was still able to recharge")
+	}
+}
