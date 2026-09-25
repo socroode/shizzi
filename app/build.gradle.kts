@@ -1,13 +1,13 @@
 import java.util.Properties
 
-val migrationBuild = providers.gradleProperty("migrationBuild").orNull == "true"
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+val migrationBuild = providers.gradleProperty("migrationBuild").orNull == "true"
 
 fun sourceFingerprint(projectDir: File): Int {
     val sources = File(projectDir, "src/main/java")
