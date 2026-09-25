@@ -2,6 +2,8 @@ package datapath
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -63,6 +65,7 @@ type PortalClaim struct {
 type PortalAuthorization struct {
 	Code                      string
 	AccountNumber             string
+	SessionToken              string
 	ExpiresAtMillis           int64
 	QuotaRemainingBytes       int64
 	StartedAtMillis           int64
@@ -71,6 +74,15 @@ type PortalAuthorization struct {
 	SessionDataUsedBytes      int64
 	AccountedSessionDataBytes int64
 }
+
+type PortalAccountSession struct {
+	Token           string
+	AccountNumber   string
+	CreatedAtMillis int64
+	LastSeenMillis  int64
+}
+
+const portalSessionCookieName = "shizzi_session"
 
 type portalConfigPayload struct {
 	Title   string       `json:"title"`
@@ -135,9 +147,26 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 		nextAccounts[number] = account
 	}
 	m.portalAccounts = nextAccounts
+	for token, session := range m.portalAccountSessions {
+		account, exists := nextAccounts[session.AccountNumber]
+		if !exists || !account.Enabled {
+			delete(m.portalAccountSessions, token)
+		}
+	}
 	for ip, auth := range m.portalAuthorized {
 		if auth.AccountNumber == "" {
 			continue
+		}
+		account, exists := nextAccounts[auth.AccountNumber]
+		if !exists || !account.Enabled {
+			delete(m.portalAuthorized, ip)
+			continue
+		}
+		if auth.SessionToken != "" {
+			if _, exists := m.portalAccountSessions[auth.SessionToken]; !exists {
+				delete(m.portalAuthorized, ip)
+				continue
+			}
 		}
 		auth.AccountedSessionDataBytes = auth.SessionDataUsedBytes
 		m.portalAuthorized[ip] = auth
@@ -145,6 +174,7 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 
 	if !required {
 		m.portalAuthorized = make(map[string]PortalAuthorization)
+		m.portalAccountSessions = make(map[string]PortalAccountSession)
 	}
 }
 
@@ -485,17 +515,33 @@ func (m *TrafficManager) portalUsageStatusFor(ip string) portalUsageStatus {
 	return status
 }
 
-func writePortalResponse(conn net.Conn, contentType string, body []byte) {
+func writePortalResponseWithHeaders(
+	conn net.Conn,
+	contentType string,
+	body []byte,
+	extraHeaders []string,
+) {
 	headers := fmt.Sprintf(
-		"HTTP/1.1 200 OK\r\nContent-Type: %s\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nConnection: close\r\nContent-Length: %d\r\n\r\n",
+		"HTTP/1.1 200 OK\r\nContent-Type: %s\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nConnection: close\r\nContent-Length: %d\r\n",
 		contentType,
 		len(body),
 	)
+	for _, header := range extraHeaders {
+		if strings.TrimSpace(header) != "" {
+			headers += header + "\r\n"
+		}
+	}
+	headers += "\r\n"
 	_, _ = io.WriteString(conn, headers)
 	_, _ = conn.Write(body)
 }
 
-func (m *TrafficManager) servePortalStatusJSON(conn net.Conn, clientIP string) {
+func writePortalResponse(conn net.Conn, contentType string, body []byte) {
+	writePortalResponseWithHeaders(conn, contentType, body, nil)
+}
+
+func (m *TrafficManager) servePortalStatusJSON(conn net.Conn, clientIP, sessionToken string) {
+	m.bindPortalAccountSession(clientIP, sessionToken)
 	status := m.portalUsageStatusFor(clientIP)
 	body, err := json.Marshal(status)
 	if err != nil {
@@ -644,11 +690,84 @@ func (m *TrafficManager) submitPortalCode(ip, rawCode string) (bool, string) {
 }
 
 
-func (m *TrafficManager) submitPortalAccountLogin(ip, rawNumber, rawPin string) (bool, string) {
+func newPortalSessionToken() string {
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(raw)
+}
+
+func portalSessionTokenFromRequest(req *http.Request) string {
+	if req == nil {
+		return ""
+	}
+	if token := strings.TrimSpace(req.URL.Query().Get("session")); token != "" {
+		return token
+	}
+	if cookie, err := req.Cookie(portalSessionCookieName); err == nil {
+		return strings.TrimSpace(cookie.Value)
+	}
+	return ""
+}
+
+func (m *TrafficManager) portalAuthorizationForSessionLocked(
+	ip, rawToken string,
+) (PortalAuthorization, bool) {
+	token := strings.TrimSpace(rawToken)
+	if auth, ok := m.portalAuthorized[ip]; ok && auth.AccountNumber != "" {
+		if token == "" || auth.SessionToken == "" || auth.SessionToken == token {
+			if auth.SessionToken != "" {
+				if session, exists := m.portalAccountSessions[auth.SessionToken]; exists {
+					session.LastSeenMillis = time.Now().UnixMilli()
+					m.portalAccountSessions[auth.SessionToken] = session
+				}
+			}
+			return auth, true
+		}
+	}
+	if token == "" {
+		return PortalAuthorization{}, false
+	}
+	session, ok := m.portalAccountSessions[token]
+	if !ok {
+		return PortalAuthorization{}, false
+	}
+	account, ok := m.portalAccounts[session.AccountNumber]
+	if !ok || !account.Enabled {
+		delete(m.portalAccountSessions, token)
+		return PortalAuthorization{}, false
+	}
+	now := time.Now().UnixMilli()
+	session.LastSeenMillis = now
+	m.portalAccountSessions[token] = session
+
+	auth := PortalAuthorization{
+		AccountNumber: session.AccountNumber,
+		SessionToken:  token,
+		StartedAtMillis: session.CreatedAtMillis,
+	}
+	m.portalAuthorized[ip] = auth
+	return auth, true
+}
+
+func (m *TrafficManager) bindPortalAccountSession(ip, rawToken string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	auth, ok := m.portalAuthorizationForSessionLocked(ip, rawToken)
+	if !ok {
+		return strings.TrimSpace(rawToken)
+	}
+	return auth.SessionToken
+}
+
+func (m *TrafficManager) submitPortalAccountLoginWithSession(
+	ip, rawNumber, rawPin string,
+) (bool, string, string) {
 	number := normalizePortalAccountNumber(rawNumber)
 	pin := strings.TrimSpace(rawPin)
 	if number == "" || pin == "" {
-		return false, "Numéro de compte et PIN requis."
+		return false, "Numéro de compte et PIN requis.", ""
 	}
 
 	m.mu.Lock()
@@ -656,29 +775,54 @@ func (m *TrafficManager) submitPortalAccountLogin(ip, rawNumber, rawPin string) 
 
 	account, ok := m.portalAccounts[number]
 	if !ok || !account.Enabled || account.Pin != pin {
-		return false, "Compte ou PIN invalide."
+		return false, "Compte ou PIN invalide.", ""
 	}
 
+	// A fresh login is the authority for the one-active-device rule.
+	// Invalidate previous browser/captive sessions for this account.
+	for token, session := range m.portalAccountSessions {
+		if session.AccountNumber == number {
+			delete(m.portalAccountSessions, token)
+		}
+	}
 	for otherIP, auth := range m.portalAuthorized {
-		if otherIP != ip && auth.AccountNumber == number {
+		if auth.AccountNumber == number {
 			delete(m.portalAuthorized, otherIP)
 		}
 	}
 
+	token := newPortalSessionToken()
+	if token == "" {
+		return false, "Impossible de créer la session du compte.", ""
+	}
 	now := time.Now().UnixMilli()
-	m.portalAuthorized[ip] = PortalAuthorization{
+	m.portalAccountSessions[token] = PortalAccountSession{
+		Token:           token,
 		AccountNumber:   number,
+		CreatedAtMillis: now,
+		LastSeenMillis:  now,
+	}
+	m.portalAuthorized[ip] = PortalAuthorization{
+		AccountNumber: number,
+		SessionToken:  token,
 		StartedAtMillis: now,
 	}
 	if account.UnlimitedUntilMillis > now ||
 		(account.DataBalanceBytes > 0 &&
 			(account.DataExpiresAtMillis <= 0 || now < account.DataExpiresAtMillis)) {
-		return true, "Compte connecté. Accès Internet actif."
+		return true, "Compte connecté. Accès Internet actif.", token
 	}
-	return true, "Compte connecté. Rechargez votre compte pour accéder à Internet."
+	return true, "Compte connecté. Rechargez votre compte pour accéder à Internet.", token
 }
 
-func (m *TrafficManager) submitPortalRecharge(ip, rawCode string) (bool, string) {
+func (m *TrafficManager) submitPortalAccountLogin(ip, rawNumber, rawPin string) (bool, string) {
+	ok, message, _ := m.submitPortalAccountLoginWithSession(ip, rawNumber, rawPin)
+	return ok, message
+}
+
+func (m *TrafficManager) submitPortalRechargeWithSession(
+	ip, rawCode, rawSession string,
+) (bool, string) {
 	code := normalizePortalCode(rawCode)
 	if code == "" {
 		return false, "Code de recharge requis."
@@ -687,7 +831,7 @@ func (m *TrafficManager) submitPortalRecharge(ip, rawCode string) (bool, string)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	auth, ok := m.portalAuthorized[ip]
+	auth, ok := m.portalAuthorizationForSessionLocked(ip, rawSession)
 	if !ok || auth.AccountNumber == "" {
 		return false, "Connectez d'abord votre compte Shizzi."
 	}
@@ -740,11 +884,15 @@ func (m *TrafficManager) submitPortalRecharge(ip, rawCode string) (bool, string)
 	return true, "Recharge illimitée acceptée."
 }
 
-func (m *TrafficManager) portalAccountPanelLocked(clientIP string) string {
+func (m *TrafficManager) submitPortalRecharge(ip, rawCode string) (bool, string) {
+	return m.submitPortalRechargeWithSession(ip, rawCode, "")
+}
+
+func (m *TrafficManager) portalAccountPanelLocked(clientIP, sessionToken string) string {
 	if len(m.portalAccounts) == 0 {
 		return ""
 	}
-	auth, ok := m.portalAuthorized[clientIP]
+	auth, ok := m.portalAuthorizationForSessionLocked(clientIP, sessionToken)
 	if !ok || auth.AccountNumber == "" {
 		return "<section class=\"account-box login-box\"><div class=\"eyebrow\">COMPTE PRÉPAYÉ</div><h2>Connexion client</h2>" +
 			"<p class=\"muted\">Entrez votre numéro de compte et votre PIN.</p>" +
@@ -801,6 +949,7 @@ func (m *TrafficManager) portalAccountPanelLocked(clientIP string) string {
 			"<div class=\"remaining-big\">%s</div>"+
 			"<div class=\"metric-grid\"><div><span>Débit ↓</span><strong>%s</strong></div><div><span>Débit ↑</span><strong>%s</strong></div><div class=\"wide\"><span>Validité restante</span><strong>%s</strong></div></div></div>"+
 			"<form action=\"/account/recharge\" method=\"post\" class=\"recharge-form\"><label>Code de recharge</label>"+
+			"<input type=\"hidden\" name=\"session\" value=\"%s\">"+
 			"<input name=\"code\" autocomplete=\"one-time-code\" autocapitalize=\"characters\" placeholder=\"Saisir le coupon\" required>"+
 			"<button type=\"submit\">Recharger mon compte</button></form>"+
 			"<a class=\"status-link\" href=\"/status\">Voir ma consommation en direct</a></section>",
@@ -813,6 +962,7 @@ func (m *TrafficManager) portalAccountPanelLocked(clientIP string) string {
 		html.EscapeString(downText),
 		html.EscapeString(upText),
 		html.EscapeString(expiresText),
+		html.EscapeString(auth.SessionToken),
 	)
 }
 
@@ -826,9 +976,12 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	}
 	defer req.Body.Close()
 
+	sessionToken := portalSessionTokenFromRequest(req)
+	sessionToken = m.bindPortalAccountSession(clientIP, sessionToken)
+
 	switch req.URL.Path {
 	case "/status.json":
-		m.servePortalStatusJSON(conn, clientIP)
+		m.servePortalStatusJSON(conn, clientIP, sessionToken)
 		return
 	case "/status":
 		writePortalResponse(
@@ -842,40 +995,66 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	internetOK := m.portalAuthorizedFor(clientIP)
 	actionOK := false
 	message := ""
+	extraHeaders := []string{}
 	if internetOK && req.Method == http.MethodGet {
 		message = "Accès actif."
 	}
 	if req.Method == http.MethodPost {
 		body, _ := io.ReadAll(io.LimitReader(req.Body, 16*1024))
 		values, _ := url.ParseQuery(string(body))
+		if posted := strings.TrimSpace(values.Get("session")); posted != "" {
+			sessionToken = posted
+		}
 		switch req.URL.Path {
 		case "/account/login":
-			actionOK, message = m.submitPortalAccountLogin(
+			var freshToken string
+			actionOK, message, freshToken = m.submitPortalAccountLoginWithSession(
 				clientIP,
 				values.Get("account"),
 				values.Get("pin"),
 			)
+			if freshToken != "" {
+				sessionToken = freshToken
+				extraHeaders = append(extraHeaders, fmt.Sprintf(
+					"Set-Cookie: %s=%s; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax",
+					portalSessionCookieName,
+					freshToken,
+				))
+			}
 		case "/account/recharge":
-			actionOK, message = m.submitPortalRecharge(clientIP, values.Get("code"))
+			actionOK, message = m.submitPortalRechargeWithSession(
+				clientIP,
+				values.Get("code"),
+				sessionToken,
+			)
 		default:
 			actionOK, message = m.submitPortalCode(clientIP, values.Get("code"))
 		}
 		internetOK = m.portalAuthorizedFor(clientIP)
 	}
 
-	page := m.renderPortalPage(clientIP, internetOK || actionOK, message)
+	page := m.renderPortalPage(clientIP, sessionToken, internetOK || actionOK, message)
 	if internetOK && req.Method == http.MethodPost {
 		page = injectPortalValidationRedirect(page)
 	}
-	writePortalResponse(conn, "text/html; charset=utf-8", []byte(page))
+	writePortalResponseWithHeaders(
+		conn,
+		"text/html; charset=utf-8",
+		[]byte(page),
+		extraHeaders,
+	)
 }
 
-func (m *TrafficManager) renderPortalPage(clientIP string, success bool, statusMessage string) string {
+func (m *TrafficManager) renderPortalPage(
+	clientIP, sessionToken string,
+	success bool,
+	statusMessage string,
+) string {
 	m.mu.Lock()
 	title := m.portalTitle
 	message := m.portalMessage
 	custom := m.portalHTML
-	accountPanel := m.portalAccountPanelLocked(clientIP)
+	accountPanel := m.portalAccountPanelLocked(clientIP, sessionToken)
 	accountMode := len(m.portalAccounts) > 0
 
 	planName := ""
