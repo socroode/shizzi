@@ -56,7 +56,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "dev.shizzi"
+        applicationId = "dev.shizzi.ipv4diag"
 
         minSdk = 30
         targetSdk = 35
