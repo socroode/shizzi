@@ -389,10 +389,7 @@ func (m *TrafficManager) portalUsageStatusFor(ip string) portalUsageStatus {
 		status.AccountNumber = account.Number
 		status.AccountName = account.Name
 		status.Authorized = kind != ""
-		status.Plan = account.Name
-		if status.Plan == "" {
-			status.Plan = "Compte Shizzi"
-		}
+		status.Plan = "Compte Shizzi"
 		switch kind {
 		case "unlimited":
 			if account.UnlimitedPlanName != "" {
@@ -406,6 +403,7 @@ func (m *TrafficManager) portalUsageStatusFor(ip string) portalUsageStatus {
 			status.RemainingText = "Illimité"
 			status.ExpiresAtMillis = account.UnlimitedUntilMillis
 		case "data":
+			status.Plan = "Forfait Data"
 			status.Speed = fmt.Sprintf(
 				"%s / %s",
 				formatPortalRate(account.DataDownloadBps, ""),
@@ -512,42 +510,38 @@ func (m *TrafficManager) renderLiveStatusPage() string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Suivi consommation Shizzi</title>
+<title>Ma consommation Shizzi</title>
 <style>
-:root{color-scheme:dark}
+:root{color-scheme:dark;font-family:Inter,system-ui,-apple-system,sans-serif}
 *{box-sizing:border-box}
-body{margin:0;min-height:100vh;background:#0b0b0c;color:#f7f7f8;font-family:system-ui,-apple-system,sans-serif;padding:22px}
-.wrap{width:min(100%,520px);margin:0 auto}
-.card{background:#1c1b1f;border-radius:24px;padding:24px;box-shadow:0 18px 60px #0008}
-h1{font-size:26px;margin:0 0 4px}
-.sub{color:#aaa3ad;margin:0 0 22px}
-.plan{font-size:18px;font-weight:700;margin-bottom:4px}
-.code{font-size:13px;color:#8d8790;margin-bottom:20px}
-.row{display:flex;justify-content:space-between;gap:18px;padding:12px 0;border-bottom:1px solid #ffffff12}
-.row span{color:#bbb5bd}.row strong{text-align:right}
-.meter{height:14px;background:#37333a;border-radius:999px;overflow:hidden;margin:18px 0 8px}
-.meter span{display:block;height:100%;width:0;background:#34d1c6;transition:width .5s ease}
-.percent{text-align:right;color:#aaa3ad;font-size:13px}
-.live{display:inline-flex;align-items:center;gap:7px;color:#34d1c6;font-size:13px;margin-top:18px}
-.dot{width:8px;height:8px;border-radius:50%;background:#34d1c6;box-shadow:0 0 12px #34d1c6}
-.offline{color:#ff9a9a}
-button{width:100%;margin-top:22px;border:0;border-radius:14px;padding:14px;font:inherit;font-weight:700;background:#34d1c6;color:#07110f}
+body{margin:0;min-height:100vh;color:#f8fafc;background:radial-gradient(circle at 15% 5%,#0ea5e955,transparent 34%),radial-gradient(circle at 90% 10%,#8b5cf655,transparent 32%),linear-gradient(145deg,#07111f,#111827 52%,#0f172a);padding:20px}
+.wrap{width:min(100%,540px);margin:0 auto}
+.hero{margin:10px 0 16px}.eyebrow{font-size:12px;letter-spacing:.15em;color:#7dd3fc;font-weight:800}.hero h1{font-size:30px;margin:6px 0 3px}.sub{color:#94a3b8;margin:0}
+.card{background:#0f172ae8;border:1px solid #ffffff18;border-radius:26px;padding:22px;box-shadow:0 24px 70px #0007;backdrop-filter:blur(12px)}
+.account{display:flex;justify-content:space-between;gap:14px;align-items:flex-start}.account-name{font-size:22px;font-weight:800}.account-number{color:#94a3b8;font-size:13px;margin-top:3px}.pill{padding:7px 11px;border-radius:999px;background:#10b98122;color:#6ee7b7;border:1px solid #10b98155;font-size:12px;font-weight:800}
+.plan-card{margin-top:18px;padding:18px;border-radius:20px;background:linear-gradient(135deg,#0ea5e922,#8b5cf622);border:1px solid #7dd3fc35}.plan-label{color:#94a3b8;font-size:12px}.plan{font-size:18px;font-weight:800;margin-top:3px}.remaining-label{color:#cbd5e1;font-size:12px;margin-top:18px}.remaining{font-size:34px;font-weight:900;line-height:1.05;margin-top:4px;color:#f0fdfa}
+.meter{height:12px;background:#ffffff12;border-radius:999px;overflow:hidden;margin:16px 0 6px}.meter span{display:block;height:100%;width:0;background:linear-gradient(90deg,#22d3ee,#34d399,#a78bfa);transition:width .5s ease}.percent{text-align:right;color:#94a3b8;font-size:12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px}.metric{padding:14px;border-radius:16px;background:#ffffff08;border:1px solid #ffffff10}.metric span{display:block;color:#94a3b8;font-size:12px}.metric strong{display:block;margin-top:5px;font-size:15px}.wide{grid-column:1/-1}
+.live{display:flex;align-items:center;gap:8px;color:#6ee7b7;font-size:13px;margin-top:18px}.dot{width:8px;height:8px;border-radius:50%;background:#34d399;box-shadow:0 0 14px #34d399}.offline{color:#fda4af}.offline .dot{background:#fb7185;box-shadow:0 0 14px #fb7185}
+button{width:100%;margin-top:20px;border:0;border-radius:15px;padding:14px 16px;font:inherit;font-weight:800;background:linear-gradient(90deg,#22d3ee,#34d399);color:#06202a}
 </style>
 </head>
 <body>
 <div class="wrap">
+<div class="hero"><div class="eyebrow">SHIZZI CONSO</div><h1>Ma consommation</h1><p class="sub">Mise à jour automatique toutes les 2 secondes</p></div>
 <div class="card">
-<h1>Votre consommation</h1>
-<p class="sub">Mise à jour automatique en temps réel</p>
-<div class="plan" id="plan">Chargement…</div>
-<div class="code" id="code"></div>
-<div class="meter"><span id="bar"></span></div>
-<div class="percent" id="percent"></div>
-<div class="row"><span>Utilisé</span><strong id="used">—</strong></div>
-<div class="row"><span>Restant</span><strong id="remaining">—</strong></div>
-<div class="row"><span>Validité restante</span><strong id="expires">—</strong></div>
-<div class="row"><span>Débit</span><strong id="speed">—</strong></div>
-<div class="live" id="live"><span class="dot"></span><span>Actualisation toutes les 2 secondes</span></div>
+<div class="account"><div><div class="account-name" id="accountName">Chargement…</div><div class="account-number" id="accountNumber"></div></div><span class="pill" id="state">En ligne</span></div>
+<div class="plan-card">
+<div class="plan-label">Forfait actif</div><div class="plan" id="plan">—</div>
+<div class="remaining-label">Données restantes</div><div class="remaining" id="remaining">—</div>
+<div class="meter"><span id="bar"></span></div><div class="percent" id="percent"></div>
+<div class="grid">
+<div class="metric"><span>Utilisé</span><strong id="used">—</strong></div>
+<div class="metric"><span>Débit ↓ / ↑</span><strong id="speed">—</strong></div>
+<div class="metric wide"><span>Validité restante</span><strong id="expires">—</strong></div>
+</div>
+</div>
+<div class="live" id="live"><span class="dot"></span><span>Actualisation en cours</span></div>
 <button onclick="refreshNow()">Actualiser maintenant</button>
 </div>
 </div>
@@ -556,42 +550,32 @@ async function refreshNow(){
   try{
     const r=await fetch('/status.json?ts='+Date.now(),{cache:'no-store'});
     const s=await r.json();
-    if(!s.code && !s.accountNumber){
-      document.getElementById('plan').textContent='Aucun accès actif';
-      document.getElementById('code').textContent='';
-      document.getElementById('used').textContent='—';
-      document.getElementById('remaining').textContent='—';
-      document.getElementById('expires').textContent='—';
-      document.getElementById('speed').textContent='—';
-      document.getElementById('bar').style.width='0%';
-      document.getElementById('percent').textContent='';
-      return;
-    }
-    document.getElementById('plan').textContent=s.plan || 'Compte Shizzi';
-    document.getElementById('code').textContent=s.accountNumber ? 'Compte '+s.accountNumber : s.code;
-    document.getElementById('used').textContent=s.usedText || '0 MB';
-    document.getElementById('remaining').textContent=s.remainingText || '—';
-    document.getElementById('expires').textContent=s.expiresText || '—';
-    document.getElementById('speed').textContent=s.speed || '—';
+    const hasIdentity=!!(s.code||s.accountNumber);
+    document.getElementById('accountName').textContent=s.accountName|| (hasIdentity?'Compte Shizzi':'Aucun compte connecté');
+    document.getElementById('accountNumber').textContent=s.accountNumber?'Compte '+s.accountNumber:(s.code||'');
+    document.getElementById('plan').textContent=s.plan||'Aucun forfait actif';
+    document.getElementById('used').textContent=s.usedText||'0 MB';
+    document.getElementById('remaining').textContent=s.remainingText||'0 MB';
+    document.getElementById('expires').textContent=s.expiresText||'Recharge requise';
+    document.getElementById('speed').textContent=s.speed||'—';
     const p=Math.max(0,Math.min(100,s.percentUsed||0));
     document.getElementById('bar').style.width=(s.limitedData?p:0)+'%';
-    document.getElementById('percent').textContent=s.limitedData ? p+' % utilisé' : 'Données illimitées';
+    document.getElementById('percent').textContent=s.limitedData&&p>0?p+' % utilisé':(s.limitedData?'Solde Data actif':'Données illimitées');
     const live=document.getElementById('live');
+    const state=document.getElementById('state');
     if(s.authorized){
-      live.className='live';
-      live.innerHTML='<span class="dot"></span><span>Connexion active · mise à jour toutes les 2 secondes</span>';
+      live.className='live'; live.innerHTML='<span class="dot"></span><span>Connexion Internet active</span>';
+      state.textContent='Actif';
     }else{
-      live.className='live offline';
-      live.textContent='Accès expiré ou quota épuisé';
+      live.className='live offline'; live.innerHTML='<span class="dot"></span><span>Internet bloqué · recharge disponible localement</span>';
+      state.textContent=s.authenticated?'Recharge requise':'Hors ligne';
     }
   }catch(e){
     const live=document.getElementById('live');
-    live.className='live offline';
-    live.textContent='Suivi temporairement indisponible';
+    live.className='live offline'; live.innerHTML='<span class="dot"></span><span>Suivi temporairement indisponible</span>';
   }
 }
-refreshNow();
-setInterval(refreshNow,2000);
+refreshNow(); setInterval(refreshNow,2000);
 </script>
 </body>
 </html>`
@@ -762,10 +746,11 @@ func (m *TrafficManager) portalAccountPanelLocked(clientIP string) string {
 	}
 	auth, ok := m.portalAuthorized[clientIP]
 	if !ok || auth.AccountNumber == "" {
-		return "<section class=\"account-box\"><h2>Compte prépayé</h2>" +
+		return "<section class=\"account-box login-box\"><div class=\"eyebrow\">COMPTE PRÉPAYÉ</div><h2>Connexion client</h2>" +
+			"<p class=\"muted\">Entrez votre numéro de compte et votre PIN.</p>" +
 			"<form action=\"/account/login\" method=\"post\">" +
-			"<input name=\"account\" inputmode=\"numeric\" autocomplete=\"username\" placeholder=\"Numéro de compte\" required>" +
-			"<input name=\"pin\" inputmode=\"numeric\" autocomplete=\"current-password\" placeholder=\"PIN\" required>" +
+			"<label>Numéro de compte</label><input name=\"account\" inputmode=\"numeric\" autocomplete=\"username\" placeholder=\"Ex. 25494159\" required>" +
+			"<label>PIN</label><input name=\"pin\" inputmode=\"numeric\" autocomplete=\"current-password\" placeholder=\"6 chiffres\" required>" +
 			"<button type=\"submit\">Se connecter</button></form></section>"
 	}
 	account, exists := m.portalAccounts[auth.AccountNumber]
@@ -778,28 +763,56 @@ func (m *TrafficManager) portalAccountPanelLocked(clientIP string) string {
 	if displayName == "" {
 		displayName = "Compte Shizzi"
 	}
+
 	plan := "Aucun forfait actif"
-	detail := "Vous restez connecté au réseau local et pouvez recharger."
-	if kind == "unlimited" {
+	stateClass := "warning"
+	stateText := "Recharge requise"
+	remainingText := "0 MB"
+	expiresText := "Recharge requise"
+	downText := "—"
+	upText := "—"
+
+	switch kind {
+	case "unlimited":
 		plan = account.UnlimitedPlanName
 		if plan == "" {
 			plan = "Illimité"
 		}
-		detail = "Validité: " + formatPortalTimeRemaining(account.UnlimitedUntilMillis-now)
-	} else if kind == "data" {
+		stateClass = "active"
+		stateText = "Actif"
+		remainingText = "Illimité"
+		expiresText = formatPortalTimeRemaining(account.UnlimitedUntilMillis - now)
+		downText = formatPortalRate(account.UnlimitedDownloadBps, "")
+		upText = formatPortalRate(account.UnlimitedUploadBps, "")
+	case "data":
 		plan = "Forfait Data"
-		detail = formatPortalBytes(remaining) + " restants"
+		stateClass = "active"
+		stateText = "Actif"
+		remainingText = formatPortalBytes(remaining)
+		expiresText = formatPortalTimeRemaining(account.DataExpiresAtMillis - now)
+		downText = formatPortalRate(account.DataDownloadBps, "")
+		upText = formatPortalRate(account.DataUploadBps, "")
 	}
+
 	return fmt.Sprintf(
-		"<section class=\"account-box\"><h2>%s</h2>"+
-			"<p>Compte <strong>%s</strong></p><p><strong>%s</strong><br>%s</p>"+
-			"<form action=\"/account/recharge\" method=\"post\">"+
-			"<input name=\"code\" autocomplete=\"one-time-code\" autocapitalize=\"characters\" placeholder=\"Code de recharge\" required>"+
-			"<button type=\"submit\">Recharger</button></form></section>",
+		"<section class=\"account-box account-active\">"+
+			"<div class=\"account-head\"><div><div class=\"eyebrow\">COMPTE PRÉPAYÉ</div><h2>%s</h2><div class=\"account-number\">Compte %s</div></div><span class=\"state-pill %s\">%s</span></div>"+
+			"<div class=\"plan-card\"><div class=\"plan-label\">Forfait actif</div><div class=\"plan-name\">%s</div>"+
+			"<div class=\"remaining-big\">%s</div>"+
+			"<div class=\"metric-grid\"><div><span>Débit ↓</span><strong>%s</strong></div><div><span>Débit ↑</span><strong>%s</strong></div><div class=\"wide\"><span>Validité restante</span><strong>%s</strong></div></div></div>"+
+			"<form action=\"/account/recharge\" method=\"post\" class=\"recharge-form\"><label>Code de recharge</label>"+
+			"<input name=\"code\" autocomplete=\"one-time-code\" autocapitalize=\"characters\" placeholder=\"Saisir le coupon\" required>"+
+			"<button type=\"submit\">Recharger mon compte</button></form>"+
+			"<a class=\"status-link\" href=\"/status\">Voir ma consommation en direct</a></section>",
 		html.EscapeString(displayName),
 		html.EscapeString(account.Number),
+		stateClass,
+		stateText,
 		html.EscapeString(plan),
-		html.EscapeString(detail),
+		html.EscapeString(remainingText),
+		html.EscapeString(downText),
+		html.EscapeString(upText),
+		html.EscapeString(expiresText),
 	)
 }
 
@@ -1096,38 +1109,33 @@ func normalizePortalCode(raw string) string {
 }
 
 const defaultPortalHTML = `<!doctype html>
-<html lang="en">
+<html lang="fr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{TITLE}}</title>
 <style>
-:root{color-scheme:light dark}
+:root{color-scheme:dark;font-family:Inter,system-ui,-apple-system,sans-serif}
 *{box-sizing:border-box}
-body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,-apple-system,sans-serif;background:#111827;color:#f9fafb;padding:24px}
-.card{width:min(100%,420px);background:#1f2937;border-radius:20px;padding:28px;box-shadow:0 20px 60px #0006}
-h1{margin:0 0 8px;font-size:28px}
-p{color:#d1d5db;line-height:1.45}
-input,button{width:100%;font:inherit;border-radius:12px;padding:14px 16px}
-input{border:1px solid #4b5563;background:#111827;color:#fff;margin:14px 0}
-button{border:0;background:#f9fafb;color:#111827;font-weight:700;cursor:pointer}
-.status{margin:14px 0;padding:12px;border-radius:12px}
-.status.error{background:#7f1d1d}
-.status.success{background:#14532d}
-.account-box{margin-top:16px;padding-top:8px;border-top:1px solid #ffffff22}
-.account-box h2{font-size:20px;margin:12px 0 4px}
-.account-box p{margin:6px 0}
-small{display:block;margin-top:18px;color:#9ca3af}
+body{margin:0;min-height:100vh;display:grid;place-items:center;color:#f8fafc;background:radial-gradient(circle at 15% 5%,#0ea5e955,transparent 34%),radial-gradient(circle at 90% 10%,#8b5cf655,transparent 32%),linear-gradient(145deg,#07111f,#111827 52%,#0f172a);padding:20px}
+.card{width:min(100%,460px);background:#0f172ae8;border:1px solid #ffffff18;border-radius:28px;padding:24px;box-shadow:0 26px 80px #0008;backdrop-filter:blur(12px)}
+.brand{display:flex;align-items:center;gap:12px;margin-bottom:18px}.logo{width:42px;height:42px;border-radius:14px;background:linear-gradient(135deg,#22d3ee,#34d399,#8b5cf6);box-shadow:0 8px 24px #22d3ee33}.brand h1{font-size:25px;margin:0}.brand p{margin:2px 0 0;color:#94a3b8;font-size:13px}
+.status{margin:14px 0;padding:12px 14px;border-radius:14px;font-weight:700}.status.error{background:#7f1d1d88;border:1px solid #fb718555;color:#fecdd3}.status.success{background:#064e3b99;border:1px solid #34d39955;color:#a7f3d0}
+.account-box{margin-top:8px}.eyebrow{font-size:11px;letter-spacing:.14em;color:#7dd3fc;font-weight:800}.account-box h2{font-size:23px;margin:5px 0 4px}.muted,.account-number{color:#94a3b8}
+.account-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start}.state-pill{font-size:11px;font-weight:800;padding:6px 10px;border-radius:999px}.state-pill.active{background:#10b98122;color:#6ee7b7;border:1px solid #10b98155}.state-pill.warning{background:#f59e0b22;color:#fcd34d;border:1px solid #f59e0b55}
+.plan-card{margin-top:18px;padding:18px;border-radius:20px;background:linear-gradient(135deg,#0ea5e922,#8b5cf622);border:1px solid #7dd3fc35}.plan-label{color:#94a3b8;font-size:12px}.plan-name{font-size:18px;font-weight:800;margin-top:3px}.remaining-big{font-size:34px;font-weight:900;color:#f0fdfa;margin-top:14px}
+.metric-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}.metric-grid>div{padding:12px;border-radius:14px;background:#ffffff08}.metric-grid span{display:block;color:#94a3b8;font-size:11px}.metric-grid strong{display:block;margin-top:4px;font-size:14px}.metric-grid .wide{grid-column:1/-1}
+label{display:block;color:#cbd5e1;font-size:12px;font-weight:700;margin:14px 0 6px}input,button{width:100%;font:inherit;border-radius:14px;padding:14px 16px}input{border:1px solid #334155;background:#0b1220;color:#fff;outline:none;margin:0 0 8px}input:focus{border-color:#22d3ee;box-shadow:0 0 0 3px #22d3ee22}button{border:0;background:linear-gradient(90deg,#22d3ee,#34d399);color:#06202a;font-weight:900;cursor:pointer;margin-top:6px}.status-link{display:block;text-align:center;margin-top:16px;color:#7dd3fc;text-decoration:none;font-weight:700;font-size:13px}
+small.footer{display:block;margin-top:20px;color:#64748b;text-align:center}
 </style>
 </head>
 <body>
 <main class="card">
-<h1>{{TITLE}}</h1>
-<p>{{MESSAGE}}</p>
+<div class="brand"><div class="logo"></div><div><h1>{{TITLE}}</h1><p>{{MESSAGE}}</p></div></div>
 {{STATUS}}
 {{ACCOUNT_PANEL}}
 {{VOUCHER_FORM}}
-<small>Powered by Shizzi</small>
+<small class="footer">Propulsé par Shizzi</small>
 </main>
 </body>
 </html>`
