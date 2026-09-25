@@ -3,6 +3,7 @@ package datapath
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 const portablePassConfig = `{
@@ -96,5 +97,129 @@ func TestPortalAuthorizationSnapshotReportsVoucherSession(t *testing.T) {
 		if !strings.Contains(raw, expected) {
 			t.Fatalf("authorization snapshot missing %q: %s", expected, raw)
 		}
+	}
+}
+
+
+func TestPrepaidAccountCanLoginEmptyAndRechargeData(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, `{
+	  "accounts": [{
+	    "number": "47286153",
+	    "pin": "583921",
+	    "name": "Client",
+	    "enabled": true
+	  }],
+	  "passes": [{
+	    "code": "DATA1",
+	    "name": "Data 1 GB",
+	    "quotaBytes": 1000000000,
+	    "durationMinutes": 43200,
+	    "downloadBps": 4000000,
+	    "uploadBps": 2000000,
+	    "enabled": true
+	  }]
+	}`)
+
+	ok, message := manager.submitPortalAccountLogin("192.168.43.10", "4728 6153", "583921")
+	if !ok {
+		t.Fatalf("empty account login rejected: %s", message)
+	}
+	if manager.portalAuthorizedFor("192.168.43.10") {
+		t.Fatal("empty account unexpectedly received Internet access")
+	}
+
+	ok, message = manager.submitPortalRecharge("192.168.43.10", "DATA1")
+	if !ok {
+		t.Fatalf("data recharge rejected: %s", message)
+	}
+	if !manager.portalAuthorizedFor("192.168.43.10") {
+		t.Fatal("recharged account did not receive Internet access")
+	}
+	account := manager.portalAccounts["47286153"]
+	if account.DataBalanceBytes != 1000000000 {
+		t.Fatalf("data balance=%d, want 1000000000", account.DataBalanceBytes)
+	}
+	if manager.portalPasses["DATA1"].RedeemedAccountNumber != "47286153" {
+		t.Fatal("coupon was not marked as redeemed to the account")
+	}
+	if len(manager.portalRechargeClaims) != 1 {
+		t.Fatalf("recharge claims=%d, want 1", len(manager.portalRechargeClaims))
+	}
+}
+
+func TestDataRechargeWaitsUntilUnlimitedEnds(t *testing.T) {
+	now := time.Now().UnixMilli()
+	account := PortalAccount{
+		Number:                 "47286153",
+		Enabled:                true,
+		UnlimitedUntilMillis:   now + 5*60*1000,
+	}
+	pass := PortalPass{
+		Code:            "DATA30",
+		QuotaBytes:      1000000000,
+		DurationMinutes: 30 * 24 * 60,
+	}
+	updated := applyPortalRecharge(account, pass, now)
+	wantExpiry := account.UnlimitedUntilMillis + pass.DurationMinutes*60*1000
+	if updated.DataExpiresAtMillis != wantExpiry {
+		t.Fatalf("data expiry=%d, want %d", updated.DataExpiresAtMillis, wantExpiry)
+	}
+	if updated.DataBalanceBytes != pass.QuotaBytes {
+		t.Fatalf("data balance=%d, want %d", updated.DataBalanceBytes, pass.QuotaBytes)
+	}
+}
+
+func TestUnlimitedRechargeAccumulatesValidityAndPreservesData(t *testing.T) {
+	now := time.Now().UnixMilli()
+	account := PortalAccount{
+		Number:                 "47286153",
+		Enabled:                true,
+		DataBalanceBytes:       100000000,
+		DataExpiresAtMillis:    now + 2*24*60*60*1000,
+		UnlimitedUntilMillis:   now + 5*24*60*60*1000,
+	}
+	pass := PortalPass{
+		Code:            "UNLIM30",
+		Name:            "Illimité Eco",
+		DurationMinutes: 30 * 24 * 60,
+	}
+	updated := applyPortalRecharge(account, pass, now)
+	wantUnlimited := account.UnlimitedUntilMillis + pass.DurationMinutes*60*1000
+	if updated.UnlimitedUntilMillis != wantUnlimited {
+		t.Fatalf("unlimited expiry=%d, want %d", updated.UnlimitedUntilMillis, wantUnlimited)
+	}
+	wantDataExpiry := account.DataExpiresAtMillis + pass.DurationMinutes*60*1000
+	if updated.DataExpiresAtMillis != wantDataExpiry {
+		t.Fatalf("data expiry=%d, want %d", updated.DataExpiresAtMillis, wantDataExpiry)
+	}
+	if updated.DataBalanceBytes != account.DataBalanceBytes {
+		t.Fatalf("data balance=%d, want %d", updated.DataBalanceBytes, account.DataBalanceBytes)
+	}
+}
+
+func TestPrepaidAccountMovesToNewClient(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, `{
+	  "accounts": [{
+	    "number": "47286153",
+	    "pin": "583921",
+	    "enabled": true,
+	    "dataBalanceBytes": 1000,
+	    "dataExpiresAtMillis": 0
+	  }]
+	}`)
+
+	if ok, msg := manager.submitPortalAccountLogin("192.168.43.10", "47286153", "583921"); !ok {
+		t.Fatalf("first account login rejected: %s", msg)
+	}
+	if ok, msg := manager.submitPortalAccountLogin("192.168.43.20", "47286153", "583921"); !ok {
+		t.Fatalf("second account login rejected: %s", msg)
+	}
+	if manager.portalAuthorizedFor("192.168.43.10") {
+		t.Fatal("old client stayed authorized after account transfer")
+	}
+	if !manager.portalAuthorizedFor("192.168.43.20") {
+		t.Fatal("new client did not receive the account session")
 	}
 }
