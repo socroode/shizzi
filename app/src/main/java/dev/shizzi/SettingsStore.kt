@@ -415,7 +415,7 @@ class SettingsStore(private val context: Context) {
         activateAccessPass(code, System.currentTimeMillis())
     }
 
-    suspend fun revokeAccessPass(code: String) {    suspend fun revokeAccessPass(code: String) {
+    suspend fun revokeAccessPass(code: String) {
         val normalizedCode = code.trim().uppercase()
         if (normalizedCode.isBlank()) return
         context.dataStore.edit { preferences ->
