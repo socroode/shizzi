@@ -17,6 +17,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Shizzi Conso remains **v1.2.0** and requires no update.
 - Existing prepaid accounts, vouchers, balances, validity and DataStore records remain unchanged from Shizzi 1.7.2.
+- The release workflow can produce a one-time signed debuggable migration APK so data from an older debug-signed installation can be restored before moving to the permanently signed stable build.
 
 ## [1.7.2] - 2026-09-24
 
