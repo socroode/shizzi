@@ -1192,6 +1192,185 @@ private fun VoucherStudioSheet(
 }
 
 @Composable
+private fun AccountEditorSheet(
+    settings: Settings,
+    actions: HotspotManagerActions,
+    onDismiss: () -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    var pin by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    val now = System.currentTimeMillis()
+
+    ThemedBottomSheet(onDismiss = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.94f)
+                .imePadding(),
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = ShizziTheme.spacing.lg),
+            ) {
+                Text(
+                    text = "Prepaid accounts",
+                    style = ShizziTheme.typography.heading,
+                    color = ShizziTheme.colors.onSurface,
+                )
+                Text(
+                    text = "The account is permanent. It can stay at 0 MB and still connect " +
+                        "locally to recharge with a one-use coupon.",
+                    style = ShizziTheme.typography.body,
+                    color = ShizziTheme.colors.onSurfaceMuted,
+                )
+
+                SectionLabel("Create account")
+
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(48) },
+                    label = { Text("Customer name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                OutlinedTextField(
+                    value = pin,
+                    onValueChange = { pin = it.filter(Char::isDigit).take(12) },
+                    label = { Text("PIN (leave empty to generate)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                Button(
+                    onClick = {
+                        actions.onCreatePrepaidAccount(name, pin)
+                        name = ""
+                        pin = ""
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = ShizziTheme.spacing.md),
+                ) {
+                    Text("Create prepaid account")
+                }
+
+                SectionLabel("Accounts")
+
+                if (settings.prepaidAccounts.isEmpty()) {
+                    Text(
+                        text = "No account yet. Zero accounts is valid; create one when needed.",
+                        style = ShizziTheme.typography.body,
+                        color = ShizziTheme.colors.onSurfaceMuted,
+                    )
+                }
+
+                settings.prepaidAccounts.values
+                    .sortedByDescending { it.createdAtMillis }
+                    .forEach { account ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = ShizziTheme.spacing.sm),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            SettingsLabel(
+                                title = account.name.ifBlank { "Compte " + account.number },
+                                subtitle = "Compte " + account.number + " · PIN " + account.pin +
+                                    " · " + prepaidAccountSummary(account, now),
+                                modifier = Modifier.weight(1f),
+                            )
+                            Column(horizontalAlignment = Alignment.End) {
+                                TextButton(
+                                    onClick = {
+                                        val clipboard = context.getSystemService(
+                                            ClipboardManager::class.java,
+                                        )
+                                        clipboard?.setPrimaryClip(
+                                            ClipData.newPlainText(
+                                                "Shizzi account",
+                                                account.number + " / PIN " + account.pin,
+                                            ),
+                                        )
+                                    },
+                                ) {
+                                    Text("Copy")
+                                }
+                                TextButton(
+                                    onClick = {
+                                        actions.onSetPrepaidAccountEnabled(
+                                            account.number,
+                                            !account.enabled,
+                                        )
+                                    },
+                                ) {
+                                    Text(if (account.enabled) "Disable" else "Enable")
+                                }
+                                TextButton(
+                                    onClick = {
+                                        actions.onResetPrepaidAccountPin(account.number)
+                                    },
+                                ) {
+                                    Text("New PIN")
+                                }
+                            }
+                        }
+                    }
+            }
+
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Close")
+            }
+        }
+    }
+}
+
+private fun prepaidAccountSummary(account: PrepaidAccount, now: Long): String {
+    if (!account.enabled) return "Disabled"
+
+    val waitingData = if (account.hasUnlimited(now) && account.dataBalanceBytes > 0L) {
+        " · " + Traffic.format(account.dataBalanceBytes) + " Data waiting"
+    } else {
+        ""
+    }
+
+    return when {
+        account.hasUnlimited(now) -> {
+            val plan = account.unlimitedPlanName.ifBlank { "Unlimited" }
+            val remaining = formatRemainingDuration(account.unlimitedUntilMillis - now)
+            plan + " · " + remaining + waitingData
+        }
+        account.hasData(now) -> {
+            val validity = if (account.dataExpiresAtMillis > 0L) {
+                " · " + formatRemainingDuration(account.dataExpiresAtMillis - now)
+            } else {
+                ""
+            }
+            Traffic.format(account.dataBalanceBytes) + " remaining" + validity
+        }
+        else -> "0 MB · local access only · recharge required"
+    }
+}
+
+private fun formatRemainingDuration(millis: Long): String {
+    if (millis <= 0L) return "expired"
+    val totalMinutes = millis / 60_000L
+    val days = totalMinutes / 1_440L
+    val hours = (totalMinutes % 1_440L) / 60L
+    return when {
+        days > 0L -> days.toString() + " d " + hours + " h"
+        hours > 0L -> hours.toString() + " h"
+        else -> totalMinutes.coerceAtLeast(1L).toString() + " min"
+    }
+}
+
+@Composable
 private fun NumberUnitField(
     label: String,
     value: String,
