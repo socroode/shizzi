@@ -5,6 +5,27 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-09-24
+
+### Added
+
+- A richer prepaid account panel in the captive portal showing the active plan,
+  remaining balance, allocated download/upload rate, and remaining validity.
+- A more colorful live consumption page while keeping the existing local
+  `/status` and `/status.json` routes used by Shizzi Conso 1.1.0.
+- Android unit tests that decode Shizzi 1.6 prepaid-account and redeemed-voucher
+  records before every build.
+
+### Changed
+
+- The default captive portal now uses a colorful responsive card layout with
+  clearer account, recharge, status, speed, and validity information.
+- Shizzi Conso remains at 1.1.0; the customer pages are still served by Shizzi
+  Hotspot, so no Conso update is required for these visual changes.
+- Shizzi 1.7.0 keeps the 1.6.0 DataStore keys and serialized prepaid/voucher
+  fields unchanged, so existing 1.6.0 records remain readable.
+
+
 ### Shizzi Conso 1.1.0
 
 - Added an account-oriented launcher for Shizzi 1.6 prepaid accounts.
