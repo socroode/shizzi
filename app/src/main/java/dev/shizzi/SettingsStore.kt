@@ -406,6 +406,15 @@ class SettingsStore(private val context: Context) {
         }
     }
 
+    suspend fun assignAccessPass(
+        code: String,
+        @Suppress("UNUSED_PARAMETER") deviceId: String,
+    ) {
+        // Compatibility entry point for older UI/actions. Portable prepaid
+        // vouchers are activated by code and never bind to the supplied device.
+        activateAccessPass(code, System.currentTimeMillis())
+    }
+
     suspend fun revokeAccessPass(code: String) {    suspend fun revokeAccessPass(code: String) {
         val normalizedCode = code.trim().uppercase()
         if (normalizedCode.isBlank()) return
