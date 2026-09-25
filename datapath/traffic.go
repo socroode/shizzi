@@ -322,15 +322,23 @@ func (m *TrafficManager) resetStats() {
 }
 
 type trafficStatsSnapshot struct {
-	GlobalDownloadBitsPerSecond int64                `json:"globalDownloadBps"`
-	GlobalUploadBitsPerSecond   int64                `json:"globalUploadBps"`
-	GlobalQuotaBytes            int64                 `json:"globalQuotaBytes"`
-	TotalUpBytes                int64                 `json:"totalUpBytes"`
-	TotalDownBytes              int64                 `json:"totalDownBytes"`
-	SharedUpBytes               int64                 `json:"sharedUpBytes"`
-	SharedDownBytes             int64                 `json:"sharedDownBytes"`
-	Clients                     []clientStatsSnapshot `json:"clients"`
-	PortalClaims                []PortalClaim         `json:"portalClaims,omitempty"`
+	GlobalDownloadBitsPerSecond int64                         `json:"globalDownloadBps"`
+	GlobalUploadBitsPerSecond   int64                         `json:"globalUploadBps"`
+	GlobalQuotaBytes            int64                         `json:"globalQuotaBytes"`
+	TotalUpBytes                int64                         `json:"totalUpBytes"`
+	TotalDownBytes              int64                         `json:"totalDownBytes"`
+	SharedUpBytes               int64                         `json:"sharedUpBytes"`
+	SharedDownBytes             int64                         `json:"sharedDownBytes"`
+	Clients                     []clientStatsSnapshot         `json:"clients"`
+	PortalClaims                []PortalClaim                 `json:"portalClaims,omitempty"`
+	PortalAuthorizations        []portalAuthorizationSnapshot `json:"portalAuthorizations,omitempty"`
+}
+
+type portalAuthorizationSnapshot struct {
+	IP               string `json:"ip"`
+	Code             string `json:"code"`
+	StartedAtMillis  int64  `json:"startedAtMillis"`
+	SessionUsedBytes int64  `json:"sessionUsedBytes"`
 }
 
 type clientStatsSnapshot struct {
@@ -359,6 +367,26 @@ func (m *TrafficManager) statsJSON() string {
 		SharedDownBytes:             m.sharedDownBytes,
 		Clients:                     make([]clientStatsSnapshot, 0, len(m.clients)),
 		PortalClaims:                append([]PortalClaim(nil), m.portalClaims...),
+		PortalAuthorizations:        make([]portalAuthorizationSnapshot, 0, len(m.portalAuthorized)),
+	}
+
+	for ip, auth := range m.portalAuthorized {
+		if !m.portalAuthorizedLocked(ip) {
+			continue
+		}
+		sessionUsed := m.clientUsedLocked(ip) - auth.StartSessionBytes
+		if sessionUsed < 0 {
+			sessionUsed = 0
+		}
+		snapshot.PortalAuthorizations = append(
+			snapshot.PortalAuthorizations,
+			portalAuthorizationSnapshot{
+				IP:               ip,
+				Code:             auth.Code,
+				StartedAtMillis:  auth.StartedAtMillis,
+				SessionUsedBytes: sessionUsed,
+			},
+		)
 	}
 
 	for _, client := range m.clients {
