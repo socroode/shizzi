@@ -164,6 +164,24 @@ class SessionService : Service() {
                 sessionKey = sessionKey,
                 countersByDevice = counters,
             )
+            settingsStore().migrateAccessPassesToPortable()
+
+            stats.portalAuthorizations.forEach { authorization ->
+                settingsStore().checkpointAccessPassUsage(
+                    code = authorization.code,
+                    authorizationStartedAtMillis = authorization.startedAtMillis,
+                    sessionUsedBytes = authorization.sessionUsedBytes,
+                )
+            }
+
+            stats.portalClaims
+                .distinctBy { it.code }
+                .forEach { claim ->
+                    settingsStore().activateAccessPass(
+                        code = claim.code,
+                        claimedAtMillis = claim.claimedAtMillis,
+                    )
+                }
 
             var settings = settingsStore().settings.first()
 
@@ -182,65 +200,18 @@ class SessionService : Service() {
             }
             settings = settingsStore().settings.first()
 
-            // Keep the live captive portal voucher table synchronized with
-            // DataStore on every manager sync. A one-shot refresh can be
-            // missed when a voucher is generated while the Shizuku service is
-            // reconnecting or when an old user-service instance survives an
-            // app update. Without this refresh the UI can show a voucher as
-            // Available while the portal still answers "Invalid access code".
+            // Voucher state is code-centric. A valid code can move between
+            // devices; only activation time and cumulative data belong to it.
             runCatching {
                 controller.setPortalConfig(
                     settings.accessPassRequired,
                     portalConfigJson(settings),
                 )
+                if (stats.portalClaims.isNotEmpty()) {
+                    controller.clearPortalClaims()
+                }
             }.onFailure {
                 SessionLog.warn("portal voucher sync failed: ${it.message}")
-            }
-
-            if (stats.portalClaims.isNotEmpty()) {
-                var hasPendingClaim = false
-                stats.portalClaims
-                    .distinctBy { "${it.ip}|${it.code}" }
-                    .forEach { claim ->
-                        val claimant = stats.clients.firstOrNull { it.ip == claim.ip }
-                            ?: when (claim.ip) {
-                                "192.0.2.2", "2001:db8::2" -> stats.clients.singleOrNull()
-                                else -> null
-                            }
-                        val deviceId = claimant?.let { client ->
-                            client.deviceId.lowercase().ifBlank { client.ip }
-                        }.orEmpty()
-
-                        when {
-                            deviceId.isNotBlank() -> {
-                                settingsStore().assignAccessPass(claim.code, deviceId)
-                            }
-
-                            now - claim.claimedAtMillis <= PORTAL_CLAIM_RETRY_MS -> {
-                                // A portal claim can arrive before Android exposes the
-                                // physical tethered client. Keep it for another manager
-                                // cycle instead of revoking a voucher that was just sold.
-                                hasPendingClaim = true
-                                SessionLog.info(
-                                    "portal claim pending device identity for " +
-                                        "${claim.ip}/${claim.code}",
-                                )
-                            }
-                        }
-                    }
-
-                settings = settingsStore().settings.first()
-                runCatching {
-                    controller.setPortalConfig(
-                        settings.accessPassRequired,
-                        portalConfigJson(settings),
-                    )
-                    if (!hasPendingClaim) {
-                        controller.clearPortalClaims()
-                    }
-                }.onFailure {
-                    SessionLog.warn("portal claim sync failed: ${it.message}")
-                }
             }
 
             val currentOnline = activeClients
@@ -296,12 +267,20 @@ class SessionService : Service() {
                     ?.bytes
                     ?: 0L
 
-                val accessPass = settings.accessPasses.values.firstOrNull { pass ->
-                    pass.enabled && pass.assignedDeviceId == deviceId
+                val authorization = stats.portalAuthorizations.firstOrNull {
+                    it.ip == client.ip
+                } ?: if (stats.clients.size == 1) {
+                    stats.portalAuthorizations.firstOrNull {
+                        it.ip == "192.0.2.2" || it.ip == "2001:db8::2"
+                    }
+                } else {
+                    null
                 }
-                val passUsed = accessPass?.let { pass ->
-                    ((usageRecord?.totalBytes ?: 0L) - pass.startTotalBytes).coerceAtLeast(0L)
-                } ?: 0L
+                val accessPass = authorization
+                    ?.code
+                    ?.let(settings.accessPasses::get)
+                    ?.takeIf { it.enabled }
+                val passUsed = accessPass?.usedBytes ?: 0L
                 val passExpired = accessPass?.isExpired(now) == true
                 val passQuotaReached = accessPass?.let { pass ->
                     pass.quotaBytes > 0L && passUsed >= pass.quotaBytes
@@ -312,14 +291,18 @@ class SessionService : Service() {
                     else -> (accessPass.quotaBytes - passUsed).coerceAtLeast(0L)
                 }
 
-                if (settings.accessPassRequired && accessPass != null) {
+                if (
+                    settings.accessPassRequired &&
+                    accessPass != null &&
+                    authorization != null
+                ) {
                     // No pass in DataStore can simply mean that the valid portal claim
                     // is still waiting for Android's client identity. Do not overwrite
                     // the datapath's provisional authorization with an immediate deny.
                     runCatching {
                         controller.setPortalClientAccess(
                             ip = client.ip,
-                            code = accessPass.code,
+                            code = authorization.code,
                             expiresAtMillis = accessPass.expiresAtMillis(),
                             quotaRemainingBytes = passQuotaRemaining,
                             allowed = passValid,
@@ -531,7 +514,6 @@ class SessionService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val MONTHLY_USAGE_SYNC_MS = 5_000L
         private const val ACTIVE_CLIENT_WINDOW_MS = 15_000L
-        private const val PORTAL_CLAIM_RETRY_MS = 30_000L
         const val ACTION_STOP = "dev.shizzi.STOP_SESSION"
         const val EXTRA_REPORT_AS = "reportAs"
 
