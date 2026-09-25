@@ -36,11 +36,12 @@ type PortalClaim struct {
 }
 
 type PortalAuthorization struct {
-	Code                string
-	ExpiresAtMillis     int64
-	QuotaRemainingBytes int64
-	StartSessionBytes   int64
-	StartedAtMillis     int64
+	Code                  string
+	ExpiresAtMillis       int64
+	QuotaRemainingBytes   int64
+	StartedAtMillis       int64
+	SessionUsedBytes      int64
+	AccountedSessionBytes int64
 }
 
 type portalConfigPayload struct {
@@ -123,6 +124,7 @@ func (m *TrafficManager) setPortalClientAccess(
 	if existing, ok := m.portalAuthorized[ip]; ok && existing.Code == normalizedCode {
 		existing.ExpiresAtMillis = expiresAtMillis
 		existing.QuotaRemainingBytes = quotaRemainingBytes
+		existing.AccountedSessionBytes = existing.SessionUsedBytes
 		m.portalAuthorized[ip] = existing
 		return
 	}
@@ -131,7 +133,6 @@ func (m *TrafficManager) setPortalClientAccess(
 		Code:                normalizedCode,
 		ExpiresAtMillis:     expiresAtMillis,
 		QuotaRemainingBytes: quotaRemainingBytes,
-		StartSessionBytes:   m.clientUsedLocked(ip),
 		StartedAtMillis:     time.Now().UnixMilli(),
 	}
 }
@@ -176,11 +177,11 @@ func (m *TrafficManager) portalAuthorizedLocked(ip string) bool {
 	}
 
 	if pass.QuotaBytes > 0 {
-		sessionUsed := m.clientUsedLocked(ip) - auth.StartSessionBytes
-		if sessionUsed < 0 {
-			sessionUsed = 0
+		unpersisted := auth.SessionUsedBytes - auth.AccountedSessionBytes
+		if unpersisted < 0 {
+			unpersisted = 0
 		}
-		if pass.UsedBytes+sessionUsed >= pass.QuotaBytes {
+		if pass.UsedBytes+unpersisted >= pass.QuotaBytes {
 			delete(m.portalAuthorized, ip)
 			return false
 		}
@@ -222,13 +223,13 @@ func (m *TrafficManager) portalUsageStatusFor(ip string) portalUsageStatus {
 	status.LimitedData = pass.QuotaBytes > 0
 	status.ExpiresAtMillis = auth.ExpiresAtMillis
 
-	sessionUsed := m.clientUsedLocked(ip) - auth.StartSessionBytes
-	if sessionUsed < 0 {
-		sessionUsed = 0
+	unpersisted := auth.SessionUsedBytes - auth.AccountedSessionBytes
+	if unpersisted < 0 {
+		unpersisted = 0
 	}
 
 	if pass.QuotaBytes > 0 {
-		used := pass.UsedBytes + sessionUsed
+		used := pass.UsedBytes + unpersisted
 		if used < 0 {
 			used = 0
 		}
@@ -245,8 +246,9 @@ func (m *TrafficManager) portalUsageStatusFor(ip string) portalUsageStatus {
 		status.RemainingText = formatPortalBytes(remaining)
 		status.PercentUsed = used * 100 / pass.QuotaBytes
 	} else {
-		status.UsedBytes = sessionUsed
-		status.UsedText = formatPortalBytes(sessionUsed)
+		used := pass.UsedBytes + unpersisted
+		status.UsedBytes = used
+		status.UsedText = formatPortalBytes(used)
 		status.RemainingText = "Illimité"
 	}
 
@@ -418,7 +420,6 @@ func (m *TrafficManager) submitPortalCode(ip, rawCode string) (bool, string) {
 		Code:                code,
 		ExpiresAtMillis:     expiresAt,
 		QuotaRemainingBytes: quotaRemaining,
-		StartSessionBytes:   m.clientUsedLocked(ip),
 		StartedAtMillis:     nowMillis,
 	}
 	m.portalClaims = append(m.portalClaims, PortalClaim{
