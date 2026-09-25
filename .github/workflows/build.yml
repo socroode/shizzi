@@ -129,7 +129,7 @@ jobs:
       - name: Upload Shizzi Conso APK
         uses: actions/upload-artifact@v5
         with:
-          name: shizzi-conso-v1.1.0
+          name: shizzi-conso-v1.2.0
           path: conso/build/outputs/apk/debug/conso-debug.apk
           if-no-files-found: error
 
