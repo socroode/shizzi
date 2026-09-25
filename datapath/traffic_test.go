@@ -208,7 +208,7 @@ func TestCaptivePortalUsagePopup(t *testing.T) {
 		t.Fatal("valid prepaid voucher should authorize the client")
 	}
 
-	page := m.renderPortalPage(ip, true, "Access granted")
+	page := m.renderPortalPage(ip, "", true, "Access granted")
 	if !strings.Contains(page, "Votre consommation") {
 		t.Fatal("successful login should show the usage popup")
 	}
