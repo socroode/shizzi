@@ -70,4 +70,70 @@ class SettingsKeysTest {
         assertEquals(AccentChoice.Default, settings.accent)
         assertEquals(emptyList<Int>(), settings.customAccents)
     }
+    @Test
+    fun `v1_6 prepaid accounts remain readable`() {
+        val raw = """[
+            {
+              "number":"25494159",
+              "pin":"583921",
+              "name":"TAIANA",
+              "enabled":true,
+              "dataBalanceBytes":1082000000,
+              "dataExpiresAtMillis":1790316921000,
+              "dataDownloadBps":1000000,
+              "dataUploadBps":1000000,
+              "unlimitedUntilMillis":0,
+              "unlimitedDownloadBps":0,
+              "unlimitedUploadBps":0,
+              "unlimitedPlanName":"",
+              "createdAtMillis":1790313000000,
+              "lastAuthorizationStartedAtMillis":1790316000000,
+              "lastAuthorizationSessionDataBytes":18000000
+            }
+        ]""".trimIndent()
+
+        val account = decodePrepaidAccounts(raw).getValue("25494159")
+
+        assertEquals("583921", account.pin)
+        assertEquals("TAIANA", account.name)
+        assertEquals(1_082_000_000L, account.dataBalanceBytes)
+        assertEquals(1_000_000L, account.dataDownloadBps)
+        assertEquals(1_000_000L, account.dataUploadBps)
+    }
+
+    @Test
+    fun `v1_6 redeemed vouchers remain readable`() {
+        val raw = """[
+            {
+              "code":"DATA-1G",
+              "name":"Data 1-1",
+              "downloadBps":1000000,
+              "uploadBps":1000000,
+              "downloadUnit":"MBPS",
+              "uploadUnit":"MBPS",
+              "quotaBytes":1000000000,
+              "quotaUnit":"GB",
+              "durationMinutes":43200,
+              "durationUnit":"DAYS",
+              "createdAtMillis":1790313000000,
+              "assignedDeviceId":"",
+              "activatedAtMillis":0,
+              "startTotalBytes":0,
+              "usedBytes":0,
+              "lastAuthorizationStartedAtMillis":0,
+              "lastAuthorizationSessionBytes":0,
+              "redeemedAccountNumber":"25494159",
+              "redeemedAtMillis":1790316921000,
+              "enabled":true
+            }
+        ]""".trimIndent()
+
+        val pass = decodeAccessPasses(raw).getValue("DATA-1G")
+
+        assertEquals("25494159", pass.redeemedAccountNumber)
+        assertEquals(1_000_000L, pass.downloadBps)
+        assertEquals(1_000_000_000L, pass.quotaBytes)
+        assertEquals(43_200L, pass.durationMinutes)
+    }
+
 }
