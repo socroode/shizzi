@@ -382,7 +382,7 @@ class ProbeRunner(private val context: Context) {
             id = "Q6",
             question = QUESTION_IPV6,
             outcome = if (ipv4Only) ProbeOutcome.PASS else ProbeOutcome.FAIL,
-            detail = "IPv4-only diagnostic: routableIpv6Address=$hasRoutableIpv6Address; " +
+            detail = "IPv4-only mode: routableIpv6Address=$hasRoutableIpv6Address; " +
                 "ipv6Dns=$hasIpv6Dns; linkProperties=${properties ?: "unavailable"}",
         )
     }
@@ -463,7 +463,7 @@ class ProbeRunner(private val context: Context) {
         const val QUESTION_UPSTREAM = "Does the tethering stack report the owned testtunN as sole upstream?"
         const val QUESTION_ELIGIBILITY =
             "Does the test network carry the capabilities tethering requires of an upstream?"
-        const val QUESTION_IPV6 = "Is this diagnostic TestNetwork IPv4-only?"
+        const val QUESTION_IPV6 = "Is the Shizzi TestNetwork IPv4-only?"
         const val QUESTION_DATAPATH = "Does the userspace stack attach to the TUN fd?"
         const val QUESTION_CALLBACK =
             "Does a NetworkCallback listen ever deliver the test network? " +
