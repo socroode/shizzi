@@ -186,8 +186,8 @@ fun HotspotManagerPage(
                 onClick = { editPortal = true },
             )
 
-            val availableVouchers = settings.accessPasses.values.count {
-                it.enabled && it.assignedDeviceId.isBlank()
+            val availableVouchers = settings.accessPasses.values.count { pass ->
+                voucherState(pass, settings, now) == VoucherState.AVAILABLE
             }
             val activeVouchers = settings.accessPasses.values.count { pass ->
                 voucherState(pass, settings, now) == VoucherState.ACTIVE
@@ -257,14 +257,22 @@ fun HotspotManagerPage(
                     ?: settings.clientPolicies[client.ip]
                 val usage = settings.monthlyUsageByDevice[deviceId]
 
+                val authorization = stats.portalAuthorizations.firstOrNull {
+                    it.ip == client.ip
+                } ?: if (activeClients.size == 1) {
+                    stats.portalAuthorizations.firstOrNull {
+                        it.ip == "192.0.2.2" || it.ip == "2001:db8::2"
+                    }
+                } else {
+                    null
+                }
+
                 ClientRow(
                     client = client,
                     displayName = stored?.name.orEmpty(),
                     priority = stored?.priority ?: ClientPriority.NORMAL,
                     usage = usage,
-                    voucher = settings.accessPasses.values.firstOrNull {
-                        it.assignedDeviceId == deviceId
-                    },
+                    voucher = authorization?.code?.let(settings.accessPasses::get),
                     onClick = {
                         editingTarget = PolicyTarget(
                             deviceId = deviceId,
@@ -380,10 +388,21 @@ fun HotspotManagerPage(
             ?: settings.clientPolicies[target.ip]
         val usage = settings.monthlyUsageByDevice[target.deviceId]
 
+        val targetAuthorization = stats.portalAuthorizations.firstOrNull {
+            it.ip == target.ip
+        } ?: if (stats.clients.size == 1) {
+            stats.portalAuthorizations.firstOrNull {
+                it.ip == "192.0.2.2" || it.ip == "2001:db8::2"
+            }
+        } else {
+            null
+        }
+
         ClientPolicySheet(
             target = target,
             stored = stored,
             usage = usage,
+            activePass = targetAuthorization?.code?.let(settings.accessPasses::get),
             onSave = { name, down, up, quota, priority, blocked, blockOnQuota ->
                 actions.onSetClientPolicy(
                     target.deviceId,
@@ -397,16 +416,6 @@ fun HotspotManagerPage(
                     blockOnQuota,
                 )
                 editingTarget = null
-            },
-            onPause = { durationMillis ->
-                actions.onSetClientPause(target.deviceId, target.ip, durationMillis)
-            },
-            accessPasses = settings.accessPasses,
-            onAssignAccessPass = { code ->
-                actions.onAssignAccessPass(code, target.deviceId)
-            },
-            onRevokeAccessPass = { code ->
-                actions.onRevokeAccessPass(code)
             },
             onResetMonthly = {
                 actions.onResetClientMonthlyUsage(target.deviceId)
@@ -540,11 +549,8 @@ private fun ClientPolicySheet(
     target: PolicyTarget,
     stored: ClientPolicySetting?,
     usage: MonthlyUsageRecord?,
-    accessPasses: Map<String, AccessPass>,
+    activePass: AccessPass?,
     onSave: (String, Int, Int, Long, ClientPriority, Boolean, Boolean) -> Unit,
-    onPause: (Long) -> Unit,
-    onAssignAccessPass: (String) -> Unit,
-    onRevokeAccessPass: (String) -> Unit,
     onResetMonthly: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -623,9 +629,6 @@ private fun ClientPolicySheet(
                 }
 
                 SectionLabel("Access pass")
-                val activePass = accessPasses.values.firstOrNull {
-                    it.assignedDeviceId == target.deviceId
-                }
                 if (activePass != null) {
                     ManagerMetric(
                         title = activePass.code,
@@ -703,11 +706,8 @@ private enum class VoucherFilter(val label: String) {
     DISABLED("Disabled"),
 }
 
-private fun voucherUsedBytes(pass: AccessPass, settings: Settings): Long {
-    if (pass.assignedDeviceId.isBlank()) return 0L
-    val total = settings.monthlyUsageByDevice[pass.assignedDeviceId]?.totalBytes ?: 0L
-    return (total - pass.startTotalBytes).coerceAtLeast(0L)
-}
+private fun voucherUsedBytes(pass: AccessPass, settings: Settings): Long =
+    pass.usedBytes.coerceAtLeast(0L)
 
 private fun voucherState(
     pass: AccessPass,
@@ -715,7 +715,7 @@ private fun voucherState(
     now: Long = System.currentTimeMillis(),
 ): VoucherState {
     if (!pass.enabled) return VoucherState.DISABLED
-    if (pass.assignedDeviceId.isBlank()) return VoucherState.AVAILABLE
+    if (pass.activatedAtMillis <= 0L) return VoucherState.AVAILABLE
     if (pass.isExpired(now)) return VoucherState.EXPIRED
     if (pass.quotaBytes > 0L && voucherUsedBytes(pass, settings) >= pass.quotaBytes) {
         return VoucherState.EXHAUSTED
@@ -1384,7 +1384,7 @@ private fun voucherCsv(settings: Settings): String {
     return buildString {
         appendLine(
             "code,name,state,download,upload,quota_bytes,duration_minutes," +
-                "activated_at,expires_at,device_id,used_bytes,remaining_bytes",
+                "activated_at,expires_at,used_bytes,remaining_bytes",
         )
         val now = System.currentTimeMillis()
         settings.accessPasses.values
@@ -1412,8 +1412,6 @@ private fun voucherCsv(settings: Settings): String {
                 append(pass.activatedAtMillis)
                 append(',')
                 append(pass.expiresAtMillis())
-                append(',')
-                append(csvCell(pass.assignedDeviceId))
                 append(',')
                 append(used)
                 append(',')
