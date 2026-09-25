@@ -5,6 +5,32 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-09-24
+
+### Added
+
+- Permanent prepaid accounts with an account number and PIN.
+- Account Editor in Shizzi to create accounts, copy credentials, enable or disable
+  accounts, and regenerate a PIN.
+- Local account login and one-use coupon recharge endpoints for clients on the
+  hotspot, including accounts that currently have no Internet balance.
+
+### Changed
+
+- Vouchers can now be redeemed as one-use account recharges instead of being the
+  customer's permanent identity.
+- A Data recharge adds the remaining Data balance, applies the new coupon's
+  speed, and starts the new validity period according to the recharge.
+- If a Data coupon is entered during an active unlimited period, the Data balance
+  waits behind unlimited access and its validity begins after unlimited ends.
+- Unlimited recharges accumulate validity. Existing queued Data is preserved
+  while unlimited access remains active.
+- The same prepaid account can move to another device; the previous live account
+  session is replaced.
+- Existing portable-voucher login remains available when no prepaid accounts
+  have been created.
+
+
 ## [1.5.0] - 2026-09-24
 
 ### Changed
