@@ -54,12 +54,29 @@ const (
 	attributionFallbackDumpTimeout  = 2500 * time.Millisecond
 )
 
-// Android's full tethering dump can grow to several megabytes on an active
-// hotspot. Reading all of it for each new TCP/UDP flow caused the resolver to
-// hit its timeout before the OPPO/ColorOS BPF rule could be parsed. Stop the
-// dump as soon as the IPv4 upstream section has been emitted; awk exits at the
-// downstream header, closing the pipe early instead of buffering the rest.
-const ipv4UpstreamDumpScript = `dumpsys tethering | awk '
+// OPPO/ColorOS exposes more than one "IPv4 Upstream" section. The first one can
+// be only a forwarding-surface header while the later "BPF stats:" section
+// contains the actual per-flow NAT tuples. Reading the first section was the
+// 1.7.9 bug: Shizzi exited before reaching the usable BPF rules.
+//
+// Stream dumpsys through awk and ignore every earlier IPv4 section. Once
+// "BPF stats:" is reached, emit only its IPv4 Upstream block and exit at the
+// matching IPv4 Downstream header. This keeps the read small even when the full
+// tethering dump is several megabytes.
+const bpfIPv4UpstreamDumpScript = `dumpsys tethering | awk '
+{
+  lower=tolower($0)
+}
+lower ~ /bpf stats:/ { in_bpf=1; next }
+in_bpf && lower ~ /ipv4 upstream:/ { print; in_upstream=1; next }
+in_bpf && in_upstream && lower ~ /ipv4 downstream:/ { print; exit }
+in_bpf && in_upstream { print }
+'`
+
+// Compatibility path for AOSP/OEM builds that do not label their useful
+// forwarding table with "BPF stats:". This is deliberately used only when the
+// BPF-targeted extractor produced no IPv4 Upstream header at all.
+const firstIPv4UpstreamDumpScript = `dumpsys tethering | awk '
 /IPv4 Upstream:/ { print; in_upstream=1; next }
 in_upstream && /IPv4 Downstream:/ { print; exit }
 in_upstream { print }
@@ -80,27 +97,39 @@ func newFlowAttributionResolver() *flowAttributionResolver {
 	}
 }
 
-func dumpTetheringState() (string, error) {
+func runTargetedTetheringDump(script string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), attributionDumpTimeout)
-	out, err := exec.CommandContext(ctx, "sh", "-c", ipv4UpstreamDumpScript).CombinedOutput()
-	ctxErr := ctx.Err()
-	cancel()
+	defer cancel()
 
-	if ctxErr == nil && err == nil {
-		raw := string(out)
+	out, err := exec.CommandContext(ctx, "sh", "-c", script).CombinedOutput()
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("targeted dumpsys tethering timeout: %w", ctx.Err())
+	}
+	if err != nil {
+		return "", fmt.Errorf("targeted dumpsys tethering: %w", err)
+	}
+	return string(out), nil
+}
+
+func dumpTetheringState() (string, error) {
+	// Preferred path for the Reno11/ColorOS format observed in the live field
+	// capture: skip the earlier empty forwarding surface and wait for BPF stats.
+	if raw, err := runTargetedTetheringDump(bpfIPv4UpstreamDumpScript); err == nil {
 		if strings.Contains(strings.ToLower(raw), "ipv4 upstream:") {
 			return raw, nil
 		}
 	}
 
-	// Preserve compatibility with OEMs whose tethering dump does not expose the
-	// standard section header. The fallback is only used when the fast section
-	// extractor cannot produce a usable section; OPPO/ColorOS takes the fast
-	// path observed in the field report.
-	if ctxErr != nil {
-		return "", fmt.Errorf("targeted dumpsys tethering timeout: %w", ctxErr)
+	// AOSP and some OEM builds expose a single useful IPv4 Upstream section
+	// without a "BPF stats:" label.
+	if raw, err := runTargetedTetheringDump(firstIPv4UpstreamDumpScript); err == nil {
+		if strings.Contains(strings.ToLower(raw), "ipv4 upstream:") {
+			return raw, nil
+		}
 	}
 
+	// Last-resort compatibility for headerless OEM dumps. This path is not used
+	// on the Reno11 because its BPF section is found by the preferred extractor.
 	fallbackCtx, fallbackCancel := context.WithTimeout(
 		context.Background(),
 		attributionFallbackDumpTimeout,
@@ -116,11 +145,7 @@ func dumpTetheringState() (string, error) {
 		return "", fmt.Errorf("fallback dumpsys tethering timeout: %w", fallbackCtx.Err())
 	}
 	if fallbackErr != nil {
-		return "", fmt.Errorf(
-			"targeted tethering dump failed (%v); fallback failed: %w",
-			err,
-			fallbackErr,
-		)
+		return "", fmt.Errorf("fallback dumpsys tethering: %w", fallbackErr)
 	}
 	return string(fallbackOut), nil
 }
