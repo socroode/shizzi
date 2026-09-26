@@ -5,6 +5,33 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.9] - 2026-09-26
+
+### Fixed
+
+- Replaced the multi-megabyte tethering-state read used by per-flow attribution
+  with an early-exit IPv4-upstream extractor. The command stops as soon as the
+  BPF `IPv4 Downstream` header is reached, so Shizzi no longer waits for the
+  rest of a large `dumpsys tethering` report before resolving a client.
+- Increased the attribution grace window to tolerate the short delay between a
+  downstream SYN entering Android tethering and its BPF/NAT rule becoming
+  visible.
+- Kept a compatibility fallback for OEM dumps that do not expose the standard
+  `IPv4 Upstream:` section.
+- Added a regression test using the live Reno11/ColorOS bind tuple captured in
+  field diagnostics:
+  `192.168.7.252:60252 -> 192.0.2.2:60252 -> 1.1.1.1:80`.
+- Rotated only the ephemeral prepaid browser-session epoch so failed 1.7.8 bind
+  sessions are cleared after upgrade; accounts, vouchers, balances and validity
+  remain intact.
+
+### Compatibility
+
+- Shizzi Conso remains **v1.2.0** and requires no reinstall.
+- Existing prepaid data, voucher records and hotspot settings are preserved.
+
+
+
 ## [1.7.8] - 2026-09-25
 
 ### Fixed

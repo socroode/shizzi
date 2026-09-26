@@ -59,6 +59,30 @@ func TestParseIPv4UpstreamAttributions(t *testing.T) {
 	}
 }
 
+const sampleLiveReno11TetheringDump = `BPF stats:
+  IPv4 Upstream: proto [inDstMac] iif(iface) src -> nat -> dst [outDstMac] pmtu age
+    tcp [2e:64:de:1d:42:a2] 47(47) 192.168.7.161:57748 -> 48(testtun0) 192.0.2.2:57748 -> 150.138.210.18:443 [00:00:00:00:00:00] 1500 -
+    tcp [2e:64:de:1d:42:a2] 47(47) 192.168.7.252:60252 -> 48(testtun0) 192.0.2.2:60252 -> 1.1.1.1:80 [00:00:00:00:00:00] 1500 15571ms
+  IPv4 Downstream:
+`
+
+func TestParseLiveReno11BindFlow(t *testing.T) {
+	flows := parseIPv4UpstreamAttributions(sampleLiveReno11TetheringDump)
+	key := flowAttributionKey{
+		Protocol:   "tcp",
+		PublicIP:   "192.0.2.2",
+		PublicPort: 60252,
+		DstIP:      "1.1.1.1",
+		DstPort:    80,
+	}
+	if got := flows[key]; got != "192.168.7.252" {
+		t.Fatalf("live Reno11 bind attribution=%q, want 192.168.7.252", got)
+	}
+	if len(flows) != 2 {
+		t.Fatalf("live Reno11 flow count=%d, want 2", len(flows))
+	}
+}
+
 func TestParseColorOSIPv4UpstreamAttributions(t *testing.T) {
 	flows := parseIPv4UpstreamAttributions(sampleColorOSTetheringDump)
 
