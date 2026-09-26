@@ -472,3 +472,14 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 		t.Fatal("shared tunnel IP itself became account-authorized")
 	}
 }
+
+
+func TestDeviceBindRedirectUsesUpstreamProbe(t *testing.T) {
+	page := injectPortalDeviceBindRedirect("<html><body>ok</body></html>", "abc123")
+	if !strings.Contains(page, "http://1.1.1.1/bind?session=abc123&attempt=0") {
+		t.Fatalf("bind redirect does not use the upstream probe: %s", page)
+	}
+	if strings.Contains(page, "198.18.0.1") {
+		t.Fatalf("bind redirect still uses the synthetic test-network address: %s", page)
+	}
+}
