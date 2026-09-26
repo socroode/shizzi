@@ -63,7 +63,7 @@ var ipv4UpstreamRulePattern = regexp.MustCompile(
 // strict pattern above misses a vendor-formatted rule, three IPv4:port tuples
 // are still enough to recover client -> translated -> destination.
 var ipv4TuplePattern = regexp.MustCompile(
-	`([0-9]{1,3}(?:\\.[0-9]{1,3}){3}):(\\d+)`,
+	`([0-9]{1,3}(?:\.[0-9]{1,3}){3}):(\d+)`,
 )
 
 func newFlowAttributionResolver() *flowAttributionResolver {
