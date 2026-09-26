@@ -241,6 +241,16 @@ func (m *TrafficManager) portalAuthorizedLocked(ip string) bool {
 		return false
 	}
 
+	// Once Android exposes more than one original downstream client in its
+	// tethering flow table, a still-unresolved 192.0.2.2 flow is ambiguous.
+	// Never let one account/voucher authorize that shared fallback for every
+	// phone. Resolved flows use the original client IP and continue normally.
+	if isSharedTunnelAddress(ip) &&
+		m.flowAttribution != nil &&
+		m.flowAttribution.hasMultipleClients() {
+		return false
+	}
+
 	now := time.Now().UnixMilli()
 	if auth.AccountNumber != "" {
 		return m.portalAccountInternetAllowedLocked(auth, now)
