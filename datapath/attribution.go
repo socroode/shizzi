@@ -53,7 +53,9 @@ const (
 )
 
 var ipv4UpstreamRulePattern = regexp.MustCompile(
-	`^(tcp|udp)s+[[^]]*]s+d+([^)]*)s+([0-9.]+):(d+)s+->s+d+([^)]*)s+([0-9.]+):(d+)s+->s+([0-9.]+):(d+)`,
+	"^(tcp|udp)\\s+\\[[^\\]]*\\]\\s+\\d+\\([^)]*\\)\\s+" +
+		"([0-9.]+):(\\d+)\\s+->\\s+\\d+\\([^)]*\\)\\s+" +
+		"([0-9.]+):(\\d+)\\s+->\\s+([0-9.]+):(\\d+)\\b",
 )
 
 func newFlowAttributionResolver() *flowAttributionResolver {
@@ -81,8 +83,7 @@ func parseIPv4UpstreamAttributions(raw string) map[flowAttributionKey]string {
 	result := make(map[flowAttributionKey]string)
 	inUpstream := false
 
-	for _, rawLine := range strings.Split(raw, "
-") {
+	for _, rawLine := range strings.Split(raw, "\n") {
 		line := strings.TrimSpace(rawLine)
 		switch {
 		case strings.HasPrefix(line, "IPv4 Upstream:"):
@@ -101,13 +102,14 @@ func parseIPv4UpstreamAttributions(raw string) map[flowAttributionKey]string {
 			continue
 		}
 
-		clientPort, errClient := parseAttributionPort(match[3])
-		publicPort, errPublic := parseAttributionPort(match[5])
-		dstPort, errDst := parseAttributionPort(match[7])
-		if errClient != nil || errPublic != nil || errDst != nil {
+		if _, err := parseAttributionPort(match[3]); err != nil {
 			continue
 		}
-		_ = clientPort // The original port is informative but not needed for reverse lookup.
+		publicPort, errPublic := parseAttributionPort(match[5])
+		dstPort, errDst := parseAttributionPort(match[7])
+		if errPublic != nil || errDst != nil {
+			continue
+		}
 
 		clientIP := match[2]
 		key := flowAttributionKey{
