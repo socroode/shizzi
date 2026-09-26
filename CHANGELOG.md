@@ -5,6 +5,40 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.8] - 2026-09-25
+
+### Fixed
+
+- Replaced the strict AOSP-only tethering forwarding-rule parser with a
+  tuple-based parser that tolerates OPPO/ColorOS interface-column formatting.
+  Per-device attribution now keys off the stable client, translated TUN and
+  destination IPv4:port tuples instead of requiring numeric `iif(iface)`
+  columns.
+- Added a guarded OEM fallback for dumps that omit the `IPv4 Upstream` header:
+  only private hotspot sources translated to Shizzi's shared `192.0.2.2`
+  address are accepted, so downstream rules cannot be mistaken for client
+  authorization.
+- Rotated the prepaid browser-session epoch so failed 1.7.7 bind sessions are
+  cleared after upgrade without deleting accounts, balances, PINs or vouchers.
+- Added regression coverage for OPPO-style forwarding rules and headerless OEM
+  dumps while retaining fail-closed shared-TUN behavior.
+
+### Diagnostics
+
+- Added probe **Q9** to include the IPv4 forwarding-rule surface used for
+  physical-client attribution. If an OPPO build still cannot bind a client,
+  the next probe report now contains the relevant tethering lines needed to
+  diagnose the OEM format directly.
+
+### Compatibility
+
+- Shizzi Conso remains **v1.2.0**; its account, status and recharge routes are
+  unchanged and it does not need to be reinstalled.
+- Existing prepaid accounts, voucher balances, validity and stored settings are
+  preserved from 1.7.7.
+
+
+
 ## [1.7.7] - 2026-09-25
 
 ### Fixed
