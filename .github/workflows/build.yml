@@ -122,7 +122,8 @@ jobs:
         if: ${{ env.SHIZZI_KEYSTORE_B64 != '' }}
         run: |
           ./gradlew assembleRelease -PmigrationBuild=true --no-daemon
-          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/shizzi-v1.7.3-migration.apk
+          mkdir -p signed-artifacts
+          cp app/build/outputs/apk/release/app-release.apk signed-artifacts/shizzi-v1.7.3-migration.apk
 
       - name: Build release APK
         run: ./gradlew assembleRelease --no-daemon
@@ -149,7 +150,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: shizzi-v1.7.3-migration-signed
-          path: app/build/outputs/apk/release/shizzi-v1.7.3-migration.apk
+          path: signed-artifacts/shizzi-v1.7.3-migration.apk
           if-no-files-found: error
 
       - name: Upload permanently signed release APK
