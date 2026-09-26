@@ -47,11 +47,24 @@ type flowAttributionResolver struct {
 }
 
 const (
-	attributionRefreshInterval = 120 * time.Millisecond
-	attributionRuleWait        = 650 * time.Millisecond
-	attributionRetryDelay      = 60 * time.Millisecond
-	attributionDumpTimeout     = 1200 * time.Millisecond
+	attributionRefreshInterval      = 180 * time.Millisecond
+	attributionRuleWait             = 1800 * time.Millisecond
+	attributionRetryDelay           = 80 * time.Millisecond
+	attributionDumpTimeout          = 1800 * time.Millisecond
+	attributionFallbackDumpTimeout  = 2500 * time.Millisecond
 )
+
+// Android's full tethering dump can grow to several megabytes on an active
+// hotspot. Reading all of it for each new TCP/UDP flow caused the resolver to
+// hit its timeout before the OPPO/ColorOS BPF rule could be parsed. Stop the
+// dump as soon as the IPv4 upstream section has been emitted; awk exits at the
+// downstream header, closing the pipe early instead of buffering the rest.
+const ipv4UpstreamDumpScript = `dumpsys tethering | awk '
+/IPv4 Upstream:/ { print; in_upstream=1; next }
+in_upstream && /IPv4 Downstream:/ { print; exit }
+in_upstream { print }
+'`
+
 
 var (
 	attributionProtocolPattern = regexp.MustCompile(`^(tcp|udp)\b`)
@@ -69,16 +82,47 @@ func newFlowAttributionResolver() *flowAttributionResolver {
 
 func dumpTetheringState() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), attributionDumpTimeout)
-	defer cancel()
+	out, err := exec.CommandContext(ctx, "sh", "-c", ipv4UpstreamDumpScript).CombinedOutput()
+	ctxErr := ctx.Err()
+	cancel()
 
-	out, err := exec.CommandContext(ctx, "dumpsys", "tethering").CombinedOutput()
-	if ctx.Err() != nil {
-		return "", fmt.Errorf("dumpsys tethering timeout: %w", ctx.Err())
+	if ctxErr == nil && err == nil {
+		raw := string(out)
+		if strings.Contains(strings.ToLower(raw), "ipv4 upstream:") {
+			return raw, nil
+		}
 	}
-	if err != nil {
-		return "", fmt.Errorf("dumpsys tethering: %w", err)
+
+	// Preserve compatibility with OEMs whose tethering dump does not expose the
+	// standard section header. The fallback is only used when the fast section
+	// extractor cannot produce a usable section; OPPO/ColorOS takes the fast
+	// path observed in the field report.
+	if ctxErr != nil {
+		return "", fmt.Errorf("targeted dumpsys tethering timeout: %w", ctxErr)
 	}
-	return string(out), nil
+
+	fallbackCtx, fallbackCancel := context.WithTimeout(
+		context.Background(),
+		attributionFallbackDumpTimeout,
+	)
+	defer fallbackCancel()
+
+	fallbackOut, fallbackErr := exec.CommandContext(
+		fallbackCtx,
+		"dumpsys",
+		"tethering",
+	).CombinedOutput()
+	if fallbackCtx.Err() != nil {
+		return "", fmt.Errorf("fallback dumpsys tethering timeout: %w", fallbackCtx.Err())
+	}
+	if fallbackErr != nil {
+		return "", fmt.Errorf(
+			"targeted tethering dump failed (%v); fallback failed: %w",
+			err,
+			fallbackErr,
+		)
+	}
+	return string(fallbackOut), nil
 }
 
 func parseIPv4UpstreamAttributions(raw string) map[flowAttributionKey]string {
