@@ -126,3 +126,25 @@ func TestAmbiguousSharedAuthorizationFailsClosedWithMultipleClients(t *testing.T
 		t.Fatal("resolved physical client was not authorized")
 	}
 }
+
+
+func TestParseIPv4UpstreamAttributionsAcceptsOEMFormatting(t *testing.T) {
+	raw := `Tethering:
+  Forwarding rules:
+    IPv4 Upstream: proto client translated destination
+      TCP vendor-prefix 192.168.43.31:51000 => testtun7 192.0.2.2:62000 => 142.250.74.14:443 age=3ms
+    IPv4 Downstream:
+`
+
+	flows := parseIPv4UpstreamAttributions(raw)
+	key := flowAttributionKey{
+		Protocol:   "tcp",
+		PublicIP:   "192.0.2.2",
+		PublicPort: 62000,
+		DstIP:      "142.250.74.14",
+		DstPort:    443,
+	}
+	if got := flows[key]; got != "192.168.43.31" {
+		t.Fatalf("OEM attribution=%q, want 192.168.43.31; flows=%v", got, flows)
+	}
+}
