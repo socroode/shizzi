@@ -401,15 +401,10 @@ func (m *TrafficManager) clientUsedLocked(ip string) int64 {
 	return client.UpBytes + client.DownBytes
 }
 
-func (m *TrafficManager) portalUsageStatusFor(ip string) portalUsageStatus {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+func (m *TrafficManager) portalUsageStatusFromAuthorizationLocked(
+	auth PortalAuthorization,
+) portalUsageStatus {
 	status := portalUsageStatus{}
-	auth, ok := m.portalAuthorized[ip]
-	if !ok {
-		return status
-	}
 	if auth.AccountNumber != "" {
 		account, kind, remaining, exists := m.portalAccountStateLocked(auth, time.Now().UnixMilli())
 		if !exists {
@@ -464,7 +459,7 @@ func (m *TrafficManager) portalUsageStatusFor(ip string) portalUsageStatus {
 		return status
 	}
 
-	status.Authorized = m.portalAuthorizedLocked(ip)
+	status.Authorized = m.portalAuthorizationAllowedLocked(auth, time.Now().UnixMilli())
 	status.Code = auth.Code
 	status.Plan = pass.Name
 	status.Speed = fmt.Sprintf(
@@ -515,6 +510,71 @@ func (m *TrafficManager) portalUsageStatusFor(ip string) portalUsageStatus {
 	return status
 }
 
+func (m *TrafficManager) portalAuthorizationAllowedLocked(
+	auth PortalAuthorization,
+	now int64,
+) bool {
+	if auth.AccountNumber != "" {
+		return m.portalAccountInternetAllowedLocked(auth, now)
+	}
+	pass, exists := m.portalPasses[auth.Code]
+	if !exists || !pass.Enabled {
+		return false
+	}
+	if auth.ExpiresAtMillis > 0 && now >= auth.ExpiresAtMillis {
+		return false
+	}
+	if pass.ExpiresAtMillis > 0 && now >= pass.ExpiresAtMillis {
+		return false
+	}
+	if pass.QuotaBytes > 0 {
+		unpersisted := auth.SessionUsedBytes - auth.AccountedSessionBytes
+		if unpersisted < 0 {
+			unpersisted = 0
+		}
+		if pass.UsedBytes+unpersisted >= pass.QuotaBytes {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *TrafficManager) portalUsageStatusFor(ip string) portalUsageStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	auth, ok := m.portalAuthorized[ip]
+	if !ok {
+		return portalUsageStatus{}
+	}
+	return m.portalUsageStatusFromAuthorizationLocked(auth)
+}
+
+func (m *TrafficManager) portalUsageStatusForSession(
+	ip, rawToken string,
+) portalUsageStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	token := strings.TrimSpace(rawToken)
+	if token != "" {
+		auth, ok := m.portalAuthorizationForSessionLocked(ip, token)
+		if !ok || auth.AccountNumber == "" {
+			return portalUsageStatus{}
+		}
+		return m.portalUsageStatusFromAuthorizationLocked(auth)
+	}
+
+	// Voucher sessions are still IP-based. Prepaid account sessions are not:
+	// a browser without the account token must never inherit another device's
+	// account merely because Android presents both devices through one TUN IP.
+	auth, ok := m.portalAuthorized[ip]
+	if !ok || auth.AccountNumber != "" {
+		return portalUsageStatus{}
+	}
+	return m.portalUsageStatusFromAuthorizationLocked(auth)
+}
+
 func writePortalResponseWithHeaders(
 	conn net.Conn,
 	contentType string,
@@ -541,8 +601,7 @@ func writePortalResponse(conn net.Conn, contentType string, body []byte) {
 }
 
 func (m *TrafficManager) servePortalStatusJSON(conn net.Conn, clientIP, sessionToken string) {
-	m.bindPortalAccountSession(clientIP, sessionToken)
-	status := m.portalUsageStatusFor(clientIP)
+	status := m.portalUsageStatusForSession(clientIP, sessionToken)
 	body, err := json.Marshal(status)
 	if err != nil {
 		body = []byte("{}")
@@ -715,20 +774,25 @@ func (m *TrafficManager) portalAuthorizationForSessionLocked(
 	ip, rawToken string,
 ) (PortalAuthorization, bool) {
 	token := strings.TrimSpace(rawToken)
-	if auth, ok := m.portalAuthorized[ip]; ok && auth.AccountNumber != "" {
-		if token == "" || auth.SessionToken == "" || auth.SessionToken == token {
-			if auth.SessionToken != "" {
-				if session, exists := m.portalAccountSessions[auth.SessionToken]; exists {
-					session.LastSeenMillis = time.Now().UnixMilli()
-					m.portalAccountSessions[auth.SessionToken] = session
-				}
-			}
-			return auth, true
-		}
-	}
 	if token == "" {
 		return PortalAuthorization{}, false
 	}
+
+	// A prepaid account is identified by its browser session token, never by
+	// the TUN source IP alone. Android can collapse several hotspot clients to
+	// the same test-network address (for example 192.0.2.2), so accepting a
+	// blank token here would expose one customer's account to another phone.
+	if auth, ok := m.portalAuthorized[ip]; ok &&
+		auth.AccountNumber != "" &&
+		auth.SessionToken == token {
+		if session, exists := m.portalAccountSessions[token]; exists &&
+			session.AccountNumber == auth.AccountNumber {
+			session.LastSeenMillis = time.Now().UnixMilli()
+			m.portalAccountSessions[token] = session
+			return auth, true
+		}
+	}
+
 	session, ok := m.portalAccountSessions[token]
 	if !ok {
 		return PortalAuthorization{}, false
@@ -743,12 +807,31 @@ func (m *TrafficManager) portalAuthorizationForSessionLocked(
 	m.portalAccountSessions[token] = session
 
 	auth := PortalAuthorization{
-		AccountNumber: session.AccountNumber,
-		SessionToken:  token,
+		AccountNumber:   session.AccountNumber,
+		SessionToken:    token,
 		StartedAtMillis: session.CreatedAtMillis,
 	}
 	m.portalAuthorized[ip] = auth
 	return auth, true
+}
+
+func (m *TrafficManager) portalRequestAuthorizedFor(
+	ip, rawToken string,
+) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	token := strings.TrimSpace(rawToken)
+	if token != "" {
+		auth, ok := m.portalAuthorizationForSessionLocked(ip, token)
+		return ok && m.portalAuthorizationAllowedLocked(auth, time.Now().UnixMilli())
+	}
+
+	auth, ok := m.portalAuthorized[ip]
+	if !ok || auth.AccountNumber != "" {
+		return false
+	}
+	return m.portalAuthorizationAllowedLocked(auth, time.Now().UnixMilli())
 }
 
 func (m *TrafficManager) bindPortalAccountSession(ip, rawToken string) string {
@@ -992,7 +1075,7 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 		return
 	}
 
-	internetOK := m.portalAuthorizedFor(clientIP)
+	internetOK := m.portalRequestAuthorizedFor(clientIP, sessionToken)
 	actionOK := false
 	message := ""
 	extraHeaders := []string{}
@@ -1030,7 +1113,7 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 		default:
 			actionOK, message = m.submitPortalCode(clientIP, values.Get("code"))
 		}
-		internetOK = m.portalAuthorizedFor(clientIP)
+		internetOK = m.portalRequestAuthorizedFor(clientIP, sessionToken)
 	}
 
 	page := m.renderPortalPage(clientIP, sessionToken, internetOK || actionOK, message)
