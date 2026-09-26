@@ -126,3 +126,68 @@ func TestAmbiguousSharedAuthorizationFailsClosedWithMultipleClients(t *testing.T
 		t.Fatal("resolved physical client was not authorized")
 	}
 }
+
+
+func TestFlowAttributionWaitsForDelayedRuleAndCachesResult(t *testing.T) {
+	resolver := newFlowAttributionResolver()
+	calls := 0
+	resolver.dumpFn = func() (string, error) {
+		calls++
+		if calls == 1 {
+			return "Tethering:\n  Forwarding rules:\n    IPv4 Upstream:\n", nil
+		}
+		return sampleTetheringDump, nil
+	}
+	resolver.lastRefresh = time.Time{}
+
+	key := flowAttributionKey{
+		Protocol:   "tcp",
+		PublicIP:   "192.0.2.2",
+		PublicPort: 61001,
+		DstIP:      "142.250.74.14",
+		DstPort:    443,
+	}
+
+	got := resolver.resolve(key, true)
+	if got != "192.168.43.20" {
+		t.Fatalf("delayed attribution=%q, want 192.168.43.20", got)
+	}
+	if calls < 2 {
+		t.Fatalf("dump calls=%d, want at least 2 retries", calls)
+	}
+
+	afterResolveCalls := calls
+	resolver.flows = make(map[flowAttributionKey]string)
+	resolver.lastRefresh = time.Time{}
+
+	got = resolver.resolve(key, false)
+	if got != "192.168.43.20" {
+		t.Fatalf("cached attribution=%q, want 192.168.43.20", got)
+	}
+	if calls != afterResolveCalls {
+		t.Fatalf("cache miss caused extra dumpsys call: before=%d after=%d", afterResolveCalls, calls)
+	}
+}
+
+func TestFlowAttributionStillFailsClosedAfterGraceWindow(t *testing.T) {
+	resolver := newFlowAttributionResolver()
+	resolver.dumpFn = func() (string, error) {
+		return "Tethering:\n  Forwarding rules:\n    IPv4 Upstream:\n", nil
+	}
+	resolver.lastRefresh = time.Time{}
+
+	start := time.Now()
+	got := resolver.resolve(flowAttributionKey{
+		Protocol:   "udp",
+		PublicIP:   "192.0.2.2",
+		PublicPort: 62002,
+		DstIP:      "142.250.74.14",
+		DstPort:    443,
+	}, true)
+	if got != "" {
+		t.Fatalf("unresolved attribution=%q, want empty fail-closed result", got)
+	}
+	if time.Since(start) < attributionRuleWait {
+		t.Fatalf("resolver failed before grace window elapsed: %s", time.Since(start))
+	}
+}
