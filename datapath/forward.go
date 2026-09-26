@@ -64,7 +64,7 @@ func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer, traffic *Traf
 			uint16(id.RemotePort),
 			addressString(id.LocalAddress),
 			uint16(id.LocalPort),
-			id.LocalPort == 80,
+			true,
 		)
 	}
 
@@ -112,14 +112,15 @@ func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer, traffic *Traf
 func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer, traffic *TrafficManager) bool {
 	id := request.ID()
 	clientIP := sourceOf(id)
-	if traffic != nil {
+	bypassPortal := id.LocalPort == 53
+	if traffic != nil && !bypassPortal {
 		clientIP = traffic.resolveFlowClient(
 			"udp",
 			clientIP,
 			uint16(id.RemotePort),
 			addressString(id.LocalAddress),
 			uint16(id.LocalPort),
-			false,
+			true,
 		)
 	}
 
@@ -136,7 +137,6 @@ func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer, traffic *Traf
 	}
 
 	client := gonet.NewUDPConn(&queue, endpoint)
-	bypassPortal := id.LocalPort == 53
 	go relayDatagrams(client, upstream, clientIP, traffic, bypassPortal)
 	return true
 }
