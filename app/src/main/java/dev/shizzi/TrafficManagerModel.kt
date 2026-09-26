@@ -685,7 +685,7 @@ fun portalConfigJson(settings: Settings): String =
         put("title", settings.portalTitle)
         put("message", settings.portalMessage)
         put("html", settings.portalHtml)
-        put("sessionEpoch", "1.7.10-bpf-stats-v1")
+        put("sessionEpoch", "1.7.11-bind-grace-v1")
         put("passes", JSONArray().apply {
             settings.accessPasses.values
                 .sortedBy { it.code }
