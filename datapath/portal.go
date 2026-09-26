@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -85,8 +86,15 @@ type PortalAccountSession struct {
 
 const (
 	portalSessionCookieName = "shizzi_session"
-	portalBindAddress       = "198.18.0.1"
-	portalLocalAddress      = "192.0.2.1"
+
+	// The bind probe must look like ordinary upstream HTTP traffic so Android
+	// creates the tethering/NAT flow entry used by flow attribution. 198.18.0.1
+	// stayed entirely inside the synthetic test network on affected OPPO builds,
+	// so every /bind request remained visible as the shared 192.0.2.2 address.
+	// 1.1.1.1 is only used as the destination tuple; Shizzi intercepts /bind
+	// before any HTTP request is sent upstream.
+	portalBindAddress  = "1.1.1.1"
+	portalLocalAddress = "192.0.2.1"
 )
 
 type portalConfigPayload struct {
@@ -593,11 +601,14 @@ func (m *TrafficManager) portalUsageStatusForSession(
 		if !ok || auth.AccountNumber == "" {
 			return portalUsageStatus{}
 		}
-		status := m.portalUsageStatusFromAuthorizationLocked(auth)
-		if session, exists := m.portalAccountSessions[token]; !exists || session.ClientIP == "" {
-			status.Authorized = false
+		session, exists := m.portalAccountSessions[token]
+		if !exists || session.ClientIP == "" {
+			// Do not expose another/stale prepaid account in Shizzi Conso while
+			// this browser token has not been physically bound to a hotspot
+			// client yet. The account becomes visible immediately after /bind.
+			return portalUsageStatus{}
 		}
-		return status
+		return m.portalUsageStatusFromAuthorizationLocked(auth)
 	}
 
 	// Voucher sessions are still IP-based. Prepaid account sessions are not:
@@ -1083,6 +1094,12 @@ func (m *TrafficManager) portalAccountPanelLocked(clientIP, sessionToken string)
 			"<label>PIN</label><input name=\"pin\" inputmode=\"numeric\" autocomplete=\"current-password\" placeholder=\"6 chiffres\" required>" +
 			"<button type=\"submit\">Se connecter</button></form></section>"
 	}
+	session, sessionExists := m.portalAccountSessions[strings.TrimSpace(sessionToken)]
+	if !sessionExists || session.ClientIP == "" {
+		return "<section class=\"account-box login-box\"><div class=\"eyebrow\">COMPTE PRÉPAYÉ</div><h2>Identification de cet appareil…</h2>" +
+			"<p class=\"muted\">Connexion validée. Shizzi associe maintenant ce téléphone à son compte avant d’ouvrir Internet.</p></section>"
+	}
+
 	account, exists := m.portalAccounts[auth.AccountNumber]
 	if !exists {
 		return ""
@@ -1171,10 +1188,31 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 			return
 		}
 		if isSharedTunnelAddress(clientIP) || clientIP == "" {
+			attempt, _ := strconv.Atoi(req.URL.Query().Get("attempt"))
+			if attempt < 0 {
+				attempt = 0
+			}
+			if attempt >= 12 {
+				retryURL := fmt.Sprintf(
+					"http://%s/bind?session=%s&attempt=0&retry=%d",
+					portalBindAddress,
+					url.QueryEscape(sessionToken),
+					time.Now().UnixMilli(),
+				)
+				body := fmt.Sprintf(
+					"<!doctype html><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"+
+						"<title>Identification Shizzi</title><p>Impossible d’identifier cet appareil pour le moment.</p>"+
+						"<p><a href=\"%s\">Réessayer</a></p>",
+					html.EscapeString(retryURL),
+				)
+				writePortalResponse(conn, "text/html; charset=utf-8", []byte(body))
+				return
+			}
 			retryURL := fmt.Sprintf(
-				"http://%s/bind?session=%s&retry=%d",
+				"http://%s/bind?session=%s&attempt=%d&retry=%d",
 				portalBindAddress,
 				url.QueryEscape(sessionToken),
+				attempt+1,
 				time.Now().UnixMilli(),
 			)
 			body := fmt.Sprintf(
@@ -1508,7 +1546,7 @@ func writePortalRedirect(conn net.Conn, target string) {
 
 func injectPortalDeviceBindRedirect(page, sessionToken string) string {
 	target := fmt.Sprintf(
-		"http://%s/bind?session=%s",
+		"http://%s/bind?session=%s&attempt=0",
 		portalBindAddress,
 		url.QueryEscape(sessionToken),
 	)
