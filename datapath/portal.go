@@ -968,7 +968,16 @@ func (m *TrafficManager) submitPortalRechargeWithSession(
 }
 
 func (m *TrafficManager) submitPortalRecharge(ip, rawCode string) (bool, string) {
-	return m.submitPortalRechargeWithSession(ip, rawCode, "")
+	// Internal compatibility helper: recover the already-authenticated account
+	// session for this IP. Browser requests never use this shortcut; the HTTP
+	// /account/recharge route always supplies its own session token.
+	m.mu.Lock()
+	token := ""
+	if auth, ok := m.portalAuthorized[ip]; ok && auth.AccountNumber != "" {
+		token = auth.SessionToken
+	}
+	m.mu.Unlock()
+	return m.submitPortalRechargeWithSession(ip, rawCode, token)
 }
 
 func (m *TrafficManager) portalAccountPanelLocked(clientIP, sessionToken string) string {
