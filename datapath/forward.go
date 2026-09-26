@@ -69,7 +69,9 @@ func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer, traffic *Traf
 	}
 
 	if id.LocalPort == 80 && traffic != nil &&
-		(traffic.portalRequiredFor(clientIP) || addressString(id.LocalAddress) == "192.0.2.1") {
+		(traffic.portalRequiredFor(clientIP) ||
+			addressString(id.LocalAddress) == portalLocalAddress ||
+			addressString(id.LocalAddress) == portalBindAddress) {
 		var queue waiter.Queue
 		endpoint, tcpipErr := request.CreateEndpoint(&queue)
 		if tcpipErr != nil {
