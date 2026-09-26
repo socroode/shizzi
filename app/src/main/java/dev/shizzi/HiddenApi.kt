@@ -36,8 +36,8 @@ object HiddenApiCatalog {
             memberName = "createTunInterface",
             since = 29,
             notes = "Two overloads exist, taking LinkAddress[] and " +
-                "Collection<LinkAddress>. Both are probed, and both are passed " +
-                "the IPv4 and IPv6 TUN addresses together.",
+                "Collection<LinkAddress>. Both are probed. Shizzi 1.7.3 " +
+                "passes only the IPv4 TUN address.",
         ),
         HiddenApiPath(
             id = "TestNetworkManager.setupTestNetwork",
@@ -45,8 +45,8 @@ object HiddenApiCatalog {
             memberName = "setupTestNetwork",
             since = 29,
             notes = "The (LinkProperties, boolean, IBinder) overload is used so " +
-                "the network carries IPv6 DNS servers, without which tethering " +
-                "will not provision IPv6 downstream; falls back to " +
+                "DNS can be supplied explicitly. Shizzi 1.7.3 " +
+                "supplies IPv4 DNS only; falls back to " +
                 "(String iface, IBinder binder). Requires MANAGE_TEST_NETWORKS, " +
                 "held by shell UID 2000.",
         ),
@@ -128,7 +128,7 @@ object HiddenApiCatalog {
 }
 
 val TEST_NETWORK_DNS_SERVERS: List<InetAddress>
-    get() = listOf("2001:4860:4860::8888", "8.8.8.8").map(InetAddress::getByName)
+    get() = listOf("8.8.8.8").map(InetAddress::getByName)
 
 fun buildLinkAddress(address: InetAddress, prefixLength: Int): LinkAddress {
     val constructor = LinkAddress::class.java

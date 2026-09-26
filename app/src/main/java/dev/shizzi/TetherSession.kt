@@ -63,7 +63,7 @@ class TetherSession(private val context: Context) {
 
         val name = group.acquire(tunAddresses(), TEST_NETWORK_DNS_SERVERS, AVAILABILITY_TIMEOUT_MS)
         interfaceName = name
-        SessionLog.info("tun up: $name (mtu $TUN_MTU, $TUN_ADDRESS, $TUN_ADDRESS_V6)")
+        SessionLog.info("tun up: $name (mtu $TUN_MTU, IPv4-only $TUN_ADDRESS)")
 
         group.startDatapath(TUN_MTU)
         applyTrafficManagerConfig(group, managerConfigJson)
@@ -363,7 +363,6 @@ class TetherSession(private val context: Context) {
             add(ip)
             if (devices.size == 1) {
                 add(TUN_ADDRESS)
-                add(TUN_ADDRESS_V6)
             }
         }
 
@@ -714,16 +713,12 @@ class TetherSession(private val context: Context) {
 
     private fun tunAddresses() = listOf(
         buildLinkAddress(java.net.InetAddress.getByName(TUN_ADDRESS), TUN_PREFIX_LENGTH),
-        buildLinkAddress(java.net.InetAddress.getByName(TUN_ADDRESS_V6), TUN_PREFIX_LENGTH_V6),
     )
 
     private companion object {
         const val TAG = "TetherSession"
         const val TUN_ADDRESS = "192.0.2.2"
         const val TUN_PREFIX_LENGTH = 24
-
-        const val TUN_ADDRESS_V6 = "2001:db8::2"
-        const val TUN_PREFIX_LENGTH_V6 = 64
 
         const val TUN_MTU = 1500
         const val AVAILABILITY_TIMEOUT_MS = 10_000

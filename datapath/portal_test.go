@@ -242,11 +242,16 @@ func TestAccountPanelShowsAllocatedRateAndValidity(t *testing.T) {
 	  }]
 	}`, now+30*24*60*60*1000))
 
-	if ok, msg := manager.submitPortalAccountLogin("192.168.43.10", "25494159", "583921"); !ok {
+	ok, msg, token := manager.submitPortalAccountLoginWithSession(
+		"192.168.43.10",
+		"25494159",
+		"583921",
+	)
+	if !ok || token == "" {
 		t.Fatalf("account login rejected: %s", msg)
 	}
 	manager.mu.Lock()
-	panel := manager.portalAccountPanelLocked("192.168.43.10", "")
+	panel := manager.portalAccountPanelLocked("192.168.43.10", token)
 	manager.mu.Unlock()
 
 	for _, expected := range []string{"TAIANA", "1.08 GB", "1.00 Mbps", "Validité restante", "Voir ma consommation en direct"} {
@@ -351,5 +356,194 @@ func TestFreshAccountLoginInvalidatesPreviousBrowserSession(t *testing.T) {
 		firstToken,
 	); ok {
 		t.Fatal("invalidated first browser session was still able to recharge")
+	}
+}
+
+
+func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, `{
+	  "accounts": [
+	    {
+	      "number": "63057303",
+	      "pin": "583921",
+	      "name": "RONIU",
+	      "enabled": true,
+	      "dataBalanceBytes": 12000000000,
+	      "dataDownloadBps": 2000000,
+	      "dataUploadBps": 1000000
+	    },
+	    {
+	      "number": "70000002",
+	      "pin": "654321",
+	      "name": "CLIENT-B",
+	      "enabled": true,
+	      "dataBalanceBytes": 20000000000,
+	      "dataDownloadBps": 4000000,
+	      "dataUploadBps": 2000000
+	    }
+	  ]
+	}`)
+
+	const sharedIP = "192.0.2.2"
+	ok, message, roniuToken := manager.submitPortalAccountLoginWithSession(
+		sharedIP,
+		"63057303",
+		"583921",
+	)
+	if !ok || roniuToken == "" {
+		t.Fatalf("RONIU login failed: ok=%v token=%q message=%s", ok, roniuToken, message)
+	}
+
+	ok, message, clientToken := manager.submitPortalAccountLoginWithSession(
+		sharedIP,
+		"70000002",
+		"654321",
+	)
+	if !ok || clientToken == "" || clientToken == roniuToken {
+		t.Fatalf("CLIENT-B login failed: ok=%v token=%q message=%s", ok, clientToken, message)
+	}
+
+	manager.mu.Lock()
+	roniuPanel := manager.portalAccountPanelLocked(sharedIP, roniuToken)
+	clientPanel := manager.portalAccountPanelLocked(sharedIP, clientToken)
+	anonymousPanel := manager.portalAccountPanelLocked(sharedIP, "")
+	invalidPanel := manager.portalAccountPanelLocked(sharedIP, "not-a-real-session")
+	manager.mu.Unlock()
+
+	if !strings.Contains(roniuPanel, "RONIU") || strings.Contains(roniuPanel, "CLIENT-B") {
+		t.Fatalf("RONIU session saw the wrong account: %s", roniuPanel)
+	}
+	if !strings.Contains(clientPanel, "CLIENT-B") || strings.Contains(clientPanel, "RONIU") {
+		t.Fatalf("CLIENT-B session saw the wrong account: %s", clientPanel)
+	}
+	for label, panel := range map[string]string{
+		"anonymous": anonymousPanel,
+		"invalid":   invalidPanel,
+	} {
+		if !strings.Contains(panel, "Connexion client") {
+			t.Fatalf("%s browser did not receive login page: %s", label, panel)
+		}
+		if strings.Contains(panel, "RONIU") || strings.Contains(panel, "CLIENT-B") {
+			t.Fatalf("%s browser leaked a prepaid account: %s", label, panel)
+		}
+	}
+
+	roniuStatus := manager.portalUsageStatusForSession(sharedIP, roniuToken)
+	clientStatus := manager.portalUsageStatusForSession(sharedIP, clientToken)
+	anonymousStatus := manager.portalUsageStatusForSession(sharedIP, "")
+	invalidStatus := manager.portalUsageStatusForSession(sharedIP, "not-a-real-session")
+
+	if !roniuStatus.Authenticated || roniuStatus.AccountName != "RONIU" ||
+		roniuStatus.AccountNumber != "63057303" {
+		t.Fatalf("RONIU status leaked or disappeared: %+v", roniuStatus)
+	}
+	if !clientStatus.Authenticated || clientStatus.AccountName != "CLIENT-B" ||
+		clientStatus.AccountNumber != "70000002" {
+		t.Fatalf("CLIENT-B status leaked or disappeared: %+v", clientStatus)
+	}
+	if anonymousStatus.Authenticated || anonymousStatus.AccountNumber != "" {
+		t.Fatalf("anonymous browser inherited an account: %+v", anonymousStatus)
+	}
+	if invalidStatus.Authenticated || invalidStatus.AccountNumber != "" {
+		t.Fatalf("invalid browser session inherited an account: %+v", invalidStatus)
+	}
+
+	if manager.portalRequestAuthorizedFor(sharedIP, "") {
+		t.Fatal("shared tunnel browser without a session token was treated as account-authorized")
+	}
+	if !manager.portalRequestAuthorizedFor(sharedIP, roniuToken) {
+		t.Fatal("RONIU browser session was not recognized as authorized")
+	}
+	if !manager.portalRequestAuthorizedFor(sharedIP, clientToken) {
+		t.Fatal("CLIENT-B browser session was not recognized as authorized")
+	}
+}
+
+
+func TestAmbiguousSharedAccountLoginIsRejectedWithMultipleClients(t *testing.T) {
+	manager := newTrafficManager()
+	manager.flowAttribution.dumpFn = func() (string, error) {
+		return sampleTetheringDump, nil
+	}
+	manager.flowAttribution.mu.Lock()
+	manager.flowAttribution.refreshLocked()
+	manager.flowAttribution.mu.Unlock()
+
+	manager.setPortalConfig(true, `{
+	  "accounts": [{
+	    "number": "63057303",
+	    "pin": "583921",
+	    "enabled": true,
+	    "dataBalanceBytes": 1000000000
+	  }]
+	}`)
+
+	ok, message, token := manager.submitPortalAccountLoginWithSession(
+		"192.0.2.2",
+		"63057303",
+		"583921",
+	)
+	if ok || token != "" {
+		t.Fatalf("ambiguous shared login unexpectedly succeeded: ok=%v token=%q", ok, token)
+	}
+	if !strings.Contains(message, "identifier cet appareil") {
+		t.Fatalf("unexpected identification message: %q", message)
+	}
+}
+
+func TestAmbiguousSharedVoucherLoginIsRejectedWithMultipleClients(t *testing.T) {
+	manager := newTrafficManager()
+	manager.flowAttribution.dumpFn = func() (string, error) {
+		return sampleTetheringDump, nil
+	}
+	manager.flowAttribution.mu.Lock()
+	manager.flowAttribution.refreshLocked()
+	manager.flowAttribution.mu.Unlock()
+	manager.setPortalConfig(true, portablePassConfig)
+
+	ok, message := manager.submitPortalCode("192.0.2.2", "ECO123")
+	if ok {
+		t.Fatal("ambiguous shared voucher unexpectedly authorized every client")
+	}
+	if !strings.Contains(message, "identifier cet appareil") {
+		t.Fatalf("unexpected identification message: %q", message)
+	}
+}
+
+func TestAccountSessionMovesFromSharedAddressToResolvedClient(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, `{
+	  "accounts": [{
+	    "number": "63057303",
+	    "pin": "583921",
+	    "enabled": true,
+	    "dataBalanceBytes": 1000000000
+	  }]
+	}`)
+
+	ok, message, token := manager.submitPortalAccountLoginWithSession(
+		"192.0.2.2",
+		"63057303",
+		"583921",
+	)
+	if !ok || token == "" {
+		t.Fatalf("single-client shared login failed: %s", message)
+	}
+
+	manager.mu.Lock()
+	auth, rebound := manager.portalAuthorizationForSessionLocked("192.168.43.20", token)
+	_, staleShared := manager.portalAuthorized["192.0.2.2"]
+	resolved := manager.portalAuthorized["192.168.43.20"]
+	manager.mu.Unlock()
+
+	if !rebound || auth.AccountNumber != "63057303" {
+		t.Fatalf("session did not rebind to resolved client: rebound=%v auth=%+v", rebound, auth)
+	}
+	if staleShared {
+		t.Fatal("shared authorization remained after session moved to resolved client")
+	}
+	if resolved.SessionToken != token {
+		t.Fatalf("resolved client token=%q, want %q", resolved.SessionToken, token)
 	}
 }
