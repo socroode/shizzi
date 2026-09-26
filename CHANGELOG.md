@@ -5,6 +5,29 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.7] - 2026-09-25
+
+### Fixed
+
+- Reworked prepaid device binding after OPPO field testing showed that the
+  synthetic `198.18.0.1` bind page could remain inside the shared TUN path and
+  loop forever on “Identification de cet appareil…”.
+- Device binding now uses an ordinary upstream HTTP destination tuple
+  (`1.1.1.1`) so Android tethering creates the NAT attribution entry before
+  Shizzi intercepts `/bind`; the bind request itself is never sent upstream.
+- Added a bounded bind retry instead of an endless identification loop.
+- Shizzi Conso/status no longer exposes a prepaid account identity until that
+  browser session has been physically associated with its hotspot client.
+- Rotated the prepaid session epoch so stale unbound 1.7.5/1.7.6 browser
+  sessions are cleared on upgrade while accounts, balances and vouchers remain.
+
+### Compatibility
+
+- Keeps the 1.7.6 IPv4 datapath and per-flow attribution behavior.
+- Shizzi Conso remains **v1.2.0** and does not require reinstalling for this
+  hotspot-side fix.
+
+
 ## [1.7.6] - 2026-09-25
 
 ### Fixed
