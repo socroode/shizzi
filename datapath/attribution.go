@@ -54,9 +54,9 @@ const (
 )
 
 var (
-	attributionProtocolPattern = regexp.MustCompile(`^(tcp|udp)\\b`)
+	attributionProtocolPattern = regexp.MustCompile(`^(tcp|udp)\b`)
 	attributionEndpointPattern = regexp.MustCompile(
-		`([0-9]{1,3}(?:\\.[0-9]{1,3}){3}):(\\d{1,5})`,
+		`([0-9]{1,3}(?:\.[0-9]{1,3}){3}):(\d{1,5})`,
 	)
 )
 
