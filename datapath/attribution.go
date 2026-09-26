@@ -49,6 +49,7 @@ type flowAttributionResolver struct {
 const (
 	attributionRefreshInterval      = 180 * time.Millisecond
 	attributionRuleWait             = 1800 * time.Millisecond
+	portalBindAttributionRuleWait   = 8 * time.Second
 	attributionRetryDelay           = 80 * time.Millisecond
 	attributionDumpTimeout          = 1800 * time.Millisecond
 	attributionFallbackDumpTimeout  = 2500 * time.Millisecond
@@ -238,14 +239,22 @@ func (r *flowAttributionResolver) resolve(
 	key flowAttributionKey,
 	waitForRule bool,
 ) string {
+	grace := time.Duration(0)
+	if waitForRule {
+		grace = attributionRuleWait
+	}
+	return r.resolveWithGrace(key, grace)
+}
+
+func (r *flowAttributionResolver) resolveWithGrace(
+	key flowAttributionKey,
+	grace time.Duration,
+) string {
 	if r == nil {
 		return ""
 	}
 
-	deadline := time.Now()
-	if waitForRule {
-		deadline = deadline.Add(attributionRuleWait)
-	}
+	deadline := time.Now().Add(grace)
 
 	for {
 		r.mu.Lock()
@@ -267,7 +276,7 @@ func (r *flowAttributionResolver) resolve(
 		}
 		r.mu.Unlock()
 
-		if !waitForRule || time.Now().After(deadline) {
+		if grace <= 0 || time.Now().After(deadline) {
 			r.mu.Lock()
 			r.unresolvedFlows++
 			r.mu.Unlock()
