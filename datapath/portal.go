@@ -809,21 +809,6 @@ func (m *TrafficManager) portalAuthorizationForSessionLocked(
 		return PortalAuthorization{}, false
 	}
 
-	// A prepaid account is identified by its browser session token, never by
-	// the TUN source IP alone. Android can collapse several hotspot clients to
-	// the same test-network address (for example 192.0.2.2), so accepting a
-	// blank token here would expose one customer's account to another phone.
-	if auth, ok := m.portalAuthorized[ip]; ok &&
-		auth.AccountNumber != "" &&
-		auth.SessionToken == token {
-		if session, exists := m.portalAccountSessions[token]; exists &&
-			session.AccountNumber == auth.AccountNumber {
-			session.LastSeenMillis = time.Now().UnixMilli()
-			m.portalAccountSessions[token] = session
-			return auth, true
-		}
-	}
-
 	session, ok := m.portalAccountSessions[token]
 	if !ok {
 		return PortalAuthorization{}, false
@@ -831,10 +816,31 @@ func (m *TrafficManager) portalAuthorizationForSessionLocked(
 	account, ok := m.portalAccounts[session.AccountNumber]
 	if !ok || !account.Enabled {
 		delete(m.portalAccountSessions, token)
+		if session.ClientIP != "" {
+			if auth, exists := m.portalAuthorized[session.ClientIP]; exists &&
+				auth.SessionToken == token {
+				delete(m.portalAuthorized, session.ClientIP)
+			}
+		}
 		return PortalAuthorization{}, false
 	}
+
 	now := time.Now().UnixMilli()
 	session.LastSeenMillis = now
+
+	// Local captive-portal requests may all arrive as Android's shared
+	// 192.0.2.2 address. Never bind that shared address to a prepaid account.
+	// The /bind bridge is routed through the normal tethering datapath so it can
+	// be attributed back to the real downstream client IP.
+	if !isSharedTunnelAddress(ip) && ip != "" {
+		if session.ClientIP != "" && session.ClientIP != ip {
+			if previous, exists := m.portalAuthorized[session.ClientIP]; exists &&
+				previous.SessionToken == token {
+				delete(m.portalAuthorized, session.ClientIP)
+			}
+		}
+		session.ClientIP = ip
+	}
 	m.portalAccountSessions[token] = session
 
 	auth := PortalAuthorization{
@@ -842,7 +848,16 @@ func (m *TrafficManager) portalAuthorizationForSessionLocked(
 		SessionToken:    token,
 		StartedAtMillis: session.CreatedAtMillis,
 	}
-	m.portalAuthorized[ip] = auth
+
+	if session.ClientIP != "" {
+		if existing, exists := m.portalAuthorized[session.ClientIP]; exists &&
+			existing.AccountNumber == session.AccountNumber &&
+			existing.SessionToken == token {
+			existing.StartedAtMillis = session.CreatedAtMillis
+			auth = existing
+		}
+		m.portalAuthorized[session.ClientIP] = auth
+	}
 	return auth, true
 }
 
@@ -855,7 +870,16 @@ func (m *TrafficManager) portalRequestAuthorizedFor(
 	token := strings.TrimSpace(rawToken)
 	if token != "" {
 		auth, ok := m.portalAuthorizationForSessionLocked(ip, token)
-		return ok && m.portalAuthorizationAllowedLocked(auth, time.Now().UnixMilli())
+		if !ok {
+			return false
+		}
+		if auth.AccountNumber != "" {
+			session, exists := m.portalAccountSessions[token]
+			if !exists || session.ClientIP == "" {
+				return false
+			}
+		}
+		return m.portalAuthorizationAllowedLocked(auth, time.Now().UnixMilli())
 	}
 
 	auth, ok := m.portalAuthorized[ip]
@@ -873,6 +897,16 @@ func (m *TrafficManager) bindPortalAccountSession(ip, rawToken string) string {
 		return strings.TrimSpace(rawToken)
 	}
 	return auth.SessionToken
+}
+
+func (m *TrafficManager) portalSessionBoundIP(rawToken string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, ok := m.portalAccountSessions[strings.TrimSpace(rawToken)]
+	if !ok {
+		return ""
+	}
+	return session.ClientIP
 }
 
 func (m *TrafficManager) submitPortalAccountLoginWithSession(
