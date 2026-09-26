@@ -684,7 +684,9 @@ button{width:100%;margin-top:20px;border:0;border-radius:15px;padding:14px 16px;
 <script>
 async function refreshNow(){
   try{
-    const r=await fetch('/status.json?ts='+Date.now(),{cache:'no-store'});
+    const pageSession=new URLSearchParams(window.location.search).get('session')||'';
+    const suffix=pageSession?'&session='+encodeURIComponent(pageSession):'';
+    const r=await fetch('/status.json?ts='+Date.now()+suffix,{cache:'no-store'});
     const s=await r.json();
     const hasIdentity=!!(s.code||s.accountNumber);
     document.getElementById('accountName').textContent=s.accountName|| (hasIdentity?'Compte Shizzi':'Aucun compte connecté');
@@ -944,20 +946,32 @@ func (m *TrafficManager) submitPortalAccountLoginWithSession(
 		return false, "Impossible de créer la session du compte.", ""
 	}
 	now := time.Now().UnixMilli()
-	m.portalAccountSessions[token] = PortalAccountSession{
+	session := PortalAccountSession{
 		Token:           token,
 		AccountNumber:   number,
 		CreatedAtMillis: now,
 		LastSeenMillis:  now,
 	}
-	m.portalAuthorized[ip] = PortalAuthorization{
-		AccountNumber: number,
-		SessionToken:  token,
-		StartedAtMillis: now,
+	if !isSharedTunnelAddress(ip) && ip != "" {
+		session.ClientIP = ip
+		m.portalAuthorized[ip] = PortalAuthorization{
+			AccountNumber:   number,
+			SessionToken:    token,
+			StartedAtMillis: now,
+		}
 	}
-	if account.UnlimitedUntilMillis > now ||
+	m.portalAccountSessions[token] = session
+
+	hasInternet := account.UnlimitedUntilMillis > now ||
 		(account.DataBalanceBytes > 0 &&
-			(account.DataExpiresAtMillis <= 0 || now < account.DataExpiresAtMillis)) {
+			(account.DataExpiresAtMillis <= 0 || now < account.DataExpiresAtMillis))
+	if session.ClientIP == "" {
+		if hasInternet {
+			return true, "Compte connecté. Identification de cet appareil en cours…", token
+		}
+		return true, "Compte connecté. Identification de cet appareil en cours; recharge disponible.", token
+	}
+	if hasInternet {
 		return true, "Compte connecté. Accès Internet actif.", token
 	}
 	return true, "Compte connecté. Rechargez votre compte pour accéder à Internet.", token
@@ -1008,10 +1022,17 @@ func (m *TrafficManager) submitPortalRechargeWithSession(
 	pass.RedeemedAtMillis = now
 	m.portalAccounts[account.Number] = account
 	m.portalPasses[code] = pass
-	m.portalAuthorized[ip] = auth
+	authorizationIP := ip
+	if session, exists := m.portalAccountSessions[auth.SessionToken]; exists &&
+		session.ClientIP != "" {
+		authorizationIP = session.ClientIP
+	}
+	if !isSharedTunnelAddress(authorizationIP) {
+		m.portalAuthorized[authorizationIP] = auth
+	}
 
 	m.portalRechargeClaims = append(m.portalRechargeClaims, PortalRechargeClaim{
-		IP:              ip,
+		IP:              authorizationIP,
 		AccountNumber:   account.Number,
 		Code:            code,
 		ClaimedAtMillis: now,
@@ -1109,7 +1130,7 @@ func (m *TrafficManager) portalAccountPanelLocked(clientIP, sessionToken string)
 			"<input type=\"hidden\" name=\"session\" value=\"%s\">"+
 			"<input name=\"code\" autocomplete=\"one-time-code\" autocapitalize=\"characters\" placeholder=\"Saisir le coupon\" required>"+
 			"<button type=\"submit\">Recharger mon compte</button></form>"+
-			"<a class=\"status-link\" href=\"/status\">Voir ma consommation en direct</a></section>",
+			"<a class=\"status-link\" href=\"/status?session=%s\">Voir ma consommation en direct</a></section>",
 		html.EscapeString(displayName),
 		html.EscapeString(account.Number),
 		stateClass,
@@ -1120,6 +1141,7 @@ func (m *TrafficManager) portalAccountPanelLocked(clientIP, sessionToken string)
 		html.EscapeString(upText),
 		html.EscapeString(expiresText),
 		html.EscapeString(auth.SessionToken),
+		url.QueryEscape(auth.SessionToken),
 	)
 }
 
