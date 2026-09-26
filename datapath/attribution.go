@@ -3,6 +3,7 @@ package datapath
 import (
 	"context"
 	"fmt"
+	"net"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -52,10 +53,11 @@ const (
 	attributionDumpTimeout     = 1200 * time.Millisecond
 )
 
-var ipv4UpstreamRulePattern = regexp.MustCompile(
-	"^(tcp|udp)\\s+\\[[^\\]]*\\]\\s+\\d+\\([^)]*\\)\\s+" +
-		"([0-9.]+):(\\d+)\\s+->\\s+\\d+\\([^)]*\\)\\s+" +
-		"([0-9.]+):(\\d+)\\s+->\\s+([0-9.]+):(\\d+)\\b",
+var (
+	attributionProtocolPattern = regexp.MustCompile(`^(tcp|udp)\b`)
+	attributionEndpointPattern = regexp.MustCompile(
+		`([0-9]{1,3}(?:\.[0-9]{1,3}){3}):(\d{1,5})`,
+	)
 )
 
 func newFlowAttributionResolver() *flowAttributionResolver {
@@ -82,48 +84,77 @@ func dumpTetheringState() (string, error) {
 func parseIPv4UpstreamAttributions(raw string) map[flowAttributionKey]string {
 	result := make(map[flowAttributionKey]string)
 	inUpstream := false
+	sawUpstreamHeader := false
 
 	for _, rawLine := range strings.Split(raw, "\n") {
 		line := strings.TrimSpace(rawLine)
+		lower := strings.ToLower(line)
 		switch {
-		case strings.HasPrefix(line, "IPv4 Upstream:"):
+		case strings.Contains(lower, "ipv4 upstream"):
 			inUpstream = true
+			sawUpstreamHeader = true
 			continue
-		case strings.HasPrefix(line, "IPv4 Downstream:"):
+		case strings.Contains(lower, "ipv4 downstream"):
 			inUpstream = false
 			continue
 		}
-		if !inUpstream {
+
+		protocolMatch := attributionProtocolPattern.FindStringSubmatch(lower)
+		if len(protocolMatch) != 2 {
 			continue
 		}
 
-		match := ipv4UpstreamRulePattern.FindStringSubmatch(line)
-		if len(match) != 8 {
+		endpoints := attributionEndpointPattern.FindAllStringSubmatch(line, -1)
+		if len(endpoints) < 3 {
 			continue
 		}
 
-		if _, err := parseAttributionPort(match[3]); err != nil {
+		clientIP := endpoints[0][1]
+		publicIP := endpoints[1][1]
+		dstIP := endpoints[2][1]
+
+		// AOSP and OEM builds format the interface columns differently. The
+		// stable part of the forwarding-rule line is the three IPv4:port tuples.
+		// If an explicit upstream section exists, trust it. When an OEM omits the
+		// section header, only accept a private downstream source translated to
+		// Shizzi's shared TUN address; this prevents a downstream rule from being
+		// mistaken for an upstream rule.
+		if sawUpstreamHeader {
+			if !inUpstream {
+				continue
+			}
+		} else if !isLikelyHotspotClient(clientIP) || !isSharedTunnelAddress(publicIP) {
 			continue
 		}
-		publicPort, errPublic := parseAttributionPort(match[5])
-		dstPort, errDst := parseAttributionPort(match[7])
+
+		if net.ParseIP(clientIP) == nil || net.ParseIP(publicIP) == nil || net.ParseIP(dstIP) == nil {
+			continue
+		}
+
+		if _, err := parseAttributionPort(endpoints[0][2]); err != nil {
+			continue
+		}
+		publicPort, errPublic := parseAttributionPort(endpoints[1][2])
+		dstPort, errDst := parseAttributionPort(endpoints[2][2])
 		if errPublic != nil || errDst != nil {
 			continue
 		}
 
-		clientIP := match[2]
 		key := flowAttributionKey{
-			Protocol:   strings.ToLower(match[1]),
-			PublicIP:   match[4],
+			Protocol:   protocolMatch[1],
+			PublicIP:   publicIP,
 			PublicPort: publicPort,
-			DstIP:      match[6],
+			DstIP:      dstIP,
 			DstPort:    dstPort,
 		}
-		if clientIP != "" {
-			result[key] = clientIP
-		}
+		result[key] = clientIP
 	}
 	return result
+}
+
+func isLikelyHotspotClient(raw string) bool {
+	ip := net.ParseIP(raw)
+	return ip != nil && ip.To4() != nil && ip.IsPrivate()
 }
 
 func parseAttributionPort(raw string) (uint16, error) {

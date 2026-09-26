@@ -14,6 +14,21 @@ const sampleTetheringDump = `Tethering:
       tcp [00:00:00:00:00:00] 33(testtun0) 142.250.74.14:443 -> 12(wlan0) 192.0.2.2:61001 -> 192.168.43.20:50123 [aa:bb:cc:dd:ee:ff] 1500 20ms
 `
 
+
+const sampleColorOSTetheringDump = `Tethering:
+  Forwarding rules:
+    IPv4 Upstream: proto [inDstMac] iif iface src -> oif iface nat -> dst
+      tcp [aa:bb:cc:dd:ee:ff] wlan0 192.168.101.12:52345 -> testtun9 192.0.2.2:41432 -> 1.1.1.1:80 [00:00:00:00:00:00] 1500
+      udp [aa:bb:cc:dd:ee:11] wlan0 192.168.101.13:53001 -> testtun9 192.0.2.2:41433 -> 142.250.74.14:443 [00:00:00:00:00:00] 1500
+    IPv4 Downstream:
+      tcp [00:00:00:00:00:00] testtun9 1.1.1.1:80 -> wlan0 192.0.2.2:41432 -> 192.168.101.12:52345
+`
+
+const sampleColorOSHeaderlessDump = `Forwarding rules:
+  tcp [aa:bb:cc:dd:ee:ff] wlan0 192.168.101.20:50123 -> testtun9 192.0.2.2:61001 -> 1.1.1.1:80
+  tcp [00:00:00:00:00:00] testtun9 1.1.1.1:80 -> wlan0 192.0.2.2:61001 -> 192.168.101.20:50123
+`
+
 func TestParseIPv4UpstreamAttributions(t *testing.T) {
 	flows := parseIPv4UpstreamAttributions(sampleTetheringDump)
 
@@ -41,6 +56,49 @@ func TestParseIPv4UpstreamAttributions(t *testing.T) {
 
 	if len(flows) != 2 {
 		t.Fatalf("flow count=%d, want 2 upstream rules only", len(flows))
+	}
+}
+
+func TestParseColorOSIPv4UpstreamAttributions(t *testing.T) {
+	flows := parseIPv4UpstreamAttributions(sampleColorOSTetheringDump)
+
+	tcpKey := flowAttributionKey{
+		Protocol:   "tcp",
+		PublicIP:   "192.0.2.2",
+		PublicPort: 41432,
+		DstIP:      "1.1.1.1",
+		DstPort:    80,
+	}
+	if got := flows[tcpKey]; got != "192.168.101.12" {
+		t.Fatalf("ColorOS tcp attribution=%q, want 192.168.101.12", got)
+	}
+
+	udpKey := flowAttributionKey{
+		Protocol:   "udp",
+		PublicIP:   "192.0.2.2",
+		PublicPort: 41433,
+		DstIP:      "142.250.74.14",
+		DstPort:    443,
+	}
+	if got := flows[udpKey]; got != "192.168.101.13" {
+		t.Fatalf("ColorOS udp attribution=%q, want 192.168.101.13", got)
+	}
+}
+
+func TestParseHeaderlessOEMAttributionRejectsDownstreamDirection(t *testing.T) {
+	flows := parseIPv4UpstreamAttributions(sampleColorOSHeaderlessDump)
+	key := flowAttributionKey{
+		Protocol:   "tcp",
+		PublicIP:   "192.0.2.2",
+		PublicPort: 61001,
+		DstIP:      "1.1.1.1",
+		DstPort:    80,
+	}
+	if got := flows[key]; got != "192.168.101.20" {
+		t.Fatalf("headerless attribution=%q, want 192.168.101.20", got)
+	}
+	if len(flows) != 1 {
+		t.Fatalf("headerless flow count=%d, want upstream rule only", len(flows))
 	}
 }
 
