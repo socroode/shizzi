@@ -155,3 +155,35 @@ func TestPortalSessionEpochInvalidatesLegacyBrowserSessionsOnly(t *testing.T) {
 		t.Fatalf("account balance was not preserved across epoch change: %+v exists=%v", account, exists)
 	}
 }
+
+
+func TestUnboundPrepaidSessionStaysPrivateUntilDeviceBind(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, prepaidBindingConfig(t, "1.7.7-upstream-bind-v1", 1))
+
+	const sharedIP = "192.0.2.2"
+	ok, message, token := manager.submitPortalAccountLoginWithSession(
+		sharedIP,
+		"82000000",
+		"730000",
+	)
+	if !ok || token == "" {
+		t.Fatalf("shared login failed: ok=%v token=%q message=%s", ok, token, message)
+	}
+
+	before := manager.portalUsageStatusForSession(sharedIP, token)
+	if before.Authenticated || before.Authorized || before.AccountNumber != "" || before.AccountName != "" {
+		t.Fatalf("unbound prepaid identity leaked into status: %+v", before)
+	}
+
+	const realIP = "192.168.43.77"
+	manager.bindPortalAccountSession(realIP, token)
+
+	after := manager.portalUsageStatusForSession(sharedIP, token)
+	if !after.Authenticated || !after.Authorized {
+		t.Fatalf("bound prepaid status did not become active: %+v", after)
+	}
+	if after.AccountNumber != "82000000" || after.AccountName != "CLIENT-01" {
+		t.Fatalf("wrong bound prepaid identity: %+v", after)
+	}
+}

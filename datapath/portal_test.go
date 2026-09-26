@@ -411,11 +411,16 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 	invalidPanel := manager.portalAccountPanelLocked(sharedIP, "not-a-real-session")
 	manager.mu.Unlock()
 
-	if !strings.Contains(roniuPanel, "RONIU") || strings.Contains(roniuPanel, "CLIENT-B") {
-		t.Fatalf("RONIU session saw the wrong account: %s", roniuPanel)
-	}
-	if !strings.Contains(clientPanel, "CLIENT-B") || strings.Contains(clientPanel, "RONIU") {
-		t.Fatalf("CLIENT-B session saw the wrong account: %s", clientPanel)
+	for label, panel := range map[string]string{
+		"RONIU":    roniuPanel,
+		"CLIENT-B": clientPanel,
+	} {
+		if !strings.Contains(panel, "Identification de cet appareil") {
+			t.Fatalf("%s unbound browser did not receive binding page: %s", label, panel)
+		}
+		if strings.Contains(panel, "RONIU") || strings.Contains(panel, "CLIENT-B") {
+			t.Fatalf("%s unbound browser leaked a prepaid account: %s", label, panel)
+		}
 	}
 	for label, panel := range map[string]string{
 		"anonymous": anonymousPanel,
@@ -434,19 +439,15 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 	anonymousStatus := manager.portalUsageStatusForSession(sharedIP, "")
 	invalidStatus := manager.portalUsageStatusForSession(sharedIP, "not-a-real-session")
 
-	if !roniuStatus.Authenticated || roniuStatus.AccountName != "RONIU" ||
-		roniuStatus.AccountNumber != "63057303" {
-		t.Fatalf("RONIU status leaked or disappeared: %+v", roniuStatus)
-	}
-	if !clientStatus.Authenticated || clientStatus.AccountName != "CLIENT-B" ||
-		clientStatus.AccountNumber != "70000002" {
-		t.Fatalf("CLIENT-B status leaked or disappeared: %+v", clientStatus)
-	}
-	if anonymousStatus.Authenticated || anonymousStatus.AccountNumber != "" {
-		t.Fatalf("anonymous browser inherited an account: %+v", anonymousStatus)
-	}
-	if invalidStatus.Authenticated || invalidStatus.AccountNumber != "" {
-		t.Fatalf("invalid browser session inherited an account: %+v", invalidStatus)
+	for label, status := range map[string]portalUsageStatus{
+		"RONIU":     roniuStatus,
+		"CLIENT-B":  clientStatus,
+		"anonymous": anonymousStatus,
+		"invalid":   invalidStatus,
+	} {
+		if status.Authenticated || status.Authorized || status.AccountNumber != "" || status.AccountName != "" {
+			t.Fatalf("%s unbound/invalid browser leaked an account: %+v", label, status)
+		}
 	}
 
 	if manager.portalRequestAuthorizedFor(sharedIP, "") {
@@ -468,7 +469,29 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 	if !manager.portalRequestAuthorizedFor(sharedIP, clientToken) {
 		t.Fatal("CLIENT-B browser session was not authorized after client binding")
 	}
+
+	roniuStatus = manager.portalUsageStatusForSession(sharedIP, roniuToken)
+	clientStatus = manager.portalUsageStatusForSession(sharedIP, clientToken)
+	if !roniuStatus.Authenticated || roniuStatus.AccountName != "RONIU" ||
+		roniuStatus.AccountNumber != "63057303" {
+		t.Fatalf("RONIU bound status is wrong: %+v", roniuStatus)
+	}
+	if !clientStatus.Authenticated || clientStatus.AccountName != "CLIENT-B" ||
+		clientStatus.AccountNumber != "70000002" {
+		t.Fatalf("CLIENT-B bound status is wrong: %+v", clientStatus)
+	}
 	if manager.portalAuthorizedFor(sharedIP) {
 		t.Fatal("shared tunnel IP itself became account-authorized")
+	}
+}
+
+
+func TestDeviceBindRedirectUsesUpstreamProbe(t *testing.T) {
+	page := injectPortalDeviceBindRedirect("<html><body>ok</body></html>", "abc123")
+	if !strings.Contains(page, "http://1.1.1.1/bind?session=abc123&attempt=0") {
+		t.Fatalf("bind redirect does not use the upstream probe: %s", page)
+	}
+	if strings.Contains(page, "198.18.0.1") {
+		t.Fatalf("bind redirect still uses the synthetic test-network address: %s", page)
 	}
 }
