@@ -247,6 +247,7 @@ class ProbeRunner(private val context: Context) {
         report.recordSkip("Q8", QUESTION_CALLBACK, "no test network")
         report.recordSkip("Q4", QUESTION_PREFER, "no test network")
         report.recordSkip("Q5", QUESTION_UPSTREAM, "no test network")
+        report.recordSkip("Q9", QUESTION_ATTRIBUTION, "no test network")
         report.recordSkip("Q6", QUESTION_IPV6, "no test network")
     }
 
@@ -343,11 +344,54 @@ class ProbeRunner(private val context: Context) {
                 append(selectionLines(observation.rawOutput))
             },
         )
+        probeAttributionSurface(report, observation.rawOutput)
     }
 
     private fun selectionLines(rawOutput: String): String =
         rawOutput.lineSequence()
             .filter { line -> SELECTION_KEYS.any { key -> line.contains(key) } }
+            .joinToString("\n")
+            .take(DUMP_EXCERPT_CHARS)
+
+
+    private fun probeAttributionSurface(report: ProbeReportBuilder, rawOutput: String) {
+        val excerpt = attributionLines(rawOutput)
+        val hasUpstreamSection = rawOutput.contains("IPv4 Upstream", ignoreCase = true)
+        val hasSharedTunFlow = excerpt.lineSequence().any { line ->
+            line.contains("192.0.2.2:") &&
+                (line.trimStart().startsWith("tcp", ignoreCase = true) ||
+                    line.trimStart().startsWith("udp", ignoreCase = true))
+        }
+        val exposed = hasUpstreamSection || hasSharedTunFlow
+
+        report.record(
+            id = "Q9",
+            question = QUESTION_ATTRIBUTION,
+            outcome = if (exposed) ProbeOutcome.PASS else ProbeOutcome.FAIL,
+            detail = if (excerpt.isBlank()) {
+                "No IPv4 forwarding-rule surface found in dumpsys tethering. " +
+                    "Connect a hotspot client and retry the probe."
+            } else {
+                buildString {
+                    append("upstreamSection=$hasUpstreamSection; ")
+                    append("sharedTunFlow=$hasSharedTunFlow")
+                    append("\n--- attribution lines ---\n")
+                    append(excerpt)
+                }
+            },
+        )
+    }
+
+    private fun attributionLines(rawOutput: String): String =
+        rawOutput.lineSequence()
+            .filter { line ->
+                val trimmed = line.trimStart()
+                line.contains("IPv4 Upstream", ignoreCase = true) ||
+                    line.contains("IPv4 Downstream", ignoreCase = true) ||
+                    line.contains("192.0.2.2:") ||
+                    trimmed.startsWith("tcp", ignoreCase = true) ||
+                    trimmed.startsWith("udp", ignoreCase = true)
+            }
             .joinToString("\n")
             .take(DUMP_EXCERPT_CHARS)
 
@@ -417,6 +461,7 @@ class ProbeRunner(private val context: Context) {
             "Q8" to QUESTION_CALLBACK,
             "Q4" to QUESTION_PREFER,
             "Q5" to QUESTION_UPSTREAM,
+            "Q9" to QUESTION_ATTRIBUTION,
             "Q6" to QUESTION_IPV6,
         ).forEach { (id, question) -> report.recordSkip(id, question, reason) }
     }
@@ -461,6 +506,8 @@ class ProbeRunner(private val context: Context) {
         const val TAG = "ProbeRunner"
         const val QUESTION_PREFER = "Does TetheringManager.setPreferTestNetworks exist and accept the call?"
         const val QUESTION_UPSTREAM = "Does the tethering stack report the owned testtunN as sole upstream?"
+        const val QUESTION_ATTRIBUTION =
+            "Does dumpsys tethering expose the IPv4 forwarding surface used for per-device attribution?"
         const val QUESTION_ELIGIBILITY =
             "Does the test network carry the capabilities tethering requires of an upstream?"
         const val QUESTION_IPV6 = "Is the Shizzi TestNetwork IPv4-only?"
