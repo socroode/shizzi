@@ -2,6 +2,7 @@ package datapath
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 )
@@ -203,16 +204,29 @@ func (m *TrafficManager) resolveFlowClient(
 		return sourceIP
 	}
 
-	resolved := m.flowAttribution.resolve(
-		flowAttributionKey{
-			Protocol:   protocol,
-			PublicIP:   sourceIP,
-			PublicPort: sourcePort,
-			DstIP:      destinationIP,
-			DstPort:    destinationPort,
-		},
-		waitForRule,
-	)
+	key := flowAttributionKey{
+		Protocol:   protocol,
+		PublicIP:   sourceIP,
+		PublicPort: sourcePort,
+		DstIP:      destinationIP,
+		DstPort:    destinationPort,
+	}
+
+	grace := time.Duration(0)
+	if waitForRule {
+		grace = attributionRuleWait
+		if strings.EqualFold(protocol, "tcp") &&
+			destinationIP == portalBindAddress &&
+			destinationPort == 80 {
+			// ColorOS can publish the exact BPF/NAT tuple several seconds after
+			// the SYN reaches the shared test network. Keep the same flow open
+			// long enough for that rule to appear instead of creating a new
+			// /bind connection every 600 ms and perpetually chasing a fresh port.
+			grace = portalBindAttributionRuleWait
+		}
+	}
+
+	resolved := m.flowAttribution.resolveWithGrace(key, grace)
 	if resolved == "" {
 		return sourceIP
 	}
