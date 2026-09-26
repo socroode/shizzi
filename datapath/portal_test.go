@@ -452,10 +452,23 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 	if manager.portalRequestAuthorizedFor(sharedIP, "") {
 		t.Fatal("shared tunnel browser without a session token was treated as account-authorized")
 	}
+	if manager.portalRequestAuthorizedFor(sharedIP, roniuToken) {
+		t.Fatal("RONIU session was Internet-authorized before physical client binding")
+	}
+	if manager.portalRequestAuthorizedFor(sharedIP, clientToken) {
+		t.Fatal("CLIENT-B session was Internet-authorized before physical client binding")
+	}
+
+	manager.bindPortalAccountSession("192.168.43.10", roniuToken)
+	manager.bindPortalAccountSession("192.168.43.20", clientToken)
+
 	if !manager.portalRequestAuthorizedFor(sharedIP, roniuToken) {
-		t.Fatal("RONIU browser session was not recognized as authorized")
+		t.Fatal("RONIU browser session was not authorized after client binding")
 	}
 	if !manager.portalRequestAuthorizedFor(sharedIP, clientToken) {
-		t.Fatal("CLIENT-B browser session was not recognized as authorized")
+		t.Fatal("CLIENT-B browser session was not authorized after client binding")
+	}
+	if manager.portalAuthorizedFor(sharedIP) {
+		t.Fatal("shared tunnel IP itself became account-authorized")
 	}
 }

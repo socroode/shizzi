@@ -115,6 +115,7 @@ type TrafficManager struct {
 	portalTitle      string
 	portalMessage    string
 	portalHTML       string
+	portalSessionEpoch string
 	portalPasses          map[string]PortalPass
 	portalAccounts        map[string]PortalAccount
 	portalAuthorized      map[string]PortalAuthorization

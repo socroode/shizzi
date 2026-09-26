@@ -5,6 +5,26 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.5] - 2026-09-25
+
+### Fixed
+
+- Bound each prepaid browser session to the attributed physical hotspot client
+  before granting Internet access, preventing a third phone from displaying or
+  consuming another client's prepaid account through Android's shared TUN IP.
+- Added a dedicated client-binding bridge through the normal tethering path so
+  Android's NAT attribution can recover the original downstream IP even when
+  the local captive portal itself arrives as `192.0.2.2`.
+- Shared TUN addresses are no longer used as prepaid-account authorization
+  keys; ambiguous traffic remains fail-closed.
+- Added a session epoch so stale 1.7.4 in-memory/browser authorizations are
+  invalidated on upgrade without deleting accounts, balances, PINs or vouchers.
+- Kept the existing Shizzi Conso v1.2.0 routes and `/status.json` contract;
+  status links now carry the current session when needed.
+- Added regression coverage for 3 and 10 independent prepaid clients sharing
+  the local portal path.
+
+
 ## [1.7.4] - 2026-09-26
 
 ### Fixed
