@@ -242,11 +242,16 @@ func TestAccountPanelShowsAllocatedRateAndValidity(t *testing.T) {
 	  }]
 	}`, now+30*24*60*60*1000))
 
-	if ok, msg := manager.submitPortalAccountLogin("192.168.43.10", "25494159", "583921"); !ok {
+	ok, msg, token := manager.submitPortalAccountLoginWithSession(
+		"192.168.43.10",
+		"25494159",
+		"583921",
+	)
+	if !ok || token == "" {
 		t.Fatalf("account login rejected: %s", msg)
 	}
 	manager.mu.Lock()
-	panel := manager.portalAccountPanelLocked("192.168.43.10", "")
+	panel := manager.portalAccountPanelLocked("192.168.43.10", token)
 	manager.mu.Unlock()
 
 	for _, expected := range []string{"TAIANA", "1.08 GB", "1.00 Mbps", "Validité restante", "Voir ma consommation en direct"} {
