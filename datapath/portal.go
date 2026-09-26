@@ -1495,6 +1495,42 @@ func portalUsagePopup(planName, speedText, usedText, remainingText, expiresText 
 
 const portalValidationURL = "http://connectivitycheck.gstatic.com/generate_204"
 
+func writePortalRedirect(conn net.Conn, target string) {
+	body := []byte("Redirecting to Shizzi…")
+	headers := fmt.Sprintf(
+		"HTTP/1.1 302 Found\r\nLocation: %s\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: %d\r\n\r\n",
+		target,
+		len(body),
+	)
+	_, _ = io.WriteString(conn, headers)
+	_, _ = conn.Write(body)
+}
+
+func injectPortalDeviceBindRedirect(page, sessionToken string) string {
+	target := fmt.Sprintf(
+		"http://%s/bind?session=%s",
+		portalBindAddress,
+		url.QueryEscape(sessionToken),
+	)
+	bridge := fmt.Sprintf(`
+<script>
+(function(){
+  var target=%q;
+  setTimeout(function(){ window.location.replace(target); },250);
+})();
+</script>
+<noscript><p style="text-align:center"><a href="%s">Identifier cet appareil</a></p></noscript>`,
+		target,
+		html.EscapeString(target),
+	)
+
+	lower := strings.ToLower(page)
+	if index := strings.LastIndex(lower, "</body>"); index >= 0 {
+		return page[:index] + bridge + page[index:]
+	}
+	return page + bridge
+}
+
 func injectPortalValidationRedirect(page string) string {
 	bridge := fmt.Sprintf(`
 <script>
