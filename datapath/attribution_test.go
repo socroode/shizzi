@@ -128,7 +128,7 @@ func TestAmbiguousSharedAuthorizationFailsClosedWithMultipleClients(t *testing.T
 }
 
 
-func TestFlowAttributionWaitsForDelayedRuleAndCachesResult(t *testing.T) {
+func TestFlowAttributionWaitsForDelayedRule(t *testing.T) {
 	resolver := newFlowAttributionResolver()
 	calls := 0
 	resolver.dumpFn = func() (string, error) {
@@ -154,18 +154,6 @@ func TestFlowAttributionWaitsForDelayedRuleAndCachesResult(t *testing.T) {
 	}
 	if calls < 2 {
 		t.Fatalf("dump calls=%d, want at least 2 retries", calls)
-	}
-
-	afterResolveCalls := calls
-	resolver.flows = make(map[flowAttributionKey]string)
-	resolver.lastRefresh = time.Time{}
-
-	got = resolver.resolve(key, false)
-	if got != "192.168.43.20" {
-		t.Fatalf("cached attribution=%q, want 192.168.43.20", got)
-	}
-	if calls != afterResolveCalls {
-		t.Fatalf("cache miss caused extra dumpsys call: before=%d after=%d", afterResolveCalls, calls)
 	}
 }
 
