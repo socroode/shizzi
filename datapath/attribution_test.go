@@ -1,6 +1,7 @@
 package datapath
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -107,8 +108,11 @@ func TestAmbiguousSharedAuthorizationFailsClosedWithMultipleClients(t *testing.T
 		"63057303",
 		"583921",
 	)
-	if !ok || token == "" {
-		t.Fatalf("shared login failed: %s", message)
+	if ok || token != "" {
+		t.Fatalf("ambiguous shared login unexpectedly succeeded: ok=%v token=%q", ok, token)
+	}
+	if !strings.Contains(message, "identifier cet appareil") {
+		t.Fatalf("unexpected shared identification message: %q", message)
 	}
 	if manager.portalAuthorizedFor("192.0.2.2") {
 		t.Fatal("ambiguous shared TUN authorization leaked to multiple clients")
