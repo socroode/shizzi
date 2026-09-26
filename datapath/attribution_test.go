@@ -290,3 +290,48 @@ func TestFlowAttributionStillFailsClosedAfterGraceWindow(t *testing.T) {
 		t.Fatalf("resolver failed before grace window elapsed: %s", time.Since(start))
 	}
 }
+
+
+func TestPortalBindUsesExtendedAttributionGrace(t *testing.T) {
+	if got := flowAttributionGrace("tcp", portalBindAddress, 80, true); got != portalBindAttributionRuleWait {
+		t.Fatalf("bind grace=%s, want %s", got, portalBindAttributionRuleWait)
+	}
+	if got := flowAttributionGrace("tcp", "142.250.195.163", 443, true); got != attributionRuleWait {
+		t.Fatalf("ordinary TCP grace=%s, want %s", got, attributionRuleWait)
+	}
+	if got := flowAttributionGrace("udp", portalBindAddress, 80, true); got != attributionRuleWait {
+		t.Fatalf("non-TCP grace=%s, want %s", got, attributionRuleWait)
+	}
+	if got := flowAttributionGrace("tcp", portalBindAddress, 80, false); got != 0 {
+		t.Fatalf("no-wait bind grace=%s, want 0", got)
+	}
+}
+
+func TestFlowAttributionExtendedGraceKeepsSameBindTupleAlive(t *testing.T) {
+	resolver := newFlowAttributionResolver()
+	calls := 0
+	resolver.dumpFn = func() (string, error) {
+		calls++
+		if calls < 4 {
+			return "BPF stats:\n  IPv4 Upstream:\n  IPv4 Downstream:\n", nil
+		}
+		return sampleLiveReno11TetheringDump, nil
+	}
+	resolver.lastRefresh = time.Time{}
+
+	key := flowAttributionKey{
+		Protocol:   "tcp",
+		PublicIP:   "192.0.2.2",
+		PublicPort: 60252,
+		DstIP:      "1.1.1.1",
+		DstPort:    80,
+	}
+
+	got := resolver.resolveWithGrace(key, 1200*time.Millisecond)
+	if got != "192.168.7.252" {
+		t.Fatalf("extended bind attribution=%q, want 192.168.7.252", got)
+	}
+	if calls < 4 {
+		t.Fatalf("dump calls=%d, want at least 4 delayed refreshes", calls)
+	}
+}
