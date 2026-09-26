@@ -459,3 +459,91 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 		t.Fatal("CLIENT-B browser session was not recognized as authorized")
 	}
 }
+
+
+func TestAmbiguousSharedAccountLoginIsRejectedWithMultipleClients(t *testing.T) {
+	manager := newTrafficManager()
+	manager.flowAttribution.dumpFn = func() (string, error) {
+		return sampleTetheringDump, nil
+	}
+	manager.flowAttribution.mu.Lock()
+	manager.flowAttribution.refreshLocked()
+	manager.flowAttribution.mu.Unlock()
+
+	manager.setPortalConfig(true, `{
+	  "accounts": [{
+	    "number": "63057303",
+	    "pin": "583921",
+	    "enabled": true,
+	    "dataBalanceBytes": 1000000000
+	  }]
+	}`)
+
+	ok, message, token := manager.submitPortalAccountLoginWithSession(
+		"192.0.2.2",
+		"63057303",
+		"583921",
+	)
+	if ok || token != "" {
+		t.Fatalf("ambiguous shared login unexpectedly succeeded: ok=%v token=%q", ok, token)
+	}
+	if !strings.Contains(message, "identifier cet appareil") {
+		t.Fatalf("unexpected identification message: %q", message)
+	}
+}
+
+func TestAmbiguousSharedVoucherLoginIsRejectedWithMultipleClients(t *testing.T) {
+	manager := newTrafficManager()
+	manager.flowAttribution.dumpFn = func() (string, error) {
+		return sampleTetheringDump, nil
+	}
+	manager.flowAttribution.mu.Lock()
+	manager.flowAttribution.refreshLocked()
+	manager.flowAttribution.mu.Unlock()
+	manager.setPortalConfig(true, portablePassConfig)
+
+	ok, message := manager.submitPortalCode("192.0.2.2", "ECO123")
+	if ok {
+		t.Fatal("ambiguous shared voucher unexpectedly authorized every client")
+	}
+	if !strings.Contains(message, "identifier cet appareil") {
+		t.Fatalf("unexpected identification message: %q", message)
+	}
+}
+
+func TestAccountSessionMovesFromSharedAddressToResolvedClient(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, `{
+	  "accounts": [{
+	    "number": "63057303",
+	    "pin": "583921",
+	    "enabled": true,
+	    "dataBalanceBytes": 1000000000
+	  }]
+	}`)
+
+	ok, message, token := manager.submitPortalAccountLoginWithSession(
+		"192.0.2.2",
+		"63057303",
+		"583921",
+	)
+	if !ok || token == "" {
+		t.Fatalf("single-client shared login failed: %s", message)
+	}
+
+	manager.mu.Lock()
+	auth, rebound := manager.portalAuthorizationForSessionLocked("192.168.43.20", token)
+	_, staleShared := manager.portalAuthorized["192.0.2.2"]
+	resolved := manager.portalAuthorized["192.168.43.20"]
+	manager.mu.Unlock()
+
+	if !rebound || auth.AccountNumber != "63057303" {
+		t.Fatalf("session did not rebind to resolved client: rebound=%v auth=%+v", rebound, auth)
+	}
+	if staleShared {
+		t.Fatal("shared authorization remained after session moved to resolved client")
+	}
+	if resolved.SessionToken != token {
+		t.Fatalf("resolved client token=%q, want %q", resolved.SessionToken, token)
+	}
+}
