@@ -926,6 +926,13 @@ func (m *TrafficManager) portalSessionBoundIP(rawToken string) string {
 	return session.ClientIP
 }
 
+func (m *TrafficManager) portalSessionPending(rawToken string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, ok := m.portalAccountSessions[strings.TrimSpace(rawToken)]
+	return ok && session.ClientIP == ""
+}
+
 func (m *TrafficManager) submitPortalAccountLoginWithSession(
 	ip, rawNumber, rawPin string,
 ) (bool, string, string) {
@@ -1304,8 +1311,9 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	}
 
 	page := m.renderPortalPage(clientIP, sessionToken, internetOK || actionOK, message)
-	if freshLoginToken != "" && m.portalSessionBoundIP(freshLoginToken) == "" {
-		page = injectPortalDeviceBindRedirect(page, freshLoginToken)
+	if sessionToken != "" && m.portalSessionPending(sessionToken) &&
+		(freshLoginToken != "" || req.Method == http.MethodGet) {
+		page = injectPortalDeviceBindRedirect(page, sessionToken)
 	} else if internetOK && req.Method == http.MethodPost {
 		page = injectPortalValidationRedirect(page)
 	}
@@ -1557,7 +1565,7 @@ func injectPortalDeviceBindRedirect(page, sessionToken string) string {
   setTimeout(function(){ window.location.replace(target); },250);
 })();
 </script>
-<noscript><p style="text-align:center"><a href="%s">Identifier cet appareil</a></p></noscript>`,
+<p style="text-align:center"><a href="%s">Identifier cet appareil</a></p>`,
 		target,
 		html.EscapeString(target),
 	)

@@ -3,6 +3,7 @@ package datapath
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -185,5 +186,27 @@ func TestUnboundPrepaidSessionStaysPrivateUntilDeviceBind(t *testing.T) {
 	}
 	if after.AccountNumber != "82000000" || after.AccountName != "CLIENT-01" {
 		t.Fatalf("wrong bound prepaid identity: %+v", after)
+	}
+}
+
+func TestPendingAccountCanRetryDeviceBindWithoutRelogin(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, prepaidBindingConfig(t, "retry-bind", 1))
+	ok, message, token := manager.submitPortalAccountLoginWithSession(
+		"192.0.2.2", "82000000", "730000",
+	)
+	if !ok || token == "" {
+		t.Fatalf("login failed: %s", message)
+	}
+	if !manager.portalSessionPending(token) {
+		t.Fatal("unbound session must remain pending on a later page load")
+	}
+	page := injectPortalDeviceBindRedirect("<html><body>waiting</body></html>", token)
+	if !strings.Contains(page, "<a href=\"http://1.1.1.1/bind?session=") {
+		t.Fatal("pending page must offer a visible retry link when captive browser scripts stall")
+	}
+	manager.bindPortalAccountSession("192.168.7.161", token)
+	if manager.portalSessionPending(token) || !manager.portalAuthorizedFor("192.168.7.161") {
+		t.Fatal("successful bind did not finish the device association")
 	}
 }
