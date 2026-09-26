@@ -7,6 +7,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val migrationBuild = providers.gradleProperty("migrationBuild").orNull == "true"
+
 fun sourceFingerprint(projectDir: File): Int {
     val sources = File(projectDir, "src/main/java")
     if (!sources.isDirectory) return 0
@@ -60,8 +62,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 30
-        versionName = "1.7.1"
+        versionCode = if (migrationBuild) 36 else 37
+        versionName = if (migrationBuild) "1.7.6-migration" else "1.7.6"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 
@@ -93,6 +95,7 @@ android {
         }
 
         release {
+            isDebuggable = migrationBuild
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

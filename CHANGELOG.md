@@ -5,6 +5,117 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.6] - 2026-09-25
+
+### Fixed
+
+- Treated delayed Android tethering attribution as a general multi-user
+  datapath condition instead of a portal/YouTube-specific case.
+- New TCP flows and non-DNS UDP flows now wait briefly and retry attribution
+  before falling back to the secure shared-TUN path, covering HTTPS, QUIC,
+  Facebook, Messenger, TikTok, Play Store, games and other normal traffic.
+- Client attribution is resolved once when a TCP/UDP relay is created and that
+  client identity is then reused for the lifetime of the relay; individual
+  packets do not repeat tethering-state lookups.
+- DNS/UDP 53 bypasses the attribution wait and remains immediately available
+  for captive-portal and application name resolution.
+- Ambiguous unresolved shared-TUN traffic still fails closed once the grace
+  window is exhausted, preserving 1.7.5 account isolation.
+
+### Compatibility
+
+- Shizzi Conso remains **v1.2.0** and its routes/status contract are unchanged.
+- Existing prepaid accounts, vouchers, balances and session storage remain
+  compatible with 1.7.5.
+
+
+## [1.7.5] - 2026-09-25
+
+### Fixed
+
+- Bound each prepaid browser session to the attributed physical hotspot client
+  before granting Internet access, preventing a third phone from displaying or
+  consuming another client's prepaid account through Android's shared TUN IP.
+- Added a dedicated client-binding bridge through the normal tethering path so
+  Android's NAT attribution can recover the original downstream IP even when
+  the local captive portal itself arrives as `192.0.2.2`.
+- Shared TUN addresses are no longer used as prepaid-account authorization
+  keys; ambiguous traffic remains fail-closed.
+- Added a session epoch so stale 1.7.4 in-memory/browser authorizations are
+  invalidated on upgrade without deleting accounts, balances, PINs or vouchers.
+- Kept the existing Shizzi Conso v1.2.0 routes and `/status.json` contract;
+  status links now carry the current session when needed.
+- Added regression coverage for 3 and 10 independent prepaid clients sharing
+  the local portal path.
+
+
+## [1.7.4] - 2026-09-26
+
+### Fixed
+
+- Isolated prepaid account browser sessions per phone: a client without its own
+  session token can no longer inherit another customer's account on the shared
+  Shizzi test-network address.
+- Added Android tethering flow attribution so NATed traffic on `192.0.2.2`
+  can be mapped back to the original hotspot client before portal, quota and
+  bandwidth policy decisions.
+- Added fail-closed handling for ambiguous shared-TUN traffic when multiple
+  downstream clients are present, preventing one customer's authorization from
+  being reused by another phone.
+- Added regression tests for two simultaneous phones/accounts behind the shared
+  TUN path.
+
+### Compatibility
+
+- Built as arm64-v8a for Android 11+ and intended to update the permanently
+  signed 1.7.3 build on supported OPPO devices including Reno11.
+- Shizzi Conso remains v1.2.0; account pages continue to use the existing local
+  portal routes and now stay isolated by each browser session.
+
+
+## [1.7.3] - 2026-09-25
+
+### Fixed
+
+- Switched the Shizzi test network and TUN to IPv4-only after device testing showed that the previous dual-stack path could leave YouTube and Messenger waiting tens of seconds before falling back to IPv4.
+- Removed the IPv6 TUN address and IPv6 DNS advertisement from the active tethering path while keeping TCP, UDP/QUIC, MTU 1500, VPN handling, vouchers, quotas, prepaid accounts and traffic shaping unchanged.
+- Updated the compatibility probe so Q6 verifies that the published Shizzi test network has no routable IPv6 address or IPv6 DNS server.
+
+### Compatibility
+
+- Shizzi Conso remains **v1.2.0** and requires no update.
+- Existing prepaid accounts, vouchers, balances, validity and DataStore records remain unchanged from Shizzi 1.7.2.
+- The release workflow can produce a one-time signed debuggable migration APK so data from an older debug-signed installation can be restored before moving to the permanently signed stable build.
+
+## [1.7.2] - 2026-09-24
+
+### Fixed
+
+- The TUN/tethering compatibility probe now follows the same startup order as
+  the production session: stop the downstream, clear stale test-network state,
+  create and publish the new TUN, attach the datapath, prefer test networks,
+  then restart Wi-Fi tethering.
+- Stale Shizzi `testtunN` networks are torn down before a new probe TUN is
+  created, preventing Android from remaining attached to the previous test
+  network (for example `testtun8` while the current run owns `testtun9`).
+- Q5 now evaluates the owned TUN after the downstream restart instead of
+  intentionally testing the obsolete pre-TUN restart sequence.
+
+### Shizzi Conso 1.2.0
+
+- Simplified the app to a single **OUVRIR LA CONNEXION COMPTE** action.
+- Removed the direct **MA CONSOMMATION** and **RECHARGER MON COMPTE** shortcuts.
+- The account page remains the single customer entry point for login, active
+  plan, balance, speed, validity, recharge and live consumption.
+- The launcher still opens `http://192.0.2.1/`, so existing Shizzi account
+  and recharge routes remain unchanged.
+
+### Compatibility
+
+- Shizzi Conso **v1.2.0** is designed for Shizzi Hotspot 1.7.2.
+- Prepaid accounts, vouchers, balances, validity and existing DataStore records
+  remain unchanged from Shizzi 1.6.0/1.7.1.
+
 ## [1.7.1] - 2026-09-24
 
 ### Fixed

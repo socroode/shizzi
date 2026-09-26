@@ -26,6 +26,7 @@ jobs:
       SHIZZI_STORE_PASSWORD: ${{ secrets.SHIZZI_STORE_PASSWORD }}
       SHIZZI_KEY_ALIAS: ${{ secrets.SHIZZI_KEY_ALIAS }}
       SHIZZI_KEY_PASSWORD: ${{ secrets.SHIZZI_KEY_PASSWORD }}
+      SHIZZI_CERT_SHA256: ${{ secrets.SHIZZI_CERT_SHA256 }}
     steps:
       - uses: actions/checkout@v5
 
@@ -102,7 +103,11 @@ jobs:
         if: ${{ env.SHIZZI_KEYSTORE_B64 != '' }}
         shell: bash
         run: |
-          EXPECTED_SHA256="1F:6D:2E:EF:58:BF:9C:40:F0:9B:51:55:C9:CA:5F:CC:D4:AD:1F:C8:44:73:E9:B0:66:CC:FD:4F:9B:40:30:6B"
+          EXPECTED_SHA256="$SHIZZI_CERT_SHA256"
+          test -n "$EXPECTED_SHA256" || {
+            echo "SHIZZI_CERT_SHA256 is missing"
+            exit 1
+          }
           ACTUAL_SHA256="$(keytool -list -v \
             -keystore shizzi-release.jks \
             -storepass "$SHIZZI_STORE_PASSWORD" \
@@ -112,6 +117,13 @@ jobs:
             echo "Unexpected Shizzi signing certificate: $ACTUAL_SHA256"
             exit 1
           }
+
+      - name: Build one-time signed migration APK
+        if: ${{ env.SHIZZI_KEYSTORE_B64 != '' }}
+        run: |
+          ./gradlew assembleRelease -PmigrationBuild=true --no-daemon
+          mkdir -p signed-artifacts
+          cp app/build/outputs/apk/release/app-release.apk signed-artifacts/shizzi-v1.7.6-migration.apk
 
       - name: Build release APK
         run: ./gradlew assembleRelease --no-daemon
@@ -129,15 +141,23 @@ jobs:
       - name: Upload Shizzi Conso APK
         uses: actions/upload-artifact@v5
         with:
-          name: shizzi-conso-v1.1.0
+          name: shizzi-conso-v1.2.0
           path: conso/build/outputs/apk/debug/conso-debug.apk
+          if-no-files-found: error
+
+      - name: Upload one-time signed migration APK
+        if: ${{ env.SHIZZI_KEYSTORE_B64 != '' }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: shizzi-v1.7.6-migration-signed
+          path: signed-artifacts/shizzi-v1.7.6-migration.apk
           if-no-files-found: error
 
       - name: Upload permanently signed release APK
         if: ${{ env.SHIZZI_KEYSTORE_B64 != '' }}
         uses: actions/upload-artifact@v5
         with:
-          name: shizzi-v1.7.1-signed
+          name: shizzi-v1.7.6-signed
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
@@ -145,7 +165,7 @@ jobs:
         if: ${{ env.SHIZZI_KEYSTORE_B64 == '' }}
         uses: actions/upload-artifact@v5
         with:
-          name: shizzi-v1.7.1-unsigned
+          name: shizzi-v1.7.6-unsigned
           path: app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
 

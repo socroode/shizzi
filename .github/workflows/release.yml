@@ -5,16 +5,15 @@
 #
 #     git tag -a v0.3.0 -m "v0.3.0 — ..." && git push origin v0.3.0
 #
-# Requires four secrets. Without them the signing step fails loudly rather
-# than publishing an unsigned APK, because an APK signed with the wrong key —
-# or no key — cannot update an existing install:
+# Requires the permanent Shizzi signing secrets used by build.yml. Without
+# them the signing step fails loudly rather than publishing an APK signed with
+# a different identity:
 #
-#   KEYSTORE_BASE64    base64 of shizzi-release.jks
-#   KEYSTORE_PASSWORD  storePassword
-#   KEY_ALIAS          keyAlias
-#   KEY_PASSWORD       keyPassword
-#
-# Produce KEYSTORE_BASE64 with:  base64 -i shizzi-release.jks | pbcopy
+#   SHIZZI_KEYSTORE_B64
+#   SHIZZI_STORE_PASSWORD
+#   SHIZZI_KEY_ALIAS
+#   SHIZZI_KEY_PASSWORD
+#   SHIZZI_CERT_SHA256
 name: Release
 
 on:
@@ -67,24 +66,35 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Restore signing key
+      - name: Restore permanent signing key
         env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          SHIZZI_KEYSTORE_B64: ${{ secrets.SHIZZI_KEYSTORE_B64 }}
+          SHIZZI_STORE_PASSWORD: ${{ secrets.SHIZZI_STORE_PASSWORD }}
+          SHIZZI_KEY_ALIAS: ${{ secrets.SHIZZI_KEY_ALIAS }}
+          SHIZZI_KEY_PASSWORD: ${{ secrets.SHIZZI_KEY_PASSWORD }}
+          SHIZZI_CERT_SHA256: ${{ secrets.SHIZZI_CERT_SHA256 }}
         run: |
-          if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::error::KEYSTORE_BASE64 is not set. A release APK must be signed with the same key as previous releases, or it cannot update an existing install."
+          if [ -z "$SHIZZI_KEYSTORE_B64" ]; then
+            echo "::error::SHIZZI_KEYSTORE_B64 is not set."
             exit 1
           fi
-          echo "$KEYSTORE_BASE64" | base64 -d > shizzi-release.jks
+          printf '%s' "$SHIZZI_KEYSTORE_B64" | base64 --decode > shizzi-release.jks
           cat > keystore.properties <<EOF
           storeFile=shizzi-release.jks
-          storePassword=$KEYSTORE_PASSWORD
-          keyAlias=$KEY_ALIAS
-          keyPassword=$KEY_PASSWORD
+          storePassword=$SHIZZI_STORE_PASSWORD
+          keyAlias=$SHIZZI_KEY_ALIAS
+          keyPassword=$SHIZZI_KEY_PASSWORD
           EOF
+
+          test -n "$SHIZZI_CERT_SHA256" || {
+            echo "::error::SHIZZI_CERT_SHA256 is missing"
+            exit 1
+          }
+          ACTUAL_SHA256="$(keytool -list -v             -keystore shizzi-release.jks             -storepass "$SHIZZI_STORE_PASSWORD"             -alias "$SHIZZI_KEY_ALIAS"             | awk '/SHA256:/{print $2; exit}')"
+          test "$ACTUAL_SHA256" = "$SHIZZI_CERT_SHA256" || {
+            echo "::error::Unexpected Shizzi signing certificate: $ACTUAL_SHA256"
+            exit 1
+          }
 
       - name: Build release and debug APKs
         run: ./gradlew assembleRelease assembleDebug --no-daemon

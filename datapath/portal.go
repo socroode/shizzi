@@ -78,18 +78,24 @@ type PortalAuthorization struct {
 type PortalAccountSession struct {
 	Token           string
 	AccountNumber   string
+	ClientIP        string
 	CreatedAtMillis int64
 	LastSeenMillis  int64
 }
 
-const portalSessionCookieName = "shizzi_session"
+const (
+	portalSessionCookieName = "shizzi_session"
+	portalBindAddress       = "198.18.0.1"
+	portalLocalAddress      = "192.0.2.1"
+)
 
 type portalConfigPayload struct {
-	Title   string       `json:"title"`
-	Message string       `json:"message"`
-	HTML    string       `json:"html"`
-	Passes   []PortalPass    `json:"passes"`
-	Accounts []PortalAccount `json:"accounts"`
+	Title        string          `json:"title"`
+	Message      string          `json:"message"`
+	HTML         string          `json:"html"`
+	SessionEpoch string          `json:"sessionEpoch"`
+	Passes       []PortalPass    `json:"passes"`
+	Accounts     []PortalAccount `json:"accounts"`
 }
 
 type portalUsageStatus struct {
@@ -124,6 +130,21 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 	m.portalTitle = strings.TrimSpace(payload.Title)
 	m.portalMessage = strings.TrimSpace(payload.Message)
 	m.portalHTML = payload.HTML
+
+	// 1.7.5 changes the prepaid session binding contract. If the privileged
+	// Shizuku service survives an APK update, stale browser sessions from an
+	// older build must not survive with it. Only ephemeral account sessions are
+	// reset; accounts, balances and vouchers stay untouched.
+	nextEpoch := strings.TrimSpace(payload.SessionEpoch)
+	if nextEpoch != "" && nextEpoch != m.portalSessionEpoch {
+		m.portalSessionEpoch = nextEpoch
+		m.portalAccountSessions = make(map[string]PortalAccountSession)
+		for ip, auth := range m.portalAuthorized {
+			if auth.AccountNumber != "" {
+				delete(m.portalAuthorized, ip)
+			}
+		}
+	}
 
 	nextPasses := make(map[string]PortalPass)
 	for _, pass := range payload.Passes {
@@ -238,6 +259,16 @@ func (m *TrafficManager) portalAuthorizedFor(ip string) bool {
 func (m *TrafficManager) portalAuthorizedLocked(ip string) bool {
 	auth, ok := m.portalAuthorized[ip]
 	if !ok {
+		return false
+	}
+
+	// Once Android exposes more than one original downstream client in its
+	// tethering flow table, a still-unresolved 192.0.2.2 flow is ambiguous.
+	// Never let one account/voucher authorize that shared fallback for every
+	// phone. Resolved flows use the original client IP and continue normally.
+	if isSharedTunnelAddress(ip) &&
+		m.flowAttribution != nil &&
+		m.flowAttribution.hasMultipleClients() {
 		return false
 	}
 
@@ -401,15 +432,10 @@ func (m *TrafficManager) clientUsedLocked(ip string) int64 {
 	return client.UpBytes + client.DownBytes
 }
 
-func (m *TrafficManager) portalUsageStatusFor(ip string) portalUsageStatus {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+func (m *TrafficManager) portalUsageStatusFromAuthorizationLocked(
+	auth PortalAuthorization,
+) portalUsageStatus {
 	status := portalUsageStatus{}
-	auth, ok := m.portalAuthorized[ip]
-	if !ok {
-		return status
-	}
 	if auth.AccountNumber != "" {
 		account, kind, remaining, exists := m.portalAccountStateLocked(auth, time.Now().UnixMilli())
 		if !exists {
@@ -464,7 +490,7 @@ func (m *TrafficManager) portalUsageStatusFor(ip string) portalUsageStatus {
 		return status
 	}
 
-	status.Authorized = m.portalAuthorizedLocked(ip)
+	status.Authorized = m.portalAuthorizationAllowedLocked(auth, time.Now().UnixMilli())
 	status.Code = auth.Code
 	status.Plan = pass.Name
 	status.Speed = fmt.Sprintf(
@@ -515,6 +541,75 @@ func (m *TrafficManager) portalUsageStatusFor(ip string) portalUsageStatus {
 	return status
 }
 
+func (m *TrafficManager) portalAuthorizationAllowedLocked(
+	auth PortalAuthorization,
+	now int64,
+) bool {
+	if auth.AccountNumber != "" {
+		return m.portalAccountInternetAllowedLocked(auth, now)
+	}
+	pass, exists := m.portalPasses[auth.Code]
+	if !exists || !pass.Enabled {
+		return false
+	}
+	if auth.ExpiresAtMillis > 0 && now >= auth.ExpiresAtMillis {
+		return false
+	}
+	if pass.ExpiresAtMillis > 0 && now >= pass.ExpiresAtMillis {
+		return false
+	}
+	if pass.QuotaBytes > 0 {
+		unpersisted := auth.SessionUsedBytes - auth.AccountedSessionBytes
+		if unpersisted < 0 {
+			unpersisted = 0
+		}
+		if pass.UsedBytes+unpersisted >= pass.QuotaBytes {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *TrafficManager) portalUsageStatusFor(ip string) portalUsageStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	auth, ok := m.portalAuthorized[ip]
+	if !ok {
+		return portalUsageStatus{}
+	}
+	return m.portalUsageStatusFromAuthorizationLocked(auth)
+}
+
+func (m *TrafficManager) portalUsageStatusForSession(
+	ip, rawToken string,
+) portalUsageStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	token := strings.TrimSpace(rawToken)
+	if token != "" {
+		auth, ok := m.portalAuthorizationForSessionLocked(ip, token)
+		if !ok || auth.AccountNumber == "" {
+			return portalUsageStatus{}
+		}
+		status := m.portalUsageStatusFromAuthorizationLocked(auth)
+		if session, exists := m.portalAccountSessions[token]; !exists || session.ClientIP == "" {
+			status.Authorized = false
+		}
+		return status
+	}
+
+	// Voucher sessions are still IP-based. Prepaid account sessions are not:
+	// a browser without the account token must never inherit another device's
+	// account merely because Android presents both devices through one TUN IP.
+	auth, ok := m.portalAuthorized[ip]
+	if !ok || auth.AccountNumber != "" {
+		return portalUsageStatus{}
+	}
+	return m.portalUsageStatusFromAuthorizationLocked(auth)
+}
+
 func writePortalResponseWithHeaders(
 	conn net.Conn,
 	contentType string,
@@ -541,8 +636,7 @@ func writePortalResponse(conn net.Conn, contentType string, body []byte) {
 }
 
 func (m *TrafficManager) servePortalStatusJSON(conn net.Conn, clientIP, sessionToken string) {
-	m.bindPortalAccountSession(clientIP, sessionToken)
-	status := m.portalUsageStatusFor(clientIP)
+	status := m.portalUsageStatusForSession(clientIP, sessionToken)
 	body, err := json.Marshal(status)
 	if err != nil {
 		body = []byte("{}")
@@ -594,7 +688,9 @@ button{width:100%;margin-top:20px;border:0;border-radius:15px;padding:14px 16px;
 <script>
 async function refreshNow(){
   try{
-    const r=await fetch('/status.json?ts='+Date.now(),{cache:'no-store'});
+    const pageSession=new URLSearchParams(window.location.search).get('session')||'';
+    const suffix=pageSession?'&session='+encodeURIComponent(pageSession):'';
+    const r=await fetch('/status.json?ts='+Date.now()+suffix,{cache:'no-store'});
     const s=await r.json();
     const hasIdentity=!!(s.code||s.accountNumber);
     document.getElementById('accountName').textContent=s.accountName|| (hasIdentity?'Compte Shizzi':'Aucun compte connecté');
@@ -715,20 +811,10 @@ func (m *TrafficManager) portalAuthorizationForSessionLocked(
 	ip, rawToken string,
 ) (PortalAuthorization, bool) {
 	token := strings.TrimSpace(rawToken)
-	if auth, ok := m.portalAuthorized[ip]; ok && auth.AccountNumber != "" {
-		if token == "" || auth.SessionToken == "" || auth.SessionToken == token {
-			if auth.SessionToken != "" {
-				if session, exists := m.portalAccountSessions[auth.SessionToken]; exists {
-					session.LastSeenMillis = time.Now().UnixMilli()
-					m.portalAccountSessions[auth.SessionToken] = session
-				}
-			}
-			return auth, true
-		}
-	}
 	if token == "" {
 		return PortalAuthorization{}, false
 	}
+
 	session, ok := m.portalAccountSessions[token]
 	if !ok {
 		return PortalAuthorization{}, false
@@ -736,19 +822,77 @@ func (m *TrafficManager) portalAuthorizationForSessionLocked(
 	account, ok := m.portalAccounts[session.AccountNumber]
 	if !ok || !account.Enabled {
 		delete(m.portalAccountSessions, token)
+		if session.ClientIP != "" {
+			if auth, exists := m.portalAuthorized[session.ClientIP]; exists &&
+				auth.SessionToken == token {
+				delete(m.portalAuthorized, session.ClientIP)
+			}
+		}
 		return PortalAuthorization{}, false
 	}
+
 	now := time.Now().UnixMilli()
 	session.LastSeenMillis = now
+
+	// Local captive-portal requests may all arrive as Android's shared
+	// 192.0.2.2 address. Never bind that shared address to a prepaid account.
+	// The /bind bridge is routed through the normal tethering datapath so it can
+	// be attributed back to the real downstream client IP.
+	if !isSharedTunnelAddress(ip) && ip != "" {
+		if session.ClientIP != "" && session.ClientIP != ip {
+			if previous, exists := m.portalAuthorized[session.ClientIP]; exists &&
+				previous.SessionToken == token {
+				delete(m.portalAuthorized, session.ClientIP)
+			}
+		}
+		session.ClientIP = ip
+	}
 	m.portalAccountSessions[token] = session
 
 	auth := PortalAuthorization{
-		AccountNumber: session.AccountNumber,
-		SessionToken:  token,
+		AccountNumber:   session.AccountNumber,
+		SessionToken:    token,
 		StartedAtMillis: session.CreatedAtMillis,
 	}
-	m.portalAuthorized[ip] = auth
+
+	if session.ClientIP != "" {
+		if existing, exists := m.portalAuthorized[session.ClientIP]; exists &&
+			existing.AccountNumber == session.AccountNumber &&
+			existing.SessionToken == token {
+			existing.StartedAtMillis = session.CreatedAtMillis
+			auth = existing
+		}
+		m.portalAuthorized[session.ClientIP] = auth
+	}
 	return auth, true
+}
+
+func (m *TrafficManager) portalRequestAuthorizedFor(
+	ip, rawToken string,
+) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	token := strings.TrimSpace(rawToken)
+	if token != "" {
+		auth, ok := m.portalAuthorizationForSessionLocked(ip, token)
+		if !ok {
+			return false
+		}
+		if auth.AccountNumber != "" {
+			session, exists := m.portalAccountSessions[token]
+			if !exists || session.ClientIP == "" {
+				return false
+			}
+		}
+		return m.portalAuthorizationAllowedLocked(auth, time.Now().UnixMilli())
+	}
+
+	auth, ok := m.portalAuthorized[ip]
+	if !ok || auth.AccountNumber != "" {
+		return false
+	}
+	return m.portalAuthorizationAllowedLocked(auth, time.Now().UnixMilli())
 }
 
 func (m *TrafficManager) bindPortalAccountSession(ip, rawToken string) string {
@@ -759,6 +903,16 @@ func (m *TrafficManager) bindPortalAccountSession(ip, rawToken string) string {
 		return strings.TrimSpace(rawToken)
 	}
 	return auth.SessionToken
+}
+
+func (m *TrafficManager) portalSessionBoundIP(rawToken string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	session, ok := m.portalAccountSessions[strings.TrimSpace(rawToken)]
+	if !ok {
+		return ""
+	}
+	return session.ClientIP
 }
 
 func (m *TrafficManager) submitPortalAccountLoginWithSession(
@@ -796,20 +950,32 @@ func (m *TrafficManager) submitPortalAccountLoginWithSession(
 		return false, "Impossible de créer la session du compte.", ""
 	}
 	now := time.Now().UnixMilli()
-	m.portalAccountSessions[token] = PortalAccountSession{
+	session := PortalAccountSession{
 		Token:           token,
 		AccountNumber:   number,
 		CreatedAtMillis: now,
 		LastSeenMillis:  now,
 	}
-	m.portalAuthorized[ip] = PortalAuthorization{
-		AccountNumber: number,
-		SessionToken:  token,
-		StartedAtMillis: now,
+	if !isSharedTunnelAddress(ip) && ip != "" {
+		session.ClientIP = ip
+		m.portalAuthorized[ip] = PortalAuthorization{
+			AccountNumber:   number,
+			SessionToken:    token,
+			StartedAtMillis: now,
+		}
 	}
-	if account.UnlimitedUntilMillis > now ||
+	m.portalAccountSessions[token] = session
+
+	hasInternet := account.UnlimitedUntilMillis > now ||
 		(account.DataBalanceBytes > 0 &&
-			(account.DataExpiresAtMillis <= 0 || now < account.DataExpiresAtMillis)) {
+			(account.DataExpiresAtMillis <= 0 || now < account.DataExpiresAtMillis))
+	if session.ClientIP == "" {
+		if hasInternet {
+			return true, "Compte connecté. Identification de cet appareil en cours…", token
+		}
+		return true, "Compte connecté. Identification de cet appareil en cours; recharge disponible.", token
+	}
+	if hasInternet {
 		return true, "Compte connecté. Accès Internet actif.", token
 	}
 	return true, "Compte connecté. Rechargez votre compte pour accéder à Internet.", token
@@ -860,10 +1026,17 @@ func (m *TrafficManager) submitPortalRechargeWithSession(
 	pass.RedeemedAtMillis = now
 	m.portalAccounts[account.Number] = account
 	m.portalPasses[code] = pass
-	m.portalAuthorized[ip] = auth
+	authorizationIP := ip
+	if session, exists := m.portalAccountSessions[auth.SessionToken]; exists &&
+		session.ClientIP != "" {
+		authorizationIP = session.ClientIP
+	}
+	if !isSharedTunnelAddress(authorizationIP) {
+		m.portalAuthorized[authorizationIP] = auth
+	}
 
 	m.portalRechargeClaims = append(m.portalRechargeClaims, PortalRechargeClaim{
-		IP:              ip,
+		IP:              authorizationIP,
 		AccountNumber:   account.Number,
 		Code:            code,
 		ClaimedAtMillis: now,
@@ -885,7 +1058,16 @@ func (m *TrafficManager) submitPortalRechargeWithSession(
 }
 
 func (m *TrafficManager) submitPortalRecharge(ip, rawCode string) (bool, string) {
-	return m.submitPortalRechargeWithSession(ip, rawCode, "")
+	// Internal compatibility helper: recover the already-authenticated account
+	// session for this IP. Browser requests never use this shortcut; the HTTP
+	// /account/recharge route always supplies its own session token.
+	m.mu.Lock()
+	token := ""
+	if auth, ok := m.portalAuthorized[ip]; ok && auth.AccountNumber != "" {
+		token = auth.SessionToken
+	}
+	m.mu.Unlock()
+	return m.submitPortalRechargeWithSession(ip, rawCode, token)
 }
 
 func (m *TrafficManager) portalAccountPanelLocked(clientIP, sessionToken string) string {
@@ -952,7 +1134,7 @@ func (m *TrafficManager) portalAccountPanelLocked(clientIP, sessionToken string)
 			"<input type=\"hidden\" name=\"session\" value=\"%s\">"+
 			"<input name=\"code\" autocomplete=\"one-time-code\" autocapitalize=\"characters\" placeholder=\"Saisir le coupon\" required>"+
 			"<button type=\"submit\">Recharger mon compte</button></form>"+
-			"<a class=\"status-link\" href=\"/status\">Voir ma consommation en direct</a></section>",
+			"<a class=\"status-link\" href=\"/status?session=%s\">Voir ma consommation en direct</a></section>",
 		html.EscapeString(displayName),
 		html.EscapeString(account.Number),
 		stateClass,
@@ -963,6 +1145,7 @@ func (m *TrafficManager) portalAccountPanelLocked(clientIP, sessionToken string)
 		html.EscapeString(upText),
 		html.EscapeString(expiresText),
 		html.EscapeString(auth.SessionToken),
+		url.QueryEscape(auth.SessionToken),
 	)
 }
 
@@ -977,6 +1160,53 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	defer req.Body.Close()
 
 	sessionToken := portalSessionTokenFromRequest(req)
+
+	if req.URL.Path == "/bind" {
+		if sessionToken == "" {
+			writePortalResponse(
+				conn,
+				"text/html; charset=utf-8",
+				[]byte("<!doctype html><meta charset=\"utf-8\"><p>Session Shizzi absente.</p>"),
+			)
+			return
+		}
+		if isSharedTunnelAddress(clientIP) || clientIP == "" {
+			retryURL := fmt.Sprintf(
+				"http://%s/bind?session=%s&retry=%d",
+				portalBindAddress,
+				url.QueryEscape(sessionToken),
+				time.Now().UnixMilli(),
+			)
+			body := fmt.Sprintf(
+				"<!doctype html><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"+
+					"<title>Identification Shizzi</title><p>Identification de cet appareil…</p>"+
+					"<script>setTimeout(function(){location.replace(%q)},600)</script>"+
+					"<noscript><a href=\"%s\">Réessayer</a></noscript>",
+				retryURL,
+				html.EscapeString(retryURL),
+			)
+			writePortalResponse(conn, "text/html; charset=utf-8", []byte(body))
+			return
+		}
+
+		m.bindPortalAccountSession(clientIP, sessionToken)
+		if m.portalSessionBoundIP(sessionToken) == "" {
+			writePortalResponse(
+				conn,
+				"text/html; charset=utf-8",
+				[]byte("<!doctype html><meta charset=\"utf-8\"><p>Impossible de lier cet appareil.</p>"),
+			)
+			return
+		}
+		target := fmt.Sprintf(
+			"http://%s/status?session=%s",
+			portalLocalAddress,
+			url.QueryEscape(sessionToken),
+		)
+		writePortalRedirect(conn, target)
+		return
+	}
+
 	sessionToken = m.bindPortalAccountSession(clientIP, sessionToken)
 
 	switch req.URL.Path {
@@ -992,10 +1222,11 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 		return
 	}
 
-	internetOK := m.portalAuthorizedFor(clientIP)
+	internetOK := m.portalRequestAuthorizedFor(clientIP, sessionToken)
 	actionOK := false
 	message := ""
 	extraHeaders := []string{}
+	freshLoginToken := ""
 	if internetOK && req.Method == http.MethodGet {
 		message = "Accès actif."
 	}
@@ -1015,6 +1246,7 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 			)
 			if freshToken != "" {
 				sessionToken = freshToken
+				freshLoginToken = freshToken
 				extraHeaders = append(extraHeaders, fmt.Sprintf(
 					"Set-Cookie: %s=%s; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax",
 					portalSessionCookieName,
@@ -1030,11 +1262,13 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 		default:
 			actionOK, message = m.submitPortalCode(clientIP, values.Get("code"))
 		}
-		internetOK = m.portalAuthorizedFor(clientIP)
+		internetOK = m.portalRequestAuthorizedFor(clientIP, sessionToken)
 	}
 
 	page := m.renderPortalPage(clientIP, sessionToken, internetOK || actionOK, message)
-	if internetOK && req.Method == http.MethodPost {
+	if freshLoginToken != "" && m.portalSessionBoundIP(freshLoginToken) == "" {
+		page = injectPortalDeviceBindRedirect(page, freshLoginToken)
+	} else if internetOK && req.Method == http.MethodPost {
 		page = injectPortalValidationRedirect(page)
 	}
 	writePortalResponseWithHeaders(
@@ -1260,6 +1494,42 @@ func portalUsagePopup(planName, speedText, usedText, remainingText, expiresText 
 }
 
 const portalValidationURL = "http://connectivitycheck.gstatic.com/generate_204"
+
+func writePortalRedirect(conn net.Conn, target string) {
+	body := []byte("Redirecting to Shizzi…")
+	headers := fmt.Sprintf(
+		"HTTP/1.1 302 Found\r\nLocation: %s\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: %d\r\n\r\n",
+		target,
+		len(body),
+	)
+	_, _ = io.WriteString(conn, headers)
+	_, _ = conn.Write(body)
+}
+
+func injectPortalDeviceBindRedirect(page, sessionToken string) string {
+	target := fmt.Sprintf(
+		"http://%s/bind?session=%s",
+		portalBindAddress,
+		url.QueryEscape(sessionToken),
+	)
+	bridge := fmt.Sprintf(`
+<script>
+(function(){
+  var target=%q;
+  setTimeout(function(){ window.location.replace(target); },250);
+})();
+</script>
+<noscript><p style="text-align:center"><a href="%s">Identifier cet appareil</a></p></noscript>`,
+		target,
+		html.EscapeString(target),
+	)
+
+	lower := strings.ToLower(page)
+	if index := strings.LastIndex(lower, "</body>"); index >= 0 {
+		return page[:index] + bridge + page[index:]
+	}
+	return page + bridge
+}
 
 func injectPortalValidationRedirect(page string) string {
 	bridge := fmt.Sprintf(`

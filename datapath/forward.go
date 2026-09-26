@@ -57,9 +57,21 @@ func installForwarders(netStack *stack.Stack, dialer *net.Dialer, traffic *Traff
 func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer, traffic *TrafficManager) {
 	id := request.ID()
 	clientIP := sourceOf(id)
+	if traffic != nil {
+		clientIP = traffic.resolveFlowClient(
+			"tcp",
+			clientIP,
+			uint16(id.RemotePort),
+			addressString(id.LocalAddress),
+			uint16(id.LocalPort),
+			true,
+		)
+	}
 
 	if id.LocalPort == 80 && traffic != nil &&
-		(traffic.portalRequiredFor(clientIP) || addressString(id.LocalAddress) == "192.0.2.1") {
+		(traffic.portalRequiredFor(clientIP) ||
+			addressString(id.LocalAddress) == portalLocalAddress ||
+			addressString(id.LocalAddress) == portalBindAddress) {
 		var queue waiter.Queue
 		endpoint, tcpipErr := request.CreateEndpoint(&queue)
 		if tcpipErr != nil {
@@ -99,6 +111,18 @@ func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer, traffic *Traf
 // could not be reached, and better than dropping the datagram silently.
 func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer, traffic *TrafficManager) bool {
 	id := request.ID()
+	clientIP := sourceOf(id)
+	bypassPortal := id.LocalPort == 53
+	if traffic != nil && !bypassPortal {
+		clientIP = traffic.resolveFlowClient(
+			"udp",
+			clientIP,
+			uint16(id.RemotePort),
+			addressString(id.LocalAddress),
+			uint16(id.LocalPort),
+			true,
+		)
+	}
 
 	upstream, err := dialer.Dial("udp", destinationOf(id))
 	if err != nil {
@@ -113,8 +137,7 @@ func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer, traffic *Traf
 	}
 
 	client := gonet.NewUDPConn(&queue, endpoint)
-	bypassPortal := id.LocalPort == 53
-	go relayDatagrams(client, upstream, sourceOf(id), traffic, bypassPortal)
+	go relayDatagrams(client, upstream, clientIP, traffic, bypassPortal)
 	return true
 }
 
