@@ -593,7 +593,11 @@ func (m *TrafficManager) portalUsageStatusForSession(
 		if !ok || auth.AccountNumber == "" {
 			return portalUsageStatus{}
 		}
-		return m.portalUsageStatusFromAuthorizationLocked(auth)
+		status := m.portalUsageStatusFromAuthorizationLocked(auth)
+		if session, exists := m.portalAccountSessions[token]; !exists || session.ClientIP == "" {
+			status.Authorized = false
+		}
+		return status
 	}
 
 	// Voucher sessions are still IP-based. Prepaid account sessions are not:
@@ -1156,6 +1160,53 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	defer req.Body.Close()
 
 	sessionToken := portalSessionTokenFromRequest(req)
+
+	if req.URL.Path == "/bind" {
+		if sessionToken == "" {
+			writePortalResponse(
+				conn,
+				"text/html; charset=utf-8",
+				[]byte("<!doctype html><meta charset=\"utf-8\"><p>Session Shizzi absente.</p>"),
+			)
+			return
+		}
+		if isSharedTunnelAddress(clientIP) || clientIP == "" {
+			retryURL := fmt.Sprintf(
+				"http://%s/bind?session=%s&retry=%d",
+				portalBindAddress,
+				url.QueryEscape(sessionToken),
+				time.Now().UnixMilli(),
+			)
+			body := fmt.Sprintf(
+				"<!doctype html><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"+
+					"<title>Identification Shizzi</title><p>Identification de cet appareil…</p>"+
+					"<script>setTimeout(function(){location.replace(%q)},600)</script>"+
+					"<noscript><a href=\"%s\">Réessayer</a></noscript>",
+				retryURL,
+				html.EscapeString(retryURL),
+			)
+			writePortalResponse(conn, "text/html; charset=utf-8", []byte(body))
+			return
+		}
+
+		m.bindPortalAccountSession(clientIP, sessionToken)
+		if m.portalSessionBoundIP(sessionToken) == "" {
+			writePortalResponse(
+				conn,
+				"text/html; charset=utf-8",
+				[]byte("<!doctype html><meta charset=\"utf-8\"><p>Impossible de lier cet appareil.</p>"),
+			)
+			return
+		}
+		target := fmt.Sprintf(
+			"http://%s/status?session=%s",
+			portalLocalAddress,
+			url.QueryEscape(sessionToken),
+		)
+		writePortalRedirect(conn, target)
+		return
+	}
+
 	sessionToken = m.bindPortalAccountSession(clientIP, sessionToken)
 
 	switch req.URL.Path {
@@ -1175,6 +1226,7 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	actionOK := false
 	message := ""
 	extraHeaders := []string{}
+	freshLoginToken := ""
 	if internetOK && req.Method == http.MethodGet {
 		message = "Accès actif."
 	}
@@ -1194,6 +1246,7 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 			)
 			if freshToken != "" {
 				sessionToken = freshToken
+				freshLoginToken = freshToken
 				extraHeaders = append(extraHeaders, fmt.Sprintf(
 					"Set-Cookie: %s=%s; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax",
 					portalSessionCookieName,
@@ -1213,7 +1266,9 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	}
 
 	page := m.renderPortalPage(clientIP, sessionToken, internetOK || actionOK, message)
-	if internetOK && req.Method == http.MethodPost {
+	if freshLoginToken != "" && m.portalSessionBoundIP(freshLoginToken) == "" {
+		page = injectPortalDeviceBindRedirect(page, freshLoginToken)
+	} else if internetOK && req.Method == http.MethodPost {
 		page = injectPortalValidationRedirect(page)
 	}
 	writePortalResponseWithHeaders(
