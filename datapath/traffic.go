@@ -193,6 +193,26 @@ func (m *TrafficManager) setSharedPolicy(policy ClientPolicy) {
 }
 
 
+func flowAttributionGrace(
+	protocol, destinationIP string,
+	destinationPort uint16,
+	waitForRule bool,
+) time.Duration {
+	if !waitForRule {
+		return 0
+	}
+	if strings.EqualFold(protocol, "tcp") &&
+		destinationIP == portalBindAddress &&
+		destinationPort == 80 {
+		// ColorOS can publish the exact BPF/NAT tuple several seconds after
+		// the SYN reaches the shared test network. Keep the same flow open long
+		// enough for that rule to appear instead of creating a new /bind
+		// connection every 600 ms and perpetually chasing a fresh source port.
+		return portalBindAttributionRuleWait
+	}
+	return attributionRuleWait
+}
+
 func (m *TrafficManager) resolveFlowClient(
 	protocol, sourceIP string,
 	sourcePort uint16,
@@ -212,19 +232,12 @@ func (m *TrafficManager) resolveFlowClient(
 		DstPort:    destinationPort,
 	}
 
-	grace := time.Duration(0)
-	if waitForRule {
-		grace = attributionRuleWait
-		if strings.EqualFold(protocol, "tcp") &&
-			destinationIP == portalBindAddress &&
-			destinationPort == 80 {
-			// ColorOS can publish the exact BPF/NAT tuple several seconds after
-			// the SYN reaches the shared test network. Keep the same flow open
-			// long enough for that rule to appear instead of creating a new
-			// /bind connection every 600 ms and perpetually chasing a fresh port.
-			grace = portalBindAttributionRuleWait
-		}
-	}
+	grace := flowAttributionGrace(
+		protocol,
+		destinationIP,
+		destinationPort,
+		waitForRule,
+	)
 
 	resolved := m.flowAttribution.resolveWithGrace(key, grace)
 	if resolved == "" {
