@@ -32,12 +32,18 @@ type flowAttributionSnapshot struct {
 	LastError       string
 }
 
+type cachedFlowAttribution struct {
+	ClientIP  string
+	ExpiresAt time.Time
+}
+
 type flowAttributionResolver struct {
 	mu sync.Mutex
 
 	dumpFn func() (string, error)
 
 	flows       map[flowAttributionKey]string
+	cache       map[flowAttributionKey]cachedFlowAttribution
 	lastRefresh time.Time
 	lastError   string
 
@@ -47,9 +53,10 @@ type flowAttributionResolver struct {
 
 const (
 	attributionRefreshInterval = 120 * time.Millisecond
-	attributionPortalWait      = 450 * time.Millisecond
+	attributionRuleWait        = 650 * time.Millisecond
 	attributionRetryDelay      = 60 * time.Millisecond
 	attributionDumpTimeout     = 1200 * time.Millisecond
+	attributionCacheTTL        = 2 * time.Minute
 )
 
 var ipv4UpstreamRulePattern = regexp.MustCompile(
@@ -62,6 +69,7 @@ func newFlowAttributionResolver() *flowAttributionResolver {
 	return &flowAttributionResolver{
 		dumpFn: dumpTetheringState,
 		flows:  make(map[flowAttributionKey]string),
+		cache:  make(map[flowAttributionKey]cachedFlowAttribution),
 	}
 }
 
@@ -144,13 +152,22 @@ func (r *flowAttributionResolver) resolve(
 
 	deadline := time.Now()
 	if waitForRule {
-		deadline = deadline.Add(attributionPortalWait)
+		deadline = deadline.Add(attributionRuleWait)
 	}
 
 	for {
+		now := time.Now()
+
 		r.mu.Lock()
+		if client := r.cachedClientLocked(key, now); client != "" {
+			r.resolvedFlows++
+			r.mu.Unlock()
+			return client
+		}
+
 		if client := r.flows[key]; client != "" &&
 			time.Since(r.lastRefresh) < attributionRefreshInterval {
+			r.rememberResolvedLocked(key, client, now)
 			r.resolvedFlows++
 			r.mu.Unlock()
 			return client
@@ -161,6 +178,7 @@ func (r *flowAttributionResolver) resolve(
 		}
 		client := r.flows[key]
 		if client != "" {
+			r.rememberResolvedLocked(key, client, time.Now())
 			r.resolvedFlows++
 			r.mu.Unlock()
 			return client
@@ -177,15 +195,57 @@ func (r *flowAttributionResolver) resolve(
 	}
 }
 
+func (r *flowAttributionResolver) cachedClientLocked(
+	key flowAttributionKey,
+	now time.Time,
+) string {
+	entry, ok := r.cache[key]
+	if !ok {
+		return ""
+	}
+	if !entry.ExpiresAt.After(now) {
+		delete(r.cache, key)
+		return ""
+	}
+	return entry.ClientIP
+}
+
+func (r *flowAttributionResolver) rememberResolvedLocked(
+	key flowAttributionKey,
+	clientIP string,
+	now time.Time,
+) {
+	if clientIP == "" {
+		return
+	}
+	r.cache[key] = cachedFlowAttribution{
+		ClientIP:  clientIP,
+		ExpiresAt: now.Add(attributionCacheTTL),
+	}
+}
+
+func (r *flowAttributionResolver) pruneCacheLocked(now time.Time) {
+	for key, entry := range r.cache {
+		if !entry.ExpiresAt.After(now) {
+			delete(r.cache, key)
+		}
+	}
+}
+
 func (r *flowAttributionResolver) refreshLocked() {
 	raw, err := r.dumpFn()
-	r.lastRefresh = time.Now()
+	now := time.Now()
+	r.lastRefresh = now
+	r.pruneCacheLocked(now)
 	if err != nil {
 		r.lastError = err.Error()
 		return
 	}
 
 	r.flows = parseIPv4UpstreamAttributions(raw)
+	for key, clientIP := range r.flows {
+		r.rememberResolvedLocked(key, clientIP, now)
+	}
 	r.lastError = ""
 }
 
@@ -197,12 +257,24 @@ func (r *flowAttributionResolver) hasMultipleClients() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	now := time.Now()
+	r.pruneCacheLocked(now)
+
 	clients := make(map[string]struct{})
 	for _, clientIP := range r.flows {
 		if clientIP == "" {
 			continue
 		}
 		clients[clientIP] = struct{}{}
+		if len(clients) > 1 {
+			return true
+		}
+	}
+	for _, entry := range r.cache {
+		if entry.ClientIP == "" || !entry.ExpiresAt.After(now) {
+			continue
+		}
+		clients[entry.ClientIP] = struct{}{}
 		if len(clients) > 1 {
 			return true
 		}
