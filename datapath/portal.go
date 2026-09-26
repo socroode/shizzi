@@ -78,18 +78,24 @@ type PortalAuthorization struct {
 type PortalAccountSession struct {
 	Token           string
 	AccountNumber   string
+	ClientIP        string
 	CreatedAtMillis int64
 	LastSeenMillis  int64
 }
 
-const portalSessionCookieName = "shizzi_session"
+const (
+	portalSessionCookieName = "shizzi_session"
+	portalBindAddress       = "198.18.0.1"
+	portalLocalAddress      = "192.0.2.1"
+)
 
 type portalConfigPayload struct {
-	Title   string       `json:"title"`
-	Message string       `json:"message"`
-	HTML    string       `json:"html"`
-	Passes   []PortalPass    `json:"passes"`
-	Accounts []PortalAccount `json:"accounts"`
+	Title        string          `json:"title"`
+	Message      string          `json:"message"`
+	HTML         string          `json:"html"`
+	SessionEpoch string          `json:"sessionEpoch"`
+	Passes       []PortalPass    `json:"passes"`
+	Accounts     []PortalAccount `json:"accounts"`
 }
 
 type portalUsageStatus struct {
@@ -124,6 +130,21 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 	m.portalTitle = strings.TrimSpace(payload.Title)
 	m.portalMessage = strings.TrimSpace(payload.Message)
 	m.portalHTML = payload.HTML
+
+	// 1.7.5 changes the prepaid session binding contract. If the privileged
+	// Shizuku service survives an APK update, stale browser sessions from an
+	// older build must not survive with it. Only ephemeral account sessions are
+	// reset; accounts, balances and vouchers stay untouched.
+	nextEpoch := strings.TrimSpace(payload.SessionEpoch)
+	if nextEpoch != "" && nextEpoch != m.portalSessionEpoch {
+		m.portalSessionEpoch = nextEpoch
+		m.portalAccountSessions = make(map[string]PortalAccountSession)
+		for ip, auth := range m.portalAuthorized {
+			if auth.AccountNumber != "" {
+				delete(m.portalAuthorized, ip)
+			}
+		}
+	}
 
 	nextPasses := make(map[string]PortalPass)
 	for _, pass := range payload.Passes {
