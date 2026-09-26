@@ -5,6 +5,33 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.10] - 2026-09-26
+
+### Fixed
+
+- Corrected the 1.7.9 Reno11 attribution extractor after field testing showed
+  that ColorOS exposes more than one `IPv4 Upstream` section in the same
+  tethering dump.
+- Shizzi now ignores the earlier empty forwarding-surface section and waits for
+  `BPF stats:`, then reads only that section's `IPv4 Upstream` rules and
+  exits at the matching `IPv4 Downstream` header.
+- Preserved targeted AOSP/OEM and full-dump fallbacks for devices that do not
+  label the useful table with `BPF stats:`.
+- Added a regression case matching the Reno11 failure shape: an empty first
+  upstream section followed later by the populated BPF table containing
+  `192.168.7.252:60252 -> 192.0.2.2:60252 -> 1.1.1.1:80`.
+- Rotated only the ephemeral prepaid browser-session epoch so failed 1.7.9 bind
+  sessions are cleared after upgrade without deleting accounts, vouchers,
+  balances or validity.
+
+### Compatibility
+
+- Shizzi Conso remains **v1.2.0** and requires no reinstall.
+- Existing prepaid accounts, vouchers, usage records and hotspot settings are
+  preserved.
+
+
+
 ## [1.7.9] - 2026-09-26
 
 ### Fixed
