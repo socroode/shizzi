@@ -5,6 +5,36 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.11] - 2026-09-26
+
+### Fixed
+
+- Extended Android flow-attribution grace specifically for the prepaid device
+  bind tuple `TCP -> 1.1.1.1:80` from 1.8 seconds to 8 seconds.
+- Ordinary HTTPS, QUIC and other application flows keep the existing short
+  attribution window, so this fix does not add an 8-second delay to normal
+  browsing or streaming.
+- Keeps the same bind TCP flow alive while ColorOS publishes its BPF/NAT entry,
+  instead of repeatedly creating a fresh source port every 600 ms and missing
+  each delayed rule.
+- Added regression coverage for the extended bind grace and for a Reno11 bind
+  rule that becomes visible only after several attribution refreshes.
+- Rotated only the ephemeral prepaid browser-session epoch; accounts, vouchers,
+  balances, validity, usage records and hotspot settings remain intact.
+
+### Field evidence
+
+- Reno11 capture showed the real client `192.168.7.252` translated through
+  `192.0.2.2` toward `1.1.1.1:80`, with active bind tuples remaining in
+  ColorOS BPF long after Shizzi 1.7.10's 1.8-second resolver had already given
+  up.
+
+### Compatibility
+
+- Shizzi Conso remains **v1.2.0** and requires no reinstall.
+
+
+
 ## [1.7.10] - 2026-09-26
 
 ### Fixed
