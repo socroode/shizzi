@@ -90,6 +90,8 @@ type clientTraffic struct {
 type TrafficManager struct {
 	mu sync.Mutex
 
+	flowAttribution *flowAttributionResolver
+
 	globalDownloadLimiter *bandwidthLimiter
 	globalUploadLimiter   *bandwidthLimiter
 
@@ -123,6 +125,7 @@ type TrafficManager struct {
 
 func newTrafficManager() *TrafficManager {
 	return &TrafficManager{
+		flowAttribution:              newFlowAttributionResolver(),
 		globalDownloadLimiter:       newBandwidthLimiter(40_000_000),
 		globalUploadLimiter:         newBandwidthLimiter(5_000_000),
 		globalDownloadBitsPerSecond: 40_000_000,
@@ -185,6 +188,34 @@ func (m *TrafficManager) setSharedPolicy(policy ClientPolicy) {
 
 	m.sharedDownloadLimiter.setRate(policy.DownloadBitsPerSecond)
 	m.sharedUploadLimiter.setRate(policy.UploadBitsPerSecond)
+}
+
+
+func (m *TrafficManager) resolveFlowClient(
+	protocol, sourceIP string,
+	sourcePort uint16,
+	destinationIP string,
+	destinationPort uint16,
+	waitForRule bool,
+) string {
+	if !isSharedTunnelAddress(sourceIP) || m.flowAttribution == nil {
+		return sourceIP
+	}
+
+	resolved := m.flowAttribution.resolve(
+		flowAttributionKey{
+			Protocol:   protocol,
+			PublicIP:   sourceIP,
+			PublicPort: sourcePort,
+			DstIP:      destinationIP,
+			DstPort:    destinationPort,
+		},
+		waitForRule,
+	)
+	if resolved == "" {
+		return sourceIP
+	}
+	return resolved
 }
 
 
@@ -345,6 +376,10 @@ type trafficStatsSnapshot struct {
 	TotalDownBytes              int64                         `json:"totalDownBytes"`
 	SharedUpBytes               int64                         `json:"sharedUpBytes"`
 	SharedDownBytes             int64                         `json:"sharedDownBytes"`
+	SharedResolvedFlows         int64                         `json:"sharedResolvedFlows"`
+	SharedUnresolvedFlows       int64                         `json:"sharedUnresolvedFlows"`
+	SharedAttributionClients    int                           `json:"sharedAttributionClients"`
+	SharedAttributionLastError  string                        `json:"sharedAttributionLastError,omitempty"`
 	Clients                     []clientStatsSnapshot         `json:"clients"`
 	PortalClaims                []PortalClaim                        `json:"portalClaims,omitempty"`
 	PortalAuthorizations        []portalAuthorizationSnapshot        `json:"portalAuthorizations,omitempty"`
@@ -379,6 +414,8 @@ type clientStatsSnapshot struct {
 }
 
 func (m *TrafficManager) statsJSON() string {
+	attribution := m.flowAttribution.snapshot()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -390,6 +427,10 @@ func (m *TrafficManager) statsJSON() string {
 		TotalDownBytes:              m.totalDownBytes,
 		SharedUpBytes:               m.sharedUpBytes,
 		SharedDownBytes:             m.sharedDownBytes,
+		SharedResolvedFlows:         attribution.ResolvedFlows,
+		SharedUnresolvedFlows:       attribution.UnresolvedFlows,
+		SharedAttributionClients:    attribution.ClientCount,
+		SharedAttributionLastError:  attribution.LastError,
 		Clients:                     make([]clientStatsSnapshot, 0, len(m.clients)),
 		PortalClaims:                append([]PortalClaim(nil), m.portalClaims...),
 		PortalAuthorizations:        make([]portalAuthorizationSnapshot, 0, len(m.portalAuthorized)),

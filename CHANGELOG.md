@@ -5,6 +5,30 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.4] - 2026-09-26
+
+### Fixed
+
+- Isolated prepaid account browser sessions per phone: a client without its own
+  session token can no longer inherit another customer's account on the shared
+  Shizzi test-network address.
+- Added Android tethering flow attribution so NATed traffic on `192.0.2.2`
+  can be mapped back to the original hotspot client before portal, quota and
+  bandwidth policy decisions.
+- Added fail-closed handling for ambiguous shared-TUN traffic when multiple
+  downstream clients are present, preventing one customer's authorization from
+  being reused by another phone.
+- Added regression tests for two simultaneous phones/accounts behind the shared
+  TUN path.
+
+### Compatibility
+
+- Built as arm64-v8a for Android 11+ and intended to update the permanently
+  signed 1.7.3 build on supported OPPO devices including Reno11.
+- Shizzi Conso remains v1.2.0; account pages continue to use the existing local
+  portal routes and now stay isolated by each browser session.
+
+
 ## [1.7.3] - 2026-09-25
 
 ### Fixed
