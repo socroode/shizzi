@@ -5,6 +5,29 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.7.6] - 2026-09-25
+
+### Fixed
+
+- Treated delayed Android tethering attribution as a general multi-user
+  datapath condition instead of a portal/YouTube-specific case.
+- New TCP flows and non-DNS UDP flows now wait briefly and retry attribution
+  before falling back to the secure shared-TUN path, covering HTTPS, QUIC,
+  Facebook, Messenger, TikTok, Play Store, games and other normal traffic.
+- Successful flow-to-client attribution is cached for a short period so an
+  already identified flow does not repeat expensive tethering-state lookups.
+- DNS/UDP 53 bypasses the attribution wait and remains immediately available
+  for captive-portal and application name resolution.
+- Ambiguous unresolved shared-TUN traffic still fails closed once the grace
+  window is exhausted, preserving 1.7.5 account isolation.
+
+### Compatibility
+
+- Shizzi Conso remains **v1.2.0** and its routes/status contract are unchanged.
+- Existing prepaid accounts, vouchers, balances and session storage remain
+  compatible with 1.7.5.
+
+
 ## [1.7.5] - 2026-09-25
 
 ### Fixed
