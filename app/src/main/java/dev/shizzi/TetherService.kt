@@ -26,6 +26,7 @@ class TetherService : ITetherService.Stub {
 
     override fun getContractVersion(): Int = CONTRACT_VERSION
 
+    @Synchronized
     override fun start(
         logging: Boolean,
         vpnMode: String?,
@@ -49,6 +50,7 @@ class TetherService : ITetherService.Stub {
         }.getOrElse { failure -> sessionError("start", failure) }
     }
 
+    @Synchronized
     override fun stop(): String {
         runCatching { runner.teardown() }
             .onFailure { failure -> Log.w(TAG, "stop: probe teardown ${failure.message}") }
@@ -145,11 +147,25 @@ class TetherService : ITetherService.Stub {
             .onFailure { failure -> Log.w(TAG, "clearLog: ${failure.message}") }
     }
 
-    override fun runProbes(attemptTethering: Boolean, availabilityTimeoutMs: Int): String =
-        publish(
+    @Synchronized
+    override fun runProbes(attemptTethering: Boolean, availabilityTimeoutMs: Int): String {
+        if (session.isActive) {
+            return publish(
+                errorReport(
+                    "runProbes",
+                    IllegalStateException(
+                        "live Shizzi session is active; stop the hotspot session before " +
+                            "running diagnostics so the probe cannot tear down its TUN",
+                    ),
+                ),
+            )
+        }
+
+        return publish(
             runCatching { runner.run(attemptTethering, availabilityTimeoutMs) }
                 .getOrElse { failure -> errorReport("runProbes", failure) },
         )
+    }
 
     private fun publish(report: String): String {
         runCatching { java.io.File(REPORT_PATH).writeText(report) }

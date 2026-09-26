@@ -58,13 +58,15 @@ func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer, traffic *Traf
 	id := request.ID()
 	clientIP := sourceOf(id)
 	if traffic != nil {
+		waitForAttribution := id.LocalPort == 80 ||
+			traffic.shouldWaitForAttribution(clientIP)
 		clientIP = traffic.resolveFlowClient(
 			"tcp",
 			clientIP,
 			uint16(id.RemotePort),
 			addressString(id.LocalAddress),
 			uint16(id.LocalPort),
-			id.LocalPort == 80,
+			waitForAttribution,
 		)
 	}
 
@@ -111,13 +113,15 @@ func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer, traffic *Traf
 	id := request.ID()
 	clientIP := sourceOf(id)
 	if traffic != nil {
+		waitForAttribution := id.LocalPort != 53 &&
+			traffic.shouldWaitForAttribution(clientIP)
 		clientIP = traffic.resolveFlowClient(
 			"udp",
 			clientIP,
 			uint16(id.RemotePort),
 			addressString(id.LocalAddress),
 			uint16(id.LocalPort),
-			false,
+			waitForAttribution,
 		)
 	}
 

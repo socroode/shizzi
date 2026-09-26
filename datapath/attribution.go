@@ -3,6 +3,7 @@ package datapath
 import (
 	"context"
 	"fmt"
+	"net"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -46,9 +47,9 @@ type flowAttributionResolver struct {
 }
 
 const (
-	attributionRefreshInterval = 120 * time.Millisecond
-	attributionPortalWait      = 450 * time.Millisecond
-	attributionRetryDelay      = 60 * time.Millisecond
+	attributionRefreshInterval = 100 * time.Millisecond
+	attributionPortalWait      = 1500 * time.Millisecond
+	attributionRetryDelay      = 50 * time.Millisecond
 	attributionDumpTimeout     = 1200 * time.Millisecond
 )
 
@@ -56,6 +57,13 @@ var ipv4UpstreamRulePattern = regexp.MustCompile(
 	"^(tcp|udp)\\s+\\[[^\\]]*\\]\\s+\\d+\\([^)]*\\)\\s+" +
 		"([0-9.]+):(\\d+)\\s+->\\s+\\d+\\([^)]*\\)\\s+" +
 		"([0-9.]+):(\\d+)\\s+->\\s+([0-9.]+):(\\d+)\\b",
+)
+
+// OEM tethering dumps are not byte-for-byte identical to AOSP. When the
+// strict pattern above misses a vendor-formatted rule, three IPv4:port tuples
+// are still enough to recover client -> translated -> destination.
+var ipv4TuplePattern = regexp.MustCompile(
+	`([0-9]{1,3}(?:\.[0-9]{1,3}){3}):(\d+)`,
 )
 
 func newFlowAttributionResolver() *flowAttributionResolver {
@@ -97,33 +105,66 @@ func parseIPv4UpstreamAttributions(raw string) map[flowAttributionKey]string {
 			continue
 		}
 
-		match := ipv4UpstreamRulePattern.FindStringSubmatch(line)
-		if len(match) != 8 {
-			continue
-		}
-
-		if _, err := parseAttributionPort(match[3]); err != nil {
-			continue
-		}
-		publicPort, errPublic := parseAttributionPort(match[5])
-		dstPort, errDst := parseAttributionPort(match[7])
-		if errPublic != nil || errDst != nil {
-			continue
-		}
-
-		clientIP := match[2]
-		key := flowAttributionKey{
-			Protocol:   strings.ToLower(match[1]),
-			PublicIP:   match[4],
-			PublicPort: publicPort,
-			DstIP:      match[6],
-			DstPort:    dstPort,
-		}
-		if clientIP != "" {
+		key, clientIP, ok := parseIPv4UpstreamAttributionLine(line)
+		if ok {
 			result[key] = clientIP
 		}
 	}
 	return result
+}
+
+func parseIPv4UpstreamAttributionLine(line string) (flowAttributionKey, string, bool) {
+	match := ipv4UpstreamRulePattern.FindStringSubmatch(line)
+	if len(match) == 8 {
+		if _, err := parseAttributionPort(match[3]); err == nil {
+			publicPort, errPublic := parseAttributionPort(match[5])
+			dstPort, errDst := parseAttributionPort(match[7])
+			if errPublic == nil && errDst == nil {
+				return flowAttributionKey{
+					Protocol:   strings.ToLower(match[1]),
+					PublicIP:   match[4],
+					PublicPort: publicPort,
+					DstIP:      match[6],
+					DstPort:    dstPort,
+				}, match[2], true
+			}
+		}
+	}
+
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return flowAttributionKey{}, "", false
+	}
+	protocol := strings.ToLower(fields[0])
+	if protocol != "tcp" && protocol != "udp" {
+		return flowAttributionKey{}, "", false
+	}
+
+	tuples := ipv4TuplePattern.FindAllStringSubmatch(line, -1)
+	if len(tuples) < 3 {
+		return flowAttributionKey{}, "", false
+	}
+
+	clientIP := tuples[0][1]
+	publicIP := tuples[1][1]
+	dstIP := tuples[2][1]
+	if net.ParseIP(clientIP) == nil || net.ParseIP(publicIP) == nil || net.ParseIP(dstIP) == nil {
+		return flowAttributionKey{}, "", false
+	}
+
+	publicPort, errPublic := parseAttributionPort(tuples[1][2])
+	dstPort, errDst := parseAttributionPort(tuples[2][2])
+	if errPublic != nil || errDst != nil {
+		return flowAttributionKey{}, "", false
+	}
+
+	return flowAttributionKey{
+		Protocol:   protocol,
+		PublicIP:   publicIP,
+		PublicPort: publicPort,
+		DstIP:      dstIP,
+		DstPort:    dstPort,
+	}, clientIP, true
 }
 
 func parseAttributionPort(raw string) (uint16, error) {

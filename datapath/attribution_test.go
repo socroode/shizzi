@@ -1,6 +1,7 @@
 package datapath
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -107,8 +108,11 @@ func TestAmbiguousSharedAuthorizationFailsClosedWithMultipleClients(t *testing.T
 		"63057303",
 		"583921",
 	)
-	if !ok || token == "" {
-		t.Fatalf("shared login failed: %s", message)
+	if ok || token != "" {
+		t.Fatalf("ambiguous shared login unexpectedly succeeded: ok=%v token=%q", ok, token)
+	}
+	if !strings.Contains(message, "identifier cet appareil") {
+		t.Fatalf("unexpected shared identification message: %q", message)
 	}
 	if manager.portalAuthorizedFor("192.0.2.2") {
 		t.Fatal("ambiguous shared TUN authorization leaked to multiple clients")
@@ -124,5 +128,27 @@ func TestAmbiguousSharedAuthorizationFailsClosedWithMultipleClients(t *testing.T
 	}
 	if !manager.portalAuthorizedFor("192.168.43.20") {
 		t.Fatal("resolved physical client was not authorized")
+	}
+}
+
+
+func TestParseIPv4UpstreamAttributionsAcceptsOEMFormatting(t *testing.T) {
+	raw := `Tethering:
+  Forwarding rules:
+    IPv4 Upstream: proto client translated destination
+      TCP vendor-prefix 192.168.43.31:51000 => testtun7 192.0.2.2:62000 => 142.250.74.14:443 age=3ms
+    IPv4 Downstream:
+`
+
+	flows := parseIPv4UpstreamAttributions(raw)
+	key := flowAttributionKey{
+		Protocol:   "tcp",
+		PublicIP:   "192.0.2.2",
+		PublicPort: 62000,
+		DstIP:      "142.250.74.14",
+		DstPort:    443,
+	}
+	if got := flows[key]; got != "192.168.43.31" {
+		t.Fatalf("OEM attribution=%q, want 192.168.43.31; flows=%v", got, flows)
 	}
 }

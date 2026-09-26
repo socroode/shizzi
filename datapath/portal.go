@@ -235,6 +235,12 @@ func (m *TrafficManager) portalAuthorizedFor(ip string) bool {
 	return m.portalAuthorizedLocked(ip)
 }
 
+func (m *TrafficManager) ambiguousSharedClientLocked(ip string) bool {
+	return isSharedTunnelAddress(ip) &&
+		m.flowAttribution != nil &&
+		m.flowAttribution.hasMultipleClients()
+}
+
 func (m *TrafficManager) portalAuthorizedLocked(ip string) bool {
 	auth, ok := m.portalAuthorized[ip]
 	if !ok {
@@ -245,9 +251,7 @@ func (m *TrafficManager) portalAuthorizedLocked(ip string) bool {
 	// tethering flow table, a still-unresolved 192.0.2.2 flow is ambiguous.
 	// Never let one account/voucher authorize that shared fallback for every
 	// phone. Resolved flows use the original client IP and continue normally.
-	if isSharedTunnelAddress(ip) &&
-		m.flowAttribution != nil &&
-		m.flowAttribution.hasMultipleClients() {
+	if m.ambiguousSharedClientLocked(ip) {
 		return false
 	}
 
@@ -705,6 +709,10 @@ func (m *TrafficManager) submitPortalCode(ip, rawCode string) (bool, string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.ambiguousSharedClientLocked(ip) {
+		return false, "Impossible d'identifier cet appareil pour le moment. Réessayez."
+	}
+
 	pass, ok := m.portalPasses[code]
 	if !ok || !pass.Enabled || pass.RedeemedAccountNumber != "" {
 		return false, "Invalid access code."
@@ -821,6 +829,11 @@ func (m *TrafficManager) portalAuthorizationForSessionLocked(
 		SessionToken:    token,
 		StartedAtMillis: session.CreatedAtMillis,
 	}
+	for otherIP, existing := range m.portalAuthorized {
+		if otherIP != ip && existing.SessionToken == token {
+			delete(m.portalAuthorized, otherIP)
+		}
+	}
 	m.portalAuthorized[ip] = auth
 	return auth, true
 }
@@ -865,6 +878,10 @@ func (m *TrafficManager) submitPortalAccountLoginWithSession(
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.ambiguousSharedClientLocked(ip) {
+		return false, "Impossible d'identifier cet appareil pour le moment. Réessayez.", ""
+	}
 
 	account, ok := m.portalAccounts[number]
 	if !ok || !account.Enabled || account.Pin != pin {

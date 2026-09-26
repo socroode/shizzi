@@ -58,12 +58,37 @@ class UpstreamInspector(private val deadlineMs: Long = DEFAULT_DEADLINE_MS) {
     }
 
     private fun parseUpstreamInterfaces(output: String): List<String> {
-        val interesting = output.lineSequence()
+        val lines = output.lineSequence()
             .map(String::trim)
-            .filter { line -> UPSTREAM_HINTS.any { hint -> line.startsWith(hint, ignoreCase = true) } }
+            .filter(String::isNotBlank)
+            .toList()
 
-        return interesting
-            .flatMap { line -> INTERFACE_PATTERN.findAll(line).map { it.value } }
+        // Prefer the current-state field. dumpsys also contains historical
+        // tethering log lines, and mixing old "Found upstream" entries with the
+        // live snapshot can make a healthy session look drifted.
+        val current = lines.lastOrNull { line ->
+            CURRENT_UPSTREAM_HINTS.any { hint ->
+                line.startsWith(hint, ignoreCase = true)
+            }
+        }
+        if (current != null) {
+            return INTERFACE_PATTERN.findAll(current)
+                .map { it.value }
+                .distinct()
+                .toList()
+        }
+
+        // Some Android 15/OEM tethering builds omit the current-state field
+        // from parts of dumpsys but do log the latest resolved upstream. Use
+        // only the last such line as a fallback, never the whole history.
+        val fallback = lines.lastOrNull { line ->
+            FALLBACK_UPSTREAM_HINTS.any { hint ->
+                line.contains(hint, ignoreCase = true)
+            }
+        } ?: return emptyList()
+
+        return INTERFACE_PATTERN.findAll(fallback)
+            .map { it.value }
             .distinct()
             .toList()
     }
@@ -74,12 +99,17 @@ class UpstreamInspector(private val deadlineMs: Long = DEFAULT_DEADLINE_MS) {
     companion object {
         const val DEFAULT_DEADLINE_MS = 3_000L
 
-        private val UPSTREAM_HINTS = listOf(
+        private val CURRENT_UPSTREAM_HINTS = listOf(
             "current upstream interface(s):",
             "current upstream:",
             "selected upstream:",
             "upstream network:",
             "mCurrentUpstream",
+        )
+
+        private val FALLBACK_UPSTREAM_HINTS = listOf(
+            "found upstream interface(s):",
+            "found upstream interfaces:",
         )
 
         private val INTERFACE_PATTERN =
