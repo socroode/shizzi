@@ -218,6 +218,17 @@ func (m *TrafficManager) resolveFlowClient(
 	return resolved
 }
 
+func (m *TrafficManager) shouldWaitForAttribution(sourceIP string) bool {
+	if !isSharedTunnelAddress(sourceIP) || m.flowAttribution == nil {
+		return false
+	}
+
+	m.mu.Lock()
+	required := m.portalRequired
+	m.mu.Unlock()
+	return required
+}
+
 
 func (c *clientTraffic) applyPolicy(policy ClientPolicy) {
 	c.Policy = policy
