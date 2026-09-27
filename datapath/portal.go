@@ -204,19 +204,19 @@ func (m *TrafficManager) submitPortalAccountLogin(
 	if hashPortalPin(account.PinSalt, pin) != account.PinHash {
 		return false, "Compte ou code incorrect."
 	}
-	if !account.hasInternet(now) {
-		return false, "Recharge requise avant la connexion."
-	}
-
 	client := m.clientLocked(ip)
 	client.applyPolicy(ClientPolicy{
 		DownloadBitsPerSecond: account.downloadBps(now),
 		UploadBitsPerSecond:   account.uploadBps(now),
+		Blocked:               !account.hasInternet(now),
 	})
 	m.portalAuthorized[ip] = PortalAuthorization{
-		AccountNumber:   number,
-		StartedAtMillis: now,
+		AccountNumber:    number,
+		StartedAtMillis:  now,
 		StartClientBytes: client.UpBytes + client.DownBytes,
+	}
+	if !account.hasInternet(now) {
+		return true, "Compte connecté. Recharge requise."
 	}
 	return true, "Connexion autorisée."
 }
@@ -295,6 +295,7 @@ func (m *TrafficManager) writePortalStatusJSON(conn net.Conn, ip string) {
 }
 
 type portalStatusPayload struct {
+	Authenticated bool   `json:"authenticated"`
 	Authorized    bool   `json:"authorized"`
 	AccountNumber string `json:"accountNumber,omitempty"`
 	AccountName   string `json:"accountName,omitempty"`
@@ -345,6 +346,7 @@ func (m *TrafficManager) portalStatus(ip string) portalStatusPayload {
 	}
 
 	return portalStatusPayload{
+		Authenticated:   true,
 		Authorized:      m.portalAuthorizedLocked(ip, now),
 		AccountNumber:   account.Number,
 		AccountName:     account.Name,
@@ -384,7 +386,7 @@ func (m *TrafficManager) writePortalHTML(
 	}
 
 	content := ""
-	if !status.Authorized {
+	if !status.Authenticated {
 		content = `<form method="post" action="/login">
 <label>Numéro de compte</label>
 <input name="account" inputmode="numeric" autocomplete="username" required>
