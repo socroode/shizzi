@@ -243,6 +243,57 @@ class TetherClient {
         service().status
     }
 
+    suspend fun trafficStats(): String = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.trafficStats
+    }
+
+    suspend fun setRequireClientAttribution(required: Boolean) = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.setRequireClientAttribution(required)
+    }
+
+    suspend fun setGlobalTrafficPolicy(
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+    ) = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.setGlobalTrafficPolicy(downloadBps, uploadBps, quotaBytes)
+    }
+
+    suspend fun setDefaultClientTrafficPolicy(
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.setDefaultClientTrafficPolicy(downloadBps, uploadBps, quotaBytes, blocked)
+    }
+
+    suspend fun setClientTrafficPolicy(
+        ip: String,
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.setClientTrafficPolicy(ip, downloadBps, uploadBps, quotaBytes, blocked)
+    }
+
+    suspend fun resetTrafficStats() = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.resetTrafficStats()
+    }
+
     private fun verifyContract(bound: ITetherService) {
         val remote = bound.contractVersion
         check(remote == TetherService.CONTRACT_VERSION) {

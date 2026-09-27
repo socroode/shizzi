@@ -12,6 +12,29 @@ interface ITetherService {
 
     String getStatus();
 
+    String getTrafficStats();
+
+    void setRequireClientAttribution(boolean required);
+
+    void setGlobalTrafficPolicy(long downloadBps, long uploadBps, long quotaBytes);
+
+    void setDefaultClientTrafficPolicy(
+        long downloadBps,
+        long uploadBps,
+        long quotaBytes,
+        boolean blocked
+    );
+
+    void setClientTrafficPolicy(
+        String ip,
+        long downloadBps,
+        long uploadBps,
+        long quotaBytes,
+        boolean blocked
+    );
+
+    void resetTrafficStats();
+
     String runProbes(boolean attemptTethering, int availabilityTimeoutMs);
 
     void clearLog();

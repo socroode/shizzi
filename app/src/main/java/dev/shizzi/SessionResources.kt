@@ -75,6 +75,39 @@ class SessionResources(
             }
     }
 
+    fun trafficStats(): String = datapathSession?.trafficStatsJSON() ?: "{}"
+
+    fun setRequireClientAttribution(required: Boolean) {
+        datapathSession?.setRequireClientAttribution(required)
+    }
+
+    fun setGlobalTrafficPolicy(downloadBps: Long, uploadBps: Long, quotaBytes: Long) {
+        datapathSession?.setGlobalPolicy(downloadBps, uploadBps, quotaBytes)
+    }
+
+    fun setDefaultClientTrafficPolicy(
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) {
+        datapathSession?.setDefaultClientPolicy(downloadBps, uploadBps, quotaBytes, blocked)
+    }
+
+    fun setClientTrafficPolicy(
+        ip: String,
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) {
+        datapathSession?.setClientPolicy(ip, downloadBps, uploadBps, quotaBytes, blocked)
+    }
+
+    fun resetTrafficStats() {
+        datapathSession?.resetTrafficStats()
+    }
+
     fun bindDatapathTo(handle: Long) {
         val session = datapathSession
             ?: error("bindDatapathTo($handle): no datapath session; startDatapath must succeed first")

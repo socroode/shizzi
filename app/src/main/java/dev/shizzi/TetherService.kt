@@ -44,6 +44,45 @@ class TetherService : ITetherService.Stub {
         runCatching { session.status() }
             .getOrElse { failure -> sessionError("getStatus", failure) }
 
+    override fun getTrafficStats(): String =
+        runCatching { session.trafficStats() }
+            .getOrElse { "{}" }
+
+    override fun setRequireClientAttribution(required: Boolean) {
+        session.setRequireClientAttribution(required)
+    }
+
+    override fun setGlobalTrafficPolicy(
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+    ) {
+        session.setGlobalTrafficPolicy(downloadBps, uploadBps, quotaBytes)
+    }
+
+    override fun setDefaultClientTrafficPolicy(
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) {
+        session.setDefaultClientTrafficPolicy(downloadBps, uploadBps, quotaBytes, blocked)
+    }
+
+    override fun setClientTrafficPolicy(
+        ip: String?,
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) {
+        session.setClientTrafficPolicy(ip.orEmpty(), downloadBps, uploadBps, quotaBytes, blocked)
+    }
+
+    override fun resetTrafficStats() {
+        session.resetTrafficStats()
+    }
+
     override fun setLogging(enabled: Boolean) {
         SessionLog.setEnabled(enabled)
     }

@@ -214,6 +214,39 @@ class TetherSession(private val context: Context) {
         }
     }
 
+    fun trafficStats(): String = resources?.trafficStats() ?: "{}"
+
+    fun setRequireClientAttribution(required: Boolean) {
+        resources?.setRequireClientAttribution(required)
+    }
+
+    fun setGlobalTrafficPolicy(downloadBps: Long, uploadBps: Long, quotaBytes: Long) {
+        resources?.setGlobalTrafficPolicy(downloadBps, uploadBps, quotaBytes)
+    }
+
+    fun setDefaultClientTrafficPolicy(
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) {
+        resources?.setDefaultClientTrafficPolicy(downloadBps, uploadBps, quotaBytes, blocked)
+    }
+
+    fun setClientTrafficPolicy(
+        ip: String,
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) {
+        resources?.setClientTrafficPolicy(ip, downloadBps, uploadBps, quotaBytes, blocked)
+    }
+
+    fun resetTrafficStats() {
+        resources?.resetTrafficStats()
+    }
+
     fun status(): String = JSONObject().apply {
         put("state", state.name)
         put("detail", detail)
