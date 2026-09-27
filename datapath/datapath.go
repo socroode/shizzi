@@ -171,6 +171,13 @@ func (s *Session) ClearPortalClaims() {
 	s.traffic.clearPortalClaims()
 }
 
+func (s *Session) RevokePortalClient(ip string) {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.revokePortalClient(ip)
+}
+
 // TrafficStatsJSON exposes per-client counters and attribution diagnostics.
 func (s *Session) TrafficStatsJSON() string {
 	if s.traffic == nil {

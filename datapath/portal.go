@@ -257,6 +257,15 @@ func (m *TrafficManager) clearPortalClaims() {
 	m.mu.Unlock()
 }
 
+func (m *TrafficManager) revokePortalClient(ip string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.portalAuthorized, ip)
+	if client := m.clients[ip]; client != nil {
+		client.applyPolicy(ClientPolicy{Blocked: true})
+	}
+}
+
 func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
