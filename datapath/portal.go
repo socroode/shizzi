@@ -1317,7 +1317,7 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 		internetOK = m.portalRequestAuthorizedFor(clientIP, sessionToken)
 	}
 
-	page := m.renderPortalPage(clientIP, sessionToken, deviceToken, internetOK || actionOK, message)
+	page := m.renderPortalPageWithDevice(clientIP, sessionToken, deviceToken, internetOK || actionOK, message)
 	if internetOK && req.Method == http.MethodPost {
 		page = injectPortalValidationRedirect(page)
 	}
@@ -1330,6 +1330,20 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 }
 
 func (m *TrafficManager) renderPortalPage(
+	clientIP, sessionToken string,
+	success bool,
+	statusMessage string,
+) string {
+	return m.renderPortalPageWithDevice(
+		clientIP,
+		sessionToken,
+		"",
+		success,
+		statusMessage,
+	)
+}
+
+func (m *TrafficManager) renderPortalPageWithDevice(
 	clientIP, sessionToken, deviceToken string,
 	success bool,
 	statusMessage string,
