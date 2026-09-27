@@ -147,6 +147,8 @@ fun CybercafeState.toPortalConfigJson(): String =
                             put("unlimitedDownloadBps", account.unlimitedDownloadBps)
                             put("unlimitedUploadBps", account.unlimitedUploadBps)
                             put("unlimitedPlanName", account.unlimitedPlanName)
+                            put("totalUpBytes", account.totalUpBytes)
+                            put("totalDownBytes", account.totalDownBytes)
                         },
                     )
                 }

@@ -29,6 +29,8 @@ type PortalAccount struct {
 	UnlimitedDownloadBitsPerSecond int64 `json:"unlimitedDownloadBps"`
 	UnlimitedUploadBitsPerSecond int64  `json:"unlimitedUploadBps"`
 	UnlimitedPlanName            string `json:"unlimitedPlanName"`
+	TotalUpBytes                  int64  `json:"totalUpBytes"`
+	TotalDownBytes                int64  `json:"totalDownBytes"`
 }
 
 func (a PortalAccount) hasUnlimited(nowMillis int64) bool {
@@ -138,6 +140,8 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 				DownloadBitsPerSecond: account.downloadBps(now),
 				UploadBitsPerSecond:   account.uploadBps(now),
 			})
+			authorization.StartClientBytes = client.UpBytes + client.DownBytes
+			m.portalAuthorized[ip] = authorization
 		}
 	}
 }
@@ -361,7 +365,7 @@ func (m *TrafficManager) portalStatus(ip string) portalStatusPayload {
 		AccountName:     account.Name,
 		Plan:            plan,
 		RemainingBytes:  remaining,
-		UsedBytes:       used,
+		UsedBytes:       account.TotalUpBytes + account.TotalDownBytes + used,
 		ExpiresAtMillis: expires,
 		DownloadBps:     account.downloadBps(now),
 		UploadBps:       account.uploadBps(now),
