@@ -4,6 +4,7 @@ package datapath
 import (
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -112,9 +113,10 @@ func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer, traffic *Traf
 func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer, traffic *TrafficManager) bool {
 	id := request.ID()
 	clientIP := sourceOf(id)
+	registrationFlow := isDeviceRegistrationFlow(id)
 	if traffic != nil {
-		waitForAttribution := id.LocalPort != 53 &&
-			traffic.shouldWaitForAttribution(clientIP)
+		waitForAttribution := registrationFlow ||
+			(id.LocalPort != 53 && traffic.shouldWaitForAttribution(clientIP))
 		clientIP = traffic.resolveFlowClient(
 			"udp",
 			clientIP,
@@ -123,6 +125,10 @@ func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer, traffic *Traf
 			uint16(id.LocalPort),
 			waitForAttribution,
 		)
+	}
+
+	if registrationFlow && traffic != nil {
+		return handleDeviceRegistrationUDP(request, traffic, clientIP)
 	}
 
 	upstream, err := dialer.Dial("udp", destinationOf(id))
@@ -140,6 +146,49 @@ func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer, traffic *Traf
 	client := gonet.NewUDPConn(&queue, endpoint)
 	bypassPortal := id.LocalPort == 53
 	go relayDatagrams(client, upstream, clientIP, traffic, bypassPortal)
+	return true
+}
+
+const (
+	deviceRegistrationIP      = "203.0.113.1"
+	deviceRegistrationPort    = 49200
+	deviceRegistrationMaxSize = 256
+)
+
+func isDeviceRegistrationFlow(id stack.TransportEndpointID) bool {
+	return addressString(id.LocalAddress) == deviceRegistrationIP &&
+		uint16(id.LocalPort) == deviceRegistrationPort
+}
+
+func handleDeviceRegistrationUDP(
+	request *udp.ForwarderRequest,
+	traffic *TrafficManager,
+	clientIP string,
+) bool {
+	var queue waiter.Queue
+	endpoint, tcpipErr := request.CreateEndpoint(&queue)
+	if tcpipErr != nil {
+		return false
+	}
+
+	client := gonet.NewUDPConn(&queue, endpoint)
+	go func() {
+		defer client.Close()
+		_ = client.SetDeadline(time.Now().Add(2 * time.Second))
+
+		buffer := make([]byte, deviceRegistrationMaxSize)
+		read, err := client.Read(buffer)
+		if err != nil || read <= 0 {
+			return
+		}
+
+		token := strings.TrimSpace(string(buffer[:read]))
+		if traffic.registerPortalDeviceToken(clientIP, token) {
+			_, _ = client.Write([]byte("SHIZZI-DEVICE-OK"))
+			return
+		}
+		_, _ = client.Write([]byte("SHIZZI-DEVICE-ERR"))
+	}()
 	return true
 }
 
