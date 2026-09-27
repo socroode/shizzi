@@ -75,6 +75,9 @@ jobs:
           cd datapath
           CGO_ENABLED=1 GOOS=android GOARCH=arm64 CC="$CC" go vet ./...
 
+      - name: Test Android unit tests
+        run: ./gradlew testDebugUnitTest --no-daemon
+
       - name: Build debug APK
         run: ./gradlew assembleDebug --no-daemon
 
@@ -86,6 +89,13 @@ jobs:
         with:
           name: app-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload Shizzi Conso debug APK
+        uses: actions/upload-artifact@v5
+        with:
+          name: shizzi-conso-debug
+          path: conso/build/outputs/apk/debug/conso-debug.apk
           if-no-files-found: error
 
       - name: Upload lint report

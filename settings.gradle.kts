@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Shizzi"
 include(":app")
+include(":conso")
