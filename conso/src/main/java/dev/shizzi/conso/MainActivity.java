@@ -79,7 +79,7 @@ public final class MainActivity extends Activity {
         login.setText("OUVRIR LA CONNEXION COMPTE");
         login.setAllCaps(false);
         login.setTextSize(17f);
-        login.setOnClickListener(v -> identifyAndOpenPortal(login));
+        login.setOnClickListener(v -> identifyAndOpenPortal());
 
         LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -90,8 +90,8 @@ public final class MainActivity extends Activity {
 
         TextView footer = new TextView(this);
         footer.setText(
-            "Shizzi Conso identifie d'abord ce téléphone sur le Wi-Fi Shizzi, " +
-            "puis ouvre uniquement sa session de compte et sa consommation."
+            "La page du compte affiche directement votre forfait actif, " +
+            "le solde, le débit, la validité et la recharge."
         );
         footer.setGravity(Gravity.CENTER);
         footer.setTextSize(13f);
@@ -105,16 +105,17 @@ public final class MainActivity extends Activity {
         setContentView(root);
     }
 
-    private void identifyAndOpenPortal(Button button) {
-        button.setEnabled(false);
-        button.setText("Identification de cet appareil…");
+    private volatile boolean identifying;
+
+    private void identifyAndOpenPortal() {
+        if (identifying) return;
+        identifying = true;
         final String token = newDeviceToken();
 
         new Thread(() -> {
             final boolean identified = registerOnShizziWifi(token);
             runOnUiThread(() -> {
-                button.setEnabled(true);
-                button.setText("OUVRIR LA CONNEXION COMPTE");
+                identifying = false;
                 if (!identified) {
                     Toast.makeText(
                         this,
