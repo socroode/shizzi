@@ -637,3 +637,46 @@ func TestDeviceRegistrationRejectsSharedTunIdentity(t *testing.T) {
 		t.Fatal("shared TUN address was accepted as a physical device identity")
 	}
 }
+
+
+func TestLocalDeviceRegistrationStoresPhysicalIdentity(t *testing.T) {
+	manager := newTrafficManager()
+	const token = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+	if !manager.registerPortalDeviceTokenWithIdentity(
+		"192.168.7.66",
+		"AA:BB:CC:DD:EE:FF",
+		"AA:BB:CC:DD:EE:FF",
+		token,
+	) {
+		t.Fatal("local physical device registration was rejected")
+	}
+
+	manager.mu.Lock()
+	binding, ok := manager.portalDeviceTokens[token]
+	manager.mu.Unlock()
+	if !ok {
+		t.Fatal("device token binding was not stored")
+	}
+	if binding.ClientIP != "192.168.7.66" {
+		t.Fatalf("client IP=%q", binding.ClientIP)
+	}
+	if binding.MacAddress != "aa:bb:cc:dd:ee:ff" {
+		t.Fatalf("mac=%q", binding.MacAddress)
+	}
+	if binding.DeviceID != "aa:bb:cc:dd:ee:ff" {
+		t.Fatalf("deviceID=%q", binding.DeviceID)
+	}
+}
+
+func TestLocalDeviceRegistrationStillRejectsSharedTun(t *testing.T) {
+	manager := newTrafficManager()
+	if manager.registerPortalDeviceTokenWithIdentity(
+		"192.0.2.2",
+		"aa:bb:cc:dd:ee:ff",
+		"aa:bb:cc:dd:ee:ff",
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	) {
+		t.Fatal("shared TUN address was accepted as a local physical device")
+	}
+}
