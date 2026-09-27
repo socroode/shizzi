@@ -27,10 +27,12 @@ type flowAttributionKey struct {
 }
 
 type flowAttributionSnapshot struct {
-	ResolvedFlows   int64
-	UnresolvedFlows int64
-	ClientCount     int
-	LastError       string
+	ResolvedFlows         int64
+	FallbackResolvedFlows int64
+	UnresolvedFlows       int64
+	ClientCount           int
+	LastError             string
+	LastMiss              string
 }
 
 type flowAttributionResolver struct {
@@ -42,8 +44,10 @@ type flowAttributionResolver struct {
 	lastRefresh time.Time
 	lastError   string
 
-	resolvedFlows   int64
-	unresolvedFlows int64
+	resolvedFlows         int64
+	fallbackResolvedFlows int64
+	unresolvedFlows       int64
+	lastMiss              string
 }
 
 const (
@@ -190,9 +194,13 @@ func (r *flowAttributionResolver) resolve(
 
 	for {
 		r.mu.Lock()
-		if client := r.flows[key]; client != "" &&
+		if client, fallback := r.lookupLocked(key); client != "" &&
 			time.Since(r.lastRefresh) < attributionRefreshInterval {
 			r.resolvedFlows++
+			if fallback {
+				r.fallbackResolvedFlows++
+			}
+			r.lastMiss = ""
 			r.mu.Unlock()
 			return client
 		}
@@ -200,9 +208,13 @@ func (r *flowAttributionResolver) resolve(
 		if time.Since(r.lastRefresh) >= attributionRefreshInterval {
 			r.refreshLocked()
 		}
-		client := r.flows[key]
+		client, fallback := r.lookupLocked(key)
 		if client != "" {
 			r.resolvedFlows++
+			if fallback {
+				r.fallbackResolvedFlows++
+			}
+			r.lastMiss = ""
 			r.mu.Unlock()
 			return client
 		}
@@ -211,11 +223,82 @@ func (r *flowAttributionResolver) resolve(
 		if !waitForRule || time.Now().After(deadline) {
 			r.mu.Lock()
 			r.unresolvedFlows++
+			r.lastMiss = formatFlowAttributionKey(key)
 			r.mu.Unlock()
 			return ""
 		}
 		time.Sleep(attributionRetryDelay)
 	}
+}
+
+// lookupLocked first tries the exact 5-tuple recorded by Android. Some OEM
+// tethering/netstack combinations expose the same translated flow to gVisor
+// with a destination/protocol detail that does not byte-match dumpsys even
+// though the translated source port still identifies the NAT flow. In that
+// case we fall back only when every matching rule belongs to the same original
+// hotspot client. If two phones could match, attribution fails closed.
+func (r *flowAttributionResolver) lookupLocked(
+	key flowAttributionKey,
+) (clientIP string, fallback bool) {
+	if client := r.flows[key]; client != "" {
+		return client, false
+	}
+
+	if client := r.uniqueClientLocked(func(candidate flowAttributionKey) bool {
+		return candidate.Protocol == key.Protocol &&
+			candidate.PublicIP == key.PublicIP &&
+			candidate.PublicPort == key.PublicPort
+	}); client != "" {
+		return client, true
+	}
+
+	if client := r.uniqueClientLocked(func(candidate flowAttributionKey) bool {
+		return candidate.PublicIP == key.PublicIP &&
+			candidate.PublicPort == key.PublicPort &&
+			candidate.DstIP == key.DstIP &&
+			candidate.DstPort == key.DstPort
+	}); client != "" {
+		return client, true
+	}
+
+	if client := r.uniqueClientLocked(func(candidate flowAttributionKey) bool {
+		return candidate.PublicIP == key.PublicIP &&
+			candidate.PublicPort == key.PublicPort
+	}); client != "" {
+		return client, true
+	}
+
+	return "", false
+}
+
+func (r *flowAttributionResolver) uniqueClientLocked(
+	matches func(flowAttributionKey) bool,
+) string {
+	client := ""
+	for candidate, candidateClient := range r.flows {
+		if candidateClient == "" || !matches(candidate) {
+			continue
+		}
+		if client == "" {
+			client = candidateClient
+			continue
+		}
+		if client != candidateClient {
+			return ""
+		}
+	}
+	return client
+}
+
+func formatFlowAttributionKey(key flowAttributionKey) string {
+	return fmt.Sprintf(
+		"%s %s:%d -> %s:%d",
+		key.Protocol,
+		key.PublicIP,
+		key.PublicPort,
+		key.DstIP,
+		key.DstPort,
+	)
 }
 
 func (r *flowAttributionResolver) refreshLocked() {
@@ -267,9 +350,11 @@ func (r *flowAttributionResolver) snapshot() flowAttributionSnapshot {
 	}
 
 	return flowAttributionSnapshot{
-		ResolvedFlows:   r.resolvedFlows,
-		UnresolvedFlows: r.unresolvedFlows,
-		ClientCount:     len(clients),
-		LastError:       r.lastError,
+		ResolvedFlows:         r.resolvedFlows,
+		FallbackResolvedFlows: r.fallbackResolvedFlows,
+		UnresolvedFlows:       r.unresolvedFlows,
+		ClientCount:           len(clients),
+		LastError:             r.lastError,
+		LastMiss:              r.lastMiss,
 	}
 }
