@@ -185,6 +185,23 @@ func (s *Session) SetPortalClientAccess(
 	)
 }
 
+// RegisterPortalDeviceToken binds a Shizzi Conso token to one physical
+// hotspot client before portal authentication. This is called from the local
+// hotspot-LAN registration server, so clientIP is the pre-NAT downstream IP.
+func (s *Session) RegisterPortalDeviceToken(
+	clientIP, macAddress, deviceID, token string,
+) bool {
+	if s.traffic == nil {
+		return false
+	}
+	return s.traffic.registerPortalDeviceTokenWithIdentity(
+		clientIP,
+		macAddress,
+		deviceID,
+		token,
+	)
+}
+
 // ClearPortalClaims acknowledges portal voucher submissions already persisted by Android.
 func (s *Session) ClearPortalClaims() {
 	if s.traffic == nil {

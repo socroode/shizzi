@@ -23,6 +23,7 @@ class TetherSession(private val context: Context) {
     private var lastPortalLoginAttemptLogged: Long = 0
     private var vpnMode = VpnMode.AUTO
     private var watchdog: SessionWatchdog? = null
+    private var deviceRegistrationServer: PortalDeviceRegistrationServer? = null
     private val teardown = SessionTeardown(context)
     private val downstream = DownstreamInspector()
     private val clientIdentities = ClientIdentityInspector()
@@ -81,6 +82,7 @@ class TetherSession(private val context: Context) {
 
         preferTestNetworks()
         restartDownstream()
+        startDeviceRegistrationServer(group)
 
         verifyUpstream(name)
         SessionLog.info("upstream verified: $name is sole upstream")
@@ -145,6 +147,63 @@ class TetherSession(private val context: Context) {
                 "${globalUploadBps / 1_000_000} Mbps up; " +
                 "quota=$globalQuotaBytes bytes",
         )
+    }
+
+    private fun startDeviceRegistrationServer(group: SessionResources) {
+        deviceRegistrationServer?.stop()
+
+        val server = PortalDeviceRegistrationServer { sourceIp, token ->
+            registerPhysicalPortalDevice(group, sourceIp, token)
+        }
+        server.start()
+        deviceRegistrationServer = server
+        SessionLog.info(
+            "device identification channel ready: hotspot LAN UDP " +
+                PortalDeviceRegistrationServer.PORT,
+        )
+    }
+
+    private fun registerPhysicalPortalDevice(
+        group: SessionResources,
+        sourceIp: String,
+        token: String,
+    ): Boolean {
+        if (sourceIp.isBlank() || sourceIp == TUN_ADDRESS) return false
+
+        val devices = tetheredClients.snapshot()
+        val identities = clientIdentities.byIp()
+        val identity = identities[sourceIp]
+
+        val device = devices.firstOrNull { candidate ->
+            sourceIp in candidate.addresses ||
+                (identity != null && identity.deviceId == candidate.deviceId)
+        }
+
+        val mac = device?.macAddress ?: identity?.mac.orEmpty()
+        val deviceId = device?.deviceId ?: identity?.deviceId.orEmpty()
+        if (mac.isBlank() || deviceId.isBlank()) {
+            SessionLog.warn(
+                "device identification pending: ip=$sourceIp mac/deviceId unavailable",
+            )
+            return false
+        }
+
+        val accepted = group.registerPortalDeviceToken(
+            clientIp = sourceIp,
+            macAddress = mac,
+            deviceId = deviceId,
+            token = token,
+        )
+
+        when {
+            accepted -> SessionLog.info(
+                "device identified: ip=$sourceIp mac=$mac deviceId=$deviceId",
+            )
+            else -> SessionLog.warn(
+                "device identification rejected: ip=$sourceIp mac=$mac deviceId=$deviceId",
+            )
+        }
+        return accepted
     }
 
     fun trafficStats(): String {
@@ -661,6 +720,8 @@ class TetherSession(private val context: Context) {
     fun stop(): String {
         watchdog?.stop()
         watchdog = null
+        deviceRegistrationServer?.stop()
+        deviceRegistrationServer = null
         vpn.stop()
         teardown.removeShutdownHook()
 
