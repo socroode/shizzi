@@ -14,6 +14,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,6 +41,8 @@ class SessionService : Service() {
     private var startJob: Job? = null
 
     private var cybercafeJob: Job? = null
+
+    private var cybercafePortalJob: Job? = null
 
     private var generation = 0
 
@@ -104,6 +107,47 @@ class SessionService : Service() {
             announceOutcome()
             followStatus()
             followCybercafePolicies()
+            followCybercafePortal()
+        }
+    }
+
+    private fun followCybercafePortal() {
+        cybercafePortalJob?.cancel()
+        cybercafePortalJob = scope.launch {
+            while (internalState.value.status == UiStatus.CONNECTED) {
+                val snapshot = runCatching {
+                    parseLiveTrafficSnapshot(controller.trafficStats())
+                }.getOrElse { failure ->
+                    SessionLog.warn(
+                        "cybercafe traffic poll failed: " +
+                            "${failure.javaClass.simpleName}: ${failure.message}",
+                    )
+                    LiveTrafficSnapshot()
+                }
+
+                if (snapshot.portalRechargeClaims.isNotEmpty()) {
+                    val store = (application as App).cybercafeStore
+                    snapshot.portalRechargeClaims.forEach { claim ->
+                        val outcome = store.redeemVoucherForAccount(
+                            claim.accountNumber,
+                            claim.code,
+                            System.currentTimeMillis(),
+                        )
+                        if (!outcome.success) {
+                            SessionLog.warn(
+                                "voucher ${claim.code} rejected for " +
+                                    "${claim.accountNumber}: ${outcome.message}",
+                            )
+                        }
+                    }
+                    runCatching { controller.clearPortalClaims() }
+                        .onFailure {
+                            SessionLog.warn("could not clear portal claims: ${it.message}")
+                        }
+                }
+
+                delay(CYBERCAFE_POLL_MS)
+            }
         }
     }
 
@@ -147,6 +191,8 @@ class SessionService : Service() {
         statusPoller.stop()
         cybercafeJob?.cancel()
         cybercafeJob = null
+        cybercafePortalJob?.cancel()
+        cybercafePortalJob = null
 
         internalState.update {
             it.asStopped()
@@ -222,6 +268,8 @@ class SessionService : Service() {
         controller.onSessionLost = null
         cybercafeJob?.cancel()
         cybercafeJob = null
+        cybercafePortalJob?.cancel()
+        cybercafePortalJob = null
         controller.unbind()
         scope.cancel()
         liveService = null
@@ -230,6 +278,7 @@ class SessionService : Service() {
 
     companion object {
         private const val NOTIFICATION_ID = 1
+        private const val CYBERCAFE_POLL_MS = 1_000L
         const val ACTION_STOP = "dev.shizzi.STOP_SESSION"
         const val EXTRA_REPORT_AS = "reportAs"
 

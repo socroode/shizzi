@@ -23,9 +23,25 @@ data class AttributionDiagnostics(
     val lastMiss: String = "",
 )
 
+data class LivePortalAuthorization(
+    val ip: String,
+    val accountNumber: String,
+    val startedAtMillis: Long,
+    val sessionDataUsedBytes: Long,
+)
+
+data class LivePortalRechargeClaim(
+    val ip: String,
+    val accountNumber: String,
+    val code: String,
+    val claimedAtMillis: Long,
+)
+
 data class LiveTrafficSnapshot(
     val clients: List<LiveClientTraffic> = emptyList(),
     val attribution: AttributionDiagnostics = AttributionDiagnostics(),
+    val portalAuthorizations: List<LivePortalAuthorization> = emptyList(),
+    val portalRechargeClaims: List<LivePortalRechargeClaim> = emptyList(),
 )
 
 fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
@@ -54,6 +70,44 @@ fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
         }
     }.orEmpty()
 
+    val authorizations = root.optJSONArray("portalAuthorizations")?.let { array ->
+        buildList {
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                val ip = item.optString("ip")
+                val account = item.optString("accountNumber")
+                if (ip.isBlank() || account.isBlank()) continue
+                add(
+                    LivePortalAuthorization(
+                        ip = ip,
+                        accountNumber = account,
+                        startedAtMillis = item.optLong("startedAtMillis"),
+                        sessionDataUsedBytes = item.optLong("sessionDataUsedBytes"),
+                    ),
+                )
+            }
+        }
+    }.orEmpty()
+
+    val claims = root.optJSONArray("portalRechargeClaims")?.let { array ->
+        buildList {
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                val account = item.optString("accountNumber")
+                val code = item.optString("code")
+                if (account.isBlank() || code.isBlank()) continue
+                add(
+                    LivePortalRechargeClaim(
+                        ip = item.optString("ip"),
+                        accountNumber = account,
+                        code = code,
+                        claimedAtMillis = item.optLong("claimedAtMillis"),
+                    ),
+                )
+            }
+        }
+    }.orEmpty()
+
     val attribution = root.optJSONObject("attribution")
     return LiveTrafficSnapshot(
         clients = clients,
@@ -65,20 +119,53 @@ fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
             lastError = attribution?.optString("lastError").orEmpty(),
             lastMiss = attribution?.optString("lastMiss").orEmpty(),
         ),
+        portalAuthorizations = authorizations,
+        portalRechargeClaims = claims,
     )
 }
 
+fun CybercafeState.toPortalConfigJson(): String =
+    JSONObject().apply {
+        put("title", "Shizzi Hotspot")
+        put("message", "Ouvrez votre compte ou rechargez avec un voucher.")
+        put(
+            "accounts",
+            JSONArray().apply {
+                accounts.values.sortedBy(PrepaidAccount::number).forEach { account ->
+                    put(
+                        JSONObject().apply {
+                            put("number", account.number)
+                            put("name", account.name)
+                            put("pinSalt", account.pinSalt)
+                            put("pinHash", account.pinHash)
+                            put("enabled", account.enabled)
+                            put("dataBalanceBytes", account.dataBalanceBytes)
+                            put("dataValidUntilMillis", account.dataValidUntilMillis)
+                            put("dataDownloadBps", account.dataDownloadBps)
+                            put("dataUploadBps", account.dataUploadBps)
+                            put("unlimitedUntilMillis", account.unlimitedUntilMillis)
+                            put("unlimitedDownloadBps", account.unlimitedDownloadBps)
+                            put("unlimitedUploadBps", account.unlimitedUploadBps)
+                            put("unlimitedPlanName", account.unlimitedPlanName)
+                        },
+                    )
+                }
+            },
+        )
+    }.toString()
+
 /**
- * Applies persisted account state to the userspace datapath without making the
- * datapath the source of truth. CybercafeStore remains authoritative.
- *
- * Client attribution remains disabled until captive authentication is wired in;
- * this preserves the original fork's open-hotspot networking during rebuild.
+ * Pushes the durable Android account snapshot into the shell/gVisor datapath.
+ * Once at least one account exists, the captive portal is enabled and physical
+ * client attribution becomes fail-closed before account/rate/quota decisions.
  */
 suspend fun TetherClient.applyCybercafePolicies(state: CybercafeState, nowMillis: Long) {
+    val portalRequired = state.accounts.isNotEmpty()
+
     setGlobalTrafficPolicy(0L, 0L, 0L)
     setDefaultClientTrafficPolicy(0L, 0L, 0L, false)
-    setRequireClientAttribution(false)
+    setPortalConfig(portalRequired, state.toPortalConfigJson())
+    setRequireClientAttribution(portalRequired)
 
     state.devices.values.forEach { binding ->
         val ip = binding.ip

@@ -148,6 +148,16 @@ class CybercafeStore(context: Context) {
     }
 
     @Synchronized
+    fun redeemVoucherForAccount(
+        numberRaw: String,
+        codeRaw: String,
+        nowMillis: Long,
+    ): RuleOutcome {
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        return commit(CybercafeRules.redeemVoucher(state.value, number, codeRaw, nowMillis))
+    }
+
+    @Synchronized
     fun redeemVoucher(
         numberRaw: String,
         pin: String,
