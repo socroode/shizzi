@@ -1119,14 +1119,30 @@ func (m *TrafficManager) submitPortalRecharge(ip, rawCode string) (bool, string)
 }
 
 func (m *TrafficManager) portalAccountPanelLocked(clientIP, sessionToken string) string {
+	return m.portalAccountPanelLockedWithDevice(clientIP, sessionToken, "")
+}
+
+func (m *TrafficManager) portalAccountPanelLockedWithDevice(
+	clientIP, sessionToken, deviceToken string,
+) string {
 	if len(m.portalAccounts) == 0 {
 		return ""
+	}
+	deviceField := ""
+	statusHref := "/status"
+	if token := normalizePortalDeviceToken(deviceToken); token != "" {
+		deviceField = fmt.Sprintf(
+			"<input type=\"hidden\" name=\"device\" value=\"%s\">",
+			html.EscapeString(token),
+		)
+		statusHref = "/status?device=" + url.QueryEscape(token)
 	}
 	auth, ok := m.portalAuthorizationForSessionLocked(clientIP, sessionToken)
 	if !ok || auth.AccountNumber == "" {
 		return "<section class=\"account-box login-box\"><div class=\"eyebrow\">COMPTE PRÉPAYÉ</div><h2>Connexion client</h2>" +
 			"<p class=\"muted\">Entrez votre numéro de compte et votre PIN.</p>" +
 			"<form action=\"/account/login\" method=\"post\">" +
+			deviceField +
 			"<label>Numéro de compte</label><input name=\"account\" inputmode=\"numeric\" autocomplete=\"username\" placeholder=\"Ex. 25494159\" required>" +
 			"<label>PIN</label><input name=\"pin\" inputmode=\"numeric\" autocomplete=\"current-password\" placeholder=\"6 chiffres\" required>" +
 			"<button type=\"submit\">Se connecter</button></form></section>"
@@ -1179,10 +1195,11 @@ func (m *TrafficManager) portalAccountPanelLocked(clientIP, sessionToken string)
 			"<div class=\"remaining-big\">%s</div>"+
 			"<div class=\"metric-grid\"><div><span>Débit ↓</span><strong>%s</strong></div><div><span>Débit ↑</span><strong>%s</strong></div><div class=\"wide\"><span>Validité restante</span><strong>%s</strong></div></div></div>"+
 			"<form action=\"/account/recharge\" method=\"post\" class=\"recharge-form\"><label>Code de recharge</label>"+
+			"%s"+
 			"<input type=\"hidden\" name=\"session\" value=\"%s\">"+
 			"<input name=\"code\" autocomplete=\"one-time-code\" autocapitalize=\"characters\" placeholder=\"Saisir le coupon\" required>"+
 			"<button type=\"submit\">Recharger mon compte</button></form>"+
-			"<a class=\"status-link\" href=\"/status\">Voir ma consommation en direct</a></section>",
+			"<a class=\"status-link\" href=\"%s\">Voir ma consommation en direct</a></section>",
 		html.EscapeString(displayName),
 		html.EscapeString(account.Number),
 		stateClass,
@@ -1192,7 +1209,9 @@ func (m *TrafficManager) portalAccountPanelLocked(clientIP, sessionToken string)
 		html.EscapeString(downText),
 		html.EscapeString(upText),
 		html.EscapeString(expiresText),
+		deviceField,
 		html.EscapeString(auth.SessionToken),
+		html.EscapeString(statusHref),
 	)
 }
 
@@ -1207,7 +1226,16 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	defer req.Body.Close()
 
 	extraHeaders := []string{}
+	var values url.Values
+	if req.Method == http.MethodPost {
+		body, _ := io.ReadAll(io.LimitReader(req.Body, 16*1024))
+		values, _ = url.ParseQuery(string(body))
+	}
+
 	deviceToken := portalDeviceTokenFromRequest(req)
+	if posted := normalizePortalDeviceToken(values.Get("device")); posted != "" {
+		deviceToken = posted
+	}
 	if deviceToken != "" {
 		if resolvedIP, ok := m.portalClientForDeviceToken(deviceToken); ok {
 			clientIP = resolvedIP
@@ -1220,6 +1248,9 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	}
 
 	sessionToken := portalSessionTokenFromRequest(req)
+	if posted := strings.TrimSpace(values.Get("session")); posted != "" {
+		sessionToken = posted
+	}
 	sessionToken = m.bindPortalAccountSession(clientIP, sessionToken)
 
 	switch req.URL.Path {
@@ -1258,11 +1289,6 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 		message = "Plusieurs appareils sont connectés. Ouvrez Shizzi Conso sur cet appareil pour l’identifier."
 	}
 	if req.Method == http.MethodPost {
-		body, _ := io.ReadAll(io.LimitReader(req.Body, 16*1024))
-		values, _ := url.ParseQuery(string(body))
-		if posted := strings.TrimSpace(values.Get("session")); posted != "" {
-			sessionToken = posted
-		}
 		switch req.URL.Path {
 		case "/account/login":
 			var freshToken string
@@ -1291,7 +1317,7 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 		internetOK = m.portalRequestAuthorizedFor(clientIP, sessionToken)
 	}
 
-	page := m.renderPortalPage(clientIP, sessionToken, internetOK || actionOK, message)
+	page := m.renderPortalPage(clientIP, sessionToken, deviceToken, internetOK || actionOK, message)
 	if internetOK && req.Method == http.MethodPost {
 		page = injectPortalValidationRedirect(page)
 	}
@@ -1304,7 +1330,7 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 }
 
 func (m *TrafficManager) renderPortalPage(
-	clientIP, sessionToken string,
+	clientIP, sessionToken, deviceToken string,
 	success bool,
 	statusMessage string,
 ) string {
@@ -1312,7 +1338,7 @@ func (m *TrafficManager) renderPortalPage(
 	title := m.portalTitle
 	message := m.portalMessage
 	custom := m.portalHTML
-	accountPanel := m.portalAccountPanelLocked(clientIP, sessionToken)
+	accountPanel := m.portalAccountPanelLockedWithDevice(clientIP, sessionToken, deviceToken)
 	accountMode := len(m.portalAccounts) > 0
 
 	planName := ""
