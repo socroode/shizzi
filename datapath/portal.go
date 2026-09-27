@@ -128,7 +128,7 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 	now := time.Now().UnixMilli()
 	for ip, authorization := range m.portalAuthorized {
 		account, ok := accounts[authorization.AccountNumber]
-		if !ok || !account.hasInternet(now) {
+		if !ok || !account.Enabled {
 			delete(m.portalAuthorized, ip)
 			if client := m.clients[ip]; client != nil {
 				client.applyPolicy(ClientPolicy{Blocked: true})
@@ -139,6 +139,7 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 			client.applyPolicy(ClientPolicy{
 				DownloadBitsPerSecond: account.downloadBps(now),
 				UploadBitsPerSecond:   account.uploadBps(now),
+				Blocked:               !account.hasInternet(now),
 			})
 			authorization.StartClientBytes = client.UpBytes + client.DownBytes
 			m.portalAuthorized[ip] = authorization
