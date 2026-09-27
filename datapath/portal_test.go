@@ -547,3 +547,93 @@ func TestAccountSessionMovesFromSharedAddressToResolvedClient(t *testing.T) {
 		t.Fatalf("resolved client token=%q, want %q", resolved.SessionToken, token)
 	}
 }
+
+
+func TestThreeSimultaneousShizziConsoDevicesStaySeparate(t *testing.T) {
+	manager := newTrafficManager()
+	manager.flowAttribution.dumpFn = func() (string, error) {
+		return sampleTetheringDump, nil
+	}
+	manager.flowAttribution.mu.Lock()
+	manager.flowAttribution.refreshLocked()
+	manager.flowAttribution.mu.Unlock()
+
+	manager.setPortalConfig(true, `{
+	  "accounts": [
+	    {"number":"10000001","pin":"111111","name":"A","enabled":true,"dataBalanceBytes":1000000000},
+	    {"number":"10000002","pin":"222222","name":"B","enabled":true,"dataBalanceBytes":2000000000},
+	    {"number":"10000003","pin":"333333","name":"C","enabled":true,"dataBalanceBytes":3000000000}
+	  ]
+	}`)
+
+	const (
+		tokenA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		tokenB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+		tokenC = "cccccccccccccccccccccccccccccccc"
+	)
+	for token, ip := range map[string]string{
+		tokenA: "192.168.7.66",
+		tokenB: "192.168.7.162",
+		tokenC: "192.168.7.163",
+	} {
+		if !manager.registerPortalDeviceToken(ip, token) {
+			t.Fatalf("device registration failed for %s/%s", token, ip)
+		}
+	}
+
+	type login struct {
+		token   string
+		number  string
+		pin     string
+		wantIP  string
+		wantName string
+	}
+	logins := []login{
+		{tokenA, "10000001", "111111", "192.168.7.66", "A"},
+		{tokenB, "10000002", "222222", "192.168.7.162", "B"},
+		{tokenC, "10000003", "333333", "192.168.7.163", "C"},
+	}
+
+	for _, item := range logins {
+		ip, ok := manager.portalClientForDeviceToken(item.token)
+		if !ok || ip != item.wantIP {
+			t.Fatalf("token %s resolved to %q ok=%v, want %q", item.token, ip, ok, item.wantIP)
+		}
+		okLogin, message, session := manager.submitPortalAccountLoginWithSession(
+			ip,
+			item.number,
+			item.pin,
+		)
+		if !okLogin || session == "" {
+			t.Fatalf("%s login failed: %s", item.wantName, message)
+		}
+
+		status := manager.portalUsageStatusForSession(ip, session)
+		if !status.Authenticated || status.AccountName != item.wantName ||
+			status.AccountNumber != item.number {
+			t.Fatalf("%s received wrong status: %+v", item.wantName, status)
+		}
+	}
+
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if got := manager.portalAuthorized["192.168.7.66"].AccountNumber; got != "10000001" {
+		t.Fatalf("A authorization=%q", got)
+	}
+	if got := manager.portalAuthorized["192.168.7.162"].AccountNumber; got != "10000002" {
+		t.Fatalf("B authorization=%q", got)
+	}
+	if got := manager.portalAuthorized["192.168.7.163"].AccountNumber; got != "10000003" {
+		t.Fatalf("C authorization=%q", got)
+	}
+}
+
+func TestDeviceRegistrationRejectsSharedTunIdentity(t *testing.T) {
+	manager := newTrafficManager()
+	if manager.registerPortalDeviceToken(
+		"192.0.2.2",
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	) {
+		t.Fatal("shared TUN address was accepted as a physical device identity")
+	}
+}

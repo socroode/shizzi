@@ -2,8 +2,12 @@ package dev.shizzi.conso;
 
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Typeface;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.Gravity;
@@ -12,9 +16,17 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
 
 public final class MainActivity extends Activity {
     private static final String BASE_URL = "http://192.0.2.1/";
+    private static final String REGISTRATION_IP = "203.0.113.1";
+    private static final int REGISTRATION_PORT = 49200;
+    private static final SecureRandom RANDOM = new SecureRandom();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -67,7 +79,7 @@ public final class MainActivity extends Activity {
         login.setText("OUVRIR LA CONNEXION COMPTE");
         login.setAllCaps(false);
         login.setTextSize(17f);
-        login.setOnClickListener(v -> openBrowser(BASE_URL));
+        login.setOnClickListener(v -> identifyAndOpenPortal(login));
 
         LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -78,8 +90,8 @@ public final class MainActivity extends Activity {
 
         TextView footer = new TextView(this);
         footer.setText(
-            "La page du compte affiche directement votre forfait actif, " +
-            "le solde, le débit, la validité et la recharge."
+            "Shizzi Conso identifie d'abord ce téléphone sur le Wi-Fi Shizzi, " +
+            "puis ouvre uniquement sa session de compte et sa consommation."
         );
         footer.setGravity(Gravity.CENTER);
         footer.setTextSize(13f);
@@ -91,6 +103,102 @@ public final class MainActivity extends Activity {
         root.addView(footer, footerParams);
 
         setContentView(root);
+    }
+
+    private void identifyAndOpenPortal(Button button) {
+        button.setEnabled(false);
+        button.setText("Identification de cet appareil…");
+        final String token = newDeviceToken();
+
+        new Thread(() -> {
+            final boolean identified = registerOnShizziWifi(token);
+            runOnUiThread(() -> {
+                button.setEnabled(true);
+                button.setText("OUVRIR LA CONNEXION COMPTE");
+                if (!identified) {
+                    Toast.makeText(
+                        this,
+                        "Impossible d'identifier ce téléphone sur le Wi-Fi Shizzi. Réessayez.",
+                        Toast.LENGTH_LONG
+                    ).show();
+                    return;
+                }
+                openBrowser(BASE_URL + "?device=" + Uri.encode(token));
+            });
+        }, "shizzi-conso-identify").start();
+    }
+
+    private boolean registerOnShizziWifi(String token) {
+        Network wifi = findWifiNetwork();
+        if (wifi == null) return false;
+
+        byte[] payload = token.getBytes(StandardCharsets.UTF_8);
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try (DatagramSocket socket = new DatagramSocket()) {
+                wifi.bindSocket(socket);
+                socket.setSoTimeout(1800);
+
+                DatagramPacket request = new DatagramPacket(
+                    payload,
+                    payload.length,
+                    InetAddress.getByName(REGISTRATION_IP),
+                    REGISTRATION_PORT
+                );
+                socket.send(request);
+
+                byte[] responseBytes = new byte[64];
+                DatagramPacket response = new DatagramPacket(
+                    responseBytes,
+                    responseBytes.length
+                );
+                socket.receive(response);
+
+                String reply = new String(
+                    response.getData(),
+                    response.getOffset(),
+                    response.getLength(),
+                    StandardCharsets.UTF_8
+                );
+                if ("SHIZZI-DEVICE-OK".equals(reply)) {
+                    return true;
+                }
+            } catch (Exception ignored) {
+                // Retry: the tethering BPF entry can appear a few hundred ms
+                // after the first packet on some Android/OEM combinations.
+            }
+
+            try {
+                Thread.sleep(250L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
+    }
+
+    private Network findWifiNetwork() {
+        ConnectivityManager manager =
+            (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (manager == null) return null;
+
+        for (Network network : manager.getAllNetworks()) {
+            NetworkCapabilities caps = manager.getNetworkCapabilities(network);
+            if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                return network;
+            }
+        }
+        return null;
+    }
+
+    private String newDeviceToken() {
+        byte[] raw = new byte[32];
+        RANDOM.nextBytes(raw);
+        StringBuilder out = new StringBuilder(raw.length * 2);
+        for (byte value : raw) {
+            out.append(String.format("%02x", value & 0xff));
+        }
+        return out.toString();
     }
 
     private void openBrowser(String url) {

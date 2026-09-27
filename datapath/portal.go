@@ -82,7 +82,18 @@ type PortalAccountSession struct {
 	LastSeenMillis  int64
 }
 
-const portalSessionCookieName = "shizzi_session"
+type PortalDeviceBinding struct {
+	Token           string
+	ClientIP        string
+	BoundAtMillis   int64
+	ExpiresAtMillis int64
+}
+
+const (
+	portalSessionCookieName = "shizzi_session"
+	portalDeviceCookieName  = "shizzi_device"
+	portalDeviceBindingTTL  = 30 * time.Minute
+)
 
 type portalConfigPayload struct {
 	Title   string       `json:"title"`
@@ -175,7 +186,70 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 	if !required {
 		m.portalAuthorized = make(map[string]PortalAuthorization)
 		m.portalAccountSessions = make(map[string]PortalAccountSession)
+		m.portalDeviceTokens = make(map[string]PortalDeviceBinding)
 	}
+}
+
+func normalizePortalDeviceToken(raw string) string {
+	token := strings.TrimSpace(raw)
+	if len(token) < 24 || len(token) > 128 {
+		return ""
+	}
+	for _, r := range token {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '-', r == '_':
+		default:
+			return ""
+		}
+	}
+	return token
+}
+
+func (m *TrafficManager) prunePortalDeviceTokensLocked(now int64) {
+	for token, binding := range m.portalDeviceTokens {
+		if binding.ExpiresAtMillis > 0 && now >= binding.ExpiresAtMillis {
+			delete(m.portalDeviceTokens, token)
+		}
+	}
+}
+
+func (m *TrafficManager) registerPortalDeviceToken(clientIP, rawToken string) bool {
+	token := normalizePortalDeviceToken(rawToken)
+	if token == "" || clientIP == "" || isSharedTunnelAddress(clientIP) {
+		return false
+	}
+
+	now := time.Now().UnixMilli()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.prunePortalDeviceTokensLocked(now)
+	m.portalDeviceTokens[token] = PortalDeviceBinding{
+		Token:           token,
+		ClientIP:        clientIP,
+		BoundAtMillis:   now,
+		ExpiresAtMillis: now + portalDeviceBindingTTL.Milliseconds(),
+	}
+	return true
+}
+
+func (m *TrafficManager) portalClientForDeviceToken(rawToken string) (string, bool) {
+	token := normalizePortalDeviceToken(rawToken)
+	if token == "" {
+		return "", false
+	}
+
+	now := time.Now().UnixMilli()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.prunePortalDeviceTokensLocked(now)
+	binding, ok := m.portalDeviceTokens[token]
+	if !ok || binding.ClientIP == "" || isSharedTunnelAddress(binding.ClientIP) {
+		return "", false
+	}
+	return binding.ClientIP, true
 }
 
 func (m *TrafficManager) clearPortalClaims() {
@@ -788,6 +862,19 @@ func portalSessionTokenFromRequest(req *http.Request) string {
 	return ""
 }
 
+func portalDeviceTokenFromRequest(req *http.Request) string {
+	if req == nil {
+		return ""
+	}
+	if token := normalizePortalDeviceToken(req.URL.Query().Get("device")); token != "" {
+		return token
+	}
+	if cookie, err := req.Cookie(portalDeviceCookieName); err == nil {
+		return normalizePortalDeviceToken(cookie.Value)
+	}
+	return ""
+}
+
 func (m *TrafficManager) portalAuthorizationForSessionLocked(
 	ip, rawToken string,
 ) (PortalAuthorization, bool) {
@@ -1103,18 +1190,42 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	}
 	defer req.Body.Close()
 
+	extraHeaders := []string{}
+	deviceToken := portalDeviceTokenFromRequest(req)
+	if deviceToken != "" {
+		if resolvedIP, ok := m.portalClientForDeviceToken(deviceToken); ok {
+			clientIP = resolvedIP
+			extraHeaders = append(extraHeaders, fmt.Sprintf(
+				"Set-Cookie: %s=%s; Path=/; Max-Age=1800; HttpOnly; SameSite=Lax",
+				portalDeviceCookieName,
+				deviceToken,
+			))
+		}
+	}
+
 	sessionToken := portalSessionTokenFromRequest(req)
 	sessionToken = m.bindPortalAccountSession(clientIP, sessionToken)
 
 	switch req.URL.Path {
 	case "/status.json":
-		m.servePortalStatusJSON(conn, clientIP, sessionToken)
+		status := m.portalUsageStatusForSession(clientIP, sessionToken)
+		body, marshalErr := json.Marshal(status)
+		if marshalErr != nil {
+			body = []byte("{}")
+		}
+		writePortalResponseWithHeaders(
+			conn,
+			"application/json; charset=utf-8",
+			body,
+			extraHeaders,
+		)
 		return
 	case "/status":
-		writePortalResponse(
+		writePortalResponseWithHeaders(
 			conn,
 			"text/html; charset=utf-8",
 			[]byte(m.renderLiveStatusPage()),
+			extraHeaders,
 		)
 		return
 	}
@@ -1122,9 +1233,13 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	internetOK := m.portalRequestAuthorizedFor(clientIP, sessionToken)
 	actionOK := false
 	message := ""
-	extraHeaders := []string{}
 	if internetOK && req.Method == http.MethodGet {
 		message = "Accès actif."
+	} else if req.Method == http.MethodGet &&
+		isSharedTunnelAddress(clientIP) &&
+		m.flowAttribution != nil &&
+		m.flowAttribution.hasMultipleClients() {
+		message = "Plusieurs appareils sont connectés. Ouvrez Shizzi Conso sur cet appareil pour l’identifier."
 	}
 	if req.Method == http.MethodPost {
 		body, _ := io.ReadAll(io.LimitReader(req.Body, 16*1024))
