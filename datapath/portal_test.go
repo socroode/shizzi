@@ -962,3 +962,44 @@ func TestPhysicalSessionIsNotMovedBackToSharedTunAfterSecondClientJoins(t *testi
 		t.Fatal("physical session was moved back onto shared TUN address")
 	}
 }
+
+
+func TestSharedTunnelAuthorizationNeverBypassesCaptivePortal(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portablePassConfig)
+
+	manager.mu.Lock()
+	manager.portalAuthorized["192.0.2.2"] = PortalAuthorization{
+		Code:                "ECO123",
+		ExpiresAtMillis:     time.Now().Add(time.Hour).UnixMilli(),
+		QuotaRemainingBytes: 1000000,
+		StartedAtMillis:     time.Now().UnixMilli(),
+	}
+	manager.mu.Unlock()
+
+	if manager.portalAuthorizedFor("192.0.2.2") {
+		t.Fatal("shared TestNetwork address bypassed the captive portal")
+	}
+	if !manager.portalRequiredFor("192.0.2.2") {
+		t.Fatal("shared TestNetwork address did not require the captive portal")
+	}
+}
+
+func TestPortalConfigDropsStaleSharedAuthorization(t *testing.T) {
+	manager := newTrafficManager()
+	manager.mu.Lock()
+	manager.portalAuthorized["192.0.2.2"] = PortalAuthorization{
+		Code:            "ECO123",
+		StartedAtMillis: time.Now().UnixMilli(),
+	}
+	manager.mu.Unlock()
+
+	manager.setPortalConfig(true, portablePassConfig)
+
+	manager.mu.Lock()
+	_, exists := manager.portalAuthorized["192.0.2.2"]
+	manager.mu.Unlock()
+	if exists {
+		t.Fatal("stale shared authorization survived portal config refresh")
+	}
+}
