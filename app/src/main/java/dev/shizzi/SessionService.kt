@@ -19,6 +19,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -37,6 +38,8 @@ class SessionService : Service() {
     private var reportTo: AutomationCommand? = null
 
     private var startJob: Job? = null
+
+    private var cybercafeJob: Job? = null
 
     private var generation = 0
 
@@ -100,6 +103,27 @@ class SessionService : Service() {
             publishState()
             announceOutcome()
             followStatus()
+            followCybercafePolicies()
+        }
+    }
+
+    private fun followCybercafePolicies() {
+        cybercafeJob?.cancel()
+        cybercafeJob = scope.launch {
+            (application as App).cybercafeStore.state.collectLatest { cybercafe ->
+                if (internalState.value.status != UiStatus.CONNECTED) return@collectLatest
+                runCatching {
+                    controller.applyCybercafePolicies(
+                        cybercafe,
+                        System.currentTimeMillis(),
+                    )
+                }.onFailure { failure ->
+                    SessionLog.warn(
+                        "cybercafe policy sync failed: " +
+                            "${failure.javaClass.simpleName}: ${failure.message}",
+                    )
+                }
+            }
         }
     }
 
@@ -121,6 +145,8 @@ class SessionService : Service() {
         startJob = null
 
         statusPoller.stop()
+        cybercafeJob?.cancel()
+        cybercafeJob = null
 
         internalState.update {
             it.asStopped()
@@ -194,6 +220,8 @@ class SessionService : Service() {
 
     override fun onDestroy() {
         controller.onSessionLost = null
+        cybercafeJob?.cancel()
+        cybercafeJob = null
         controller.unbind()
         scope.cancel()
         liveService = null
