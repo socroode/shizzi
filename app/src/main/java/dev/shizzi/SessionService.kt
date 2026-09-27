@@ -217,12 +217,14 @@ class SessionService : Service() {
                 }
             }
             settings = settingsStore().settings.first()
+            val accountMode = settings.prepaidAccounts.values.any { it.enabled }
+            val accessRequired = accountMode || settings.accessPassRequired
 
             // Voucher state is code-centric. A valid code can move between
             // devices; only activation time and cumulative data belong to it.
             runCatching {
                 controller.setPortalConfig(
-                    settings.accessPassRequired,
+                    accessRequired,
                     portalConfigJson(settings),
                 )
                 if (stats.portalClaims.isNotEmpty() || stats.portalRechargeClaims.isNotEmpty()) {
@@ -323,7 +325,7 @@ class SessionService : Service() {
                     ?.let(settings.prepaidAccounts::get)
                     ?.takeIf { it.enabled }
                 val accountValid = prepaidAccount?.hasInternet(now) == true
-                val credentialValid = accountValid || passValid
+                val credentialValid = if (accountMode) accountValid else accountValid || passValid
                 val credentialDownloadBps = when {
                     accountAuthorization != null && prepaidAccount != null ->
                         prepaidAccount.currentDownloadBps(now)
@@ -336,7 +338,7 @@ class SessionService : Service() {
                 }
 
                 if (
-                    settings.accessPassRequired &&
+                    accessRequired && !accountMode &&
                     accessPass != null &&
                     authorization != null
                 ) {
@@ -361,7 +363,7 @@ class SessionService : Service() {
 
                 val monthlyQuota = policy.monthlyQuotaBytes
                 val monthlySessionQuota = when {
-                    settings.accessPassRequired -> 0L
+                    accessRequired -> 0L
                     monthlyQuota <= 0 -> policy.quotaBytes
                     else -> client.totalBytes + (monthlyQuota - monthlyUsed).coerceAtLeast(0L)
                 }
@@ -382,12 +384,12 @@ class SessionService : Service() {
                 }
 
                 val monthlyBlocked =
-                    !settings.accessPassRequired &&
+                    !accessRequired &&
                         policy.blockOnQuota &&
                         monthlyQuota > 0 &&
                         monthlyUsed >= monthlyQuota
                 val paused =
-                    !settings.accessPassRequired && policy.pausedUntilMillis > now
+                    !accessRequired && policy.pausedUntilMillis > now
                 val isActive = deviceId in currentOnline
                 val overClientLimit =
                     isActive && settings.maxClients > 0 && deviceId !in admittedIds
@@ -395,7 +397,7 @@ class SessionService : Service() {
                 fun passCappedBps(policyMbps: Int, passBps: Long): Long {
                     val policyBps = policyMbps.toLong().coerceAtLeast(0L) * 1_000_000L
                     return when {
-                        settings.accessPassRequired && credentialValid ->
+                        accessRequired && credentialValid ->
                             passBps.coerceAtLeast(0L)
                         else -> policyBps
                     }
