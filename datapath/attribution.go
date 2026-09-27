@@ -54,6 +54,7 @@ type flowAttributionResolver struct {
 const (
 	attributionRefreshInterval = 100 * time.Millisecond
 	attributionPortalWait      = 1500 * time.Millisecond
+	attributionMultiClientWait = 3500 * time.Millisecond
 	attributionRetryDelay      = 50 * time.Millisecond
 	attributionDumpTimeout     = 1200 * time.Millisecond
 )
@@ -213,7 +214,8 @@ func (r *flowAttributionResolver) resolve(
 		return ""
 	}
 
-	deadline := time.Now()
+	startedAt := time.Now()
+	deadline := startedAt
 	if waitForRule {
 		deadline = deadline.Add(attributionPortalWait)
 	}
@@ -234,6 +236,17 @@ func (r *flowAttributionResolver) resolve(
 		if time.Since(r.lastRefresh) >= attributionRefreshInterval {
 			r.refreshLocked()
 		}
+		// Reno11/ColorOS can publish the NAT/BPF rule later than the first
+		// captive-portal grace window. Once Android proves that 2+ physical
+		// hotspot clients are present, give the exact translated-port mapping
+		// longer to appear instead of prematurely collapsing traffic onto the
+		// shared 192.0.2.2 identity.
+		if waitForRule && r.lastError == "" && len(r.clientSetLocked()) > 1 {
+			extended := startedAt.Add(attributionMultiClientWait)
+			if deadline.Before(extended) {
+				deadline = extended
+			}
+		}
 		client, fallback := r.lookupLocked(key)
 		if client != "" {
 			r.resolvedFlows++
@@ -248,6 +261,25 @@ func (r *flowAttributionResolver) resolve(
 
 		if !waitForRule || time.Now().After(deadline) {
 			r.mu.Lock()
+			if waitForRule {
+				// A single connected hotspot client is unambiguous even when
+				// ColorOS has not yet emitted the matching NAT rule. Force one
+				// fresh tethering snapshot before using this fallback so a newly
+				// joined second phone cannot inherit the first phone's identity.
+				r.refreshLocked()
+				if r.lastError == "" {
+					clients := r.clientSetLocked()
+					if len(clients) == 1 {
+						for clientIP := range clients {
+							r.resolvedFlows++
+							r.fallbackResolvedFlows++
+							r.lastMiss = ""
+							r.mu.Unlock()
+							return clientIP
+						}
+					}
+				}
+			}
 			r.unresolvedFlows++
 			r.lastMiss = formatFlowAttributionKey(key)
 			r.mu.Unlock()
