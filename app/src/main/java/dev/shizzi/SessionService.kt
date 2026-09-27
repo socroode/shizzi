@@ -44,6 +44,8 @@ class SessionService : Service() {
 
     private var cybercafePortalJob: Job? = null
 
+    private val lastPortalTraffic = mutableMapOf<String, Traffic>()
+
     private var generation = 0
 
     private val sessionLock = Mutex()
@@ -125,8 +127,51 @@ class SessionService : Service() {
                     LiveTrafficSnapshot()
                 }
 
+                val store = (application as App).cybercafeStore
+                val clientsByIp = snapshot.clients.associateBy(LiveClientTraffic::ip)
+                val activeKeys = mutableSetOf<String>()
+
+                snapshot.portalAuthorizations.forEach { authorization ->
+                    val now = System.currentTimeMillis()
+                    val binding = store.bindAuthenticatedDevice(
+                        authorization.accountNumber,
+                        authorization.ip,
+                        now,
+                    )
+                    if (!binding.success) {
+                        SessionLog.warn(
+                            "portal account ${authorization.accountNumber} rejected for " +
+                                "${authorization.ip}: ${binding.message}",
+                        )
+                        runCatching { controller.revokePortalClient(authorization.ip) }
+                        return@forEach
+                    }
+
+                    val live = clientsByIp[authorization.ip] ?: return@forEach
+                    val key = authorization.ip + "|" +
+                        authorization.accountNumber + "|" +
+                        authorization.startedAtMillis
+                    activeKeys += key
+                    val previous = lastPortalTraffic[key]
+                    if (previous == null) {
+                        lastPortalTraffic[key] = Traffic(up = live.upBytes, down = live.downBytes)
+                    } else {
+                        val upDelta = (live.upBytes - previous.up).coerceAtLeast(0L)
+                        val downDelta = (live.downBytes - previous.down).coerceAtLeast(0L)
+                        if (upDelta > 0L || downDelta > 0L) {
+                            store.recordAccountTraffic(
+                                authorization.accountNumber,
+                                upDelta,
+                                downDelta,
+                                now,
+                            )
+                            lastPortalTraffic[key] = Traffic(up = live.upBytes, down = live.downBytes)
+                        }
+                    }
+                }
+                lastPortalTraffic.keys.retainAll(activeKeys)
+
                 if (snapshot.portalRechargeClaims.isNotEmpty()) {
-                    val store = (application as App).cybercafeStore
                     snapshot.portalRechargeClaims.forEach { claim ->
                         val outcome = store.redeemVoucherForAccount(
                             claim.accountNumber,
@@ -193,6 +238,7 @@ class SessionService : Service() {
         cybercafeJob = null
         cybercafePortalJob?.cancel()
         cybercafePortalJob = null
+        lastPortalTraffic.clear()
 
         internalState.update {
             it.asStopped()
@@ -270,6 +316,7 @@ class SessionService : Service() {
         cybercafeJob = null
         cybercafePortalJob?.cancel()
         cybercafePortalJob = null
+        lastPortalTraffic.clear()
         controller.unbind()
         scope.cancel()
         liveService = null

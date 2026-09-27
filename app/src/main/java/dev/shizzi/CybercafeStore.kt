@@ -296,6 +296,64 @@ class CybercafeStore(context: Context) {
         )
     }
 
+
+    @Synchronized
+    fun bindAuthenticatedDevice(
+        numberRaw: String,
+        ip: String,
+        nowMillis: Long,
+    ): RuleOutcome {
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        val key = "ip:" + ip.trim().lowercase()
+        return commit(
+            CybercafeRules.bindDevice(
+                state.value,
+                number,
+                key,
+                ip.trim(),
+                "",
+                nowMillis,
+            ),
+        )
+    }
+
+    @Synchronized
+    fun recordAccountTraffic(
+        numberRaw: String,
+        uploadBytes: Long,
+        downloadBytes: Long,
+        nowMillis: Long,
+    ): RuleOutcome {
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        val account = state.value.accounts[number]
+            ?: return RuleOutcome(state.value, false, "Compte introuvable.")
+
+        val up = uploadBytes.coerceAtLeast(0L)
+        val down = downloadBytes.coerceAtLeast(0L)
+        val used = up + down
+        if (used == 0L) {
+            return RuleOutcome(state.value, true, "Aucun trafic.")
+        }
+
+        val consumeData = !account.hasUnlimited(nowMillis) && account.hasData(nowMillis)
+        val updated = account.copy(
+            totalUpBytes = account.totalUpBytes + up,
+            totalDownBytes = account.totalDownBytes + down,
+            dataBalanceBytes = if (consumeData) {
+                (account.dataBalanceBytes - used).coerceAtLeast(0L)
+            } else {
+                account.dataBalanceBytes
+            },
+        )
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(accounts = state.value.accounts + (number to updated)),
+                success = true,
+                message = "Consommation enregistrée.",
+            ),
+        )
+    }
+
     private fun commit(outcome: RuleOutcome): RuleOutcome {
         if (outcome.success) persist(outcome.state)
         return outcome
