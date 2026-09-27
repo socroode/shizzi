@@ -132,10 +132,6 @@ fun CybercafeState.toPortalConfigJson(): String =
             "accounts",
             JSONArray().apply {
                 accounts.values.sortedBy(PrepaidAccount::number).forEach { account ->
-                    val boundIp = devices.values
-                        .firstOrNull { it.accountNumber == account.number }
-                        ?.ip
-                        .orEmpty()
                     put(
                         JSONObject().apply {
                             put("number", account.number)
@@ -153,7 +149,6 @@ fun CybercafeState.toPortalConfigJson(): String =
                             put("unlimitedPlanName", account.unlimitedPlanName)
                             put("totalUpBytes", account.totalUpBytes)
                             put("totalDownBytes", account.totalDownBytes)
-                            put("boundIp", boundIp)
                         },
                     )
                 }

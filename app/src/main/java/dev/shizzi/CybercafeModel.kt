@@ -72,6 +72,14 @@ data class Voucher(
     val enabled: Boolean = true,
     val redeemedByAccount: String = "",
     val redeemedAtMillis: Long = 0L,
+    val snapshotVersion: Int = 0,
+    val snapshotName: String = "",
+    val snapshotKind: VoucherKind = VoucherKind.DATA,
+    val snapshotDownloadBps: Long = 0L,
+    val snapshotUploadBps: Long = 0L,
+    val snapshotQuotaBytes: Long = 0L,
+    val snapshotDurationDays: Int = 0,
+    val snapshotPriceXpf: Int = 0,
 )
 
 data class DeviceBinding(
@@ -83,7 +91,7 @@ data class DeviceBinding(
 )
 
 data class CybercafeState(
-    val schemaVersion: Int = 1,
+    val schemaVersion: Int = 2,
     val offers: Map<String, Offer> = defaultOffers(),
     val accounts: Map<String, PrepaidAccount> = emptyMap(),
     val vouchers: Map<String, Voucher> = emptyMap(),
@@ -177,8 +185,21 @@ object CybercafeRules {
             return RuleOutcome(state, false, "Voucher déjà utilisé.")
         }
 
-        val offer = state.offers[voucher.offerId]
-            ?: return RuleOutcome(state, false, "Offre du voucher introuvable.")
+        val offer = if (voucher.snapshotVersion >= 1) {
+            Offer(
+                id = voucher.offerId,
+                name = voucher.snapshotName,
+                kind = voucher.snapshotKind,
+                downloadBps = voucher.snapshotDownloadBps,
+                uploadBps = voucher.snapshotUploadBps,
+                quotaBytes = voucher.snapshotQuotaBytes,
+                durationDays = voucher.snapshotDurationDays,
+                priceXpf = voucher.snapshotPriceXpf,
+            )
+        } else {
+            state.offers[voucher.offerId]
+                ?: return RuleOutcome(state, false, "Offre du voucher introuvable.")
+        }
 
         val durationMillis = offer.durationDays.coerceAtLeast(0) * DAY_MILLIS
         val updatedAccount = when (offer.kind) {
@@ -237,17 +258,6 @@ object CybercafeRules {
         val normalizedKey = deviceKey.trim().lowercase()
         if (normalizedKey.isBlank()) {
             return RuleOutcome(state, false, "Identifiant appareil manquant.")
-        }
-
-        val otherDevice = state.devices.values.firstOrNull {
-            it.accountNumber == number && it.deviceKey != normalizedKey
-        }
-        if (otherDevice != null) {
-            return RuleOutcome(
-                state,
-                false,
-                "Ce compte est déjà associé à un autre appareil.",
-            )
         }
 
         val binding = DeviceBinding(

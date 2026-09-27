@@ -31,7 +31,6 @@ type PortalAccount struct {
 	UnlimitedPlanName            string `json:"unlimitedPlanName"`
 	TotalUpBytes                  int64  `json:"totalUpBytes"`
 	TotalDownBytes                int64  `json:"totalDownBytes"`
-	BoundIP                       string `json:"boundIp"`
 }
 
 func (a PortalAccount) hasUnlimited(nowMillis int64) bool {
@@ -209,10 +208,6 @@ func (m *TrafficManager) submitPortalAccountLogin(
 	}
 	if hashPortalPin(account.PinSalt, pin) != account.PinHash {
 		return false, "Compte ou code incorrect."
-	}
-	if strings.TrimSpace(account.BoundIP) != "" &&
-		strings.TrimSpace(account.BoundIP) != strings.TrimSpace(ip) {
-		return false, "Ce compte est déjà associé à un autre appareil."
 	}
 	client := m.clientLocked(ip)
 	client.applyPolicy(ClientPolicy{

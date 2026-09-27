@@ -13,6 +13,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
@@ -20,7 +21,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -199,14 +200,16 @@ class SessionService : Service() {
     private fun followCybercafePolicies() {
         cybercafeJob?.cancel()
         cybercafeJob = scope.launch {
-            (application as App).cybercafeStore.state.collectLatest { cybercafe ->
-                if (internalState.value.status != UiStatus.CONNECTED) return@collectLatest
-                runCatching {
+            (application as App).cybercafeStore.state.collect { cybercafe ->
+                if (internalState.value.status != UiStatus.CONNECTED) return@collect
+                try {
                     controller.applyCybercafePolicies(
                         cybercafe,
                         System.currentTimeMillis(),
                     )
-                }.onFailure { failure ->
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Throwable) {
                     SessionLog.warn(
                         "cybercafe policy sync failed: " +
                             "${failure.javaClass.simpleName}: ${failure.message}",
