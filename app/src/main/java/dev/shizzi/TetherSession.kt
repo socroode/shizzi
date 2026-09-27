@@ -734,9 +734,11 @@ class TetherSession(private val context: Context) {
                     "source=${managerStats.optString("portalLoginClientIp")} " +
                     "result=${managerStats.optString("portalLoginResult")} " +
                     "resolved=${managerStats.optLong("sharedResolvedFlows")} " +
+                    "fallback=${managerStats.optLong("sharedFallbackResolvedFlows")} " +
                     "unresolved=${managerStats.optLong("sharedUnresolvedFlows")} " +
                     "mappedClients=${managerStats.optInt("sharedAttributionClients")} " +
-                    "error=${managerStats.optString("sharedAttributionLastError")}",
+                    "error=${managerStats.optString("sharedAttributionLastError")} " +
+                    "lastMiss=${managerStats.optString("sharedAttributionLastMiss")}",
             )
         }
         put("clientCount", connectedClients)
@@ -766,9 +768,11 @@ class TetherSession(private val context: Context) {
         SessionLog.info(
             "attribution diagnostic: hotspotClients=$connectedClients " +
                 "resolved=${stats.optLong("sharedResolvedFlows")} " +
+                "fallback=${stats.optLong("sharedFallbackResolvedFlows")} " +
                 "unresolved=${stats.optLong("sharedUnresolvedFlows")} " +
                 "mappedClients=${stats.optInt("sharedAttributionClients")} " +
                 "error=${stats.optString("sharedAttributionLastError")} " +
+                "lastMiss=${stats.optString("sharedAttributionLastMiss")} " +
                 "dumpTimedOut=${observation?.didTimeout} rules=$excerpt",
         )
     }
