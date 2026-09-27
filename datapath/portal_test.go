@@ -92,3 +92,37 @@ func TestPortalRechargeClaimCarriesAccountAndClient(t *testing.T) {
 		t.Fatalf("claim=%+v", claim)
 	}
 }
+
+func TestSameAccountCanAuthenticateOnTwoDifferentClients(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portalConfigForTest(t))
+
+	firstOK, firstMessage := manager.submitPortalAccountLogin(
+		"192.168.7.66",
+		"1001",
+		"1234",
+	)
+	if !firstOK {
+		t.Fatalf("first login failed: %s", firstMessage)
+	}
+
+	secondOK, secondMessage := manager.submitPortalAccountLogin(
+		"192.168.7.77",
+		"1001",
+		"1234",
+	)
+	if !secondOK {
+		t.Fatalf("second login failed: %s", secondMessage)
+	}
+
+	if manager.portalRequiredFor("192.168.7.66") {
+		t.Fatal("first authenticated client returned to the portal")
+	}
+	if manager.portalRequiredFor("192.168.7.77") {
+		t.Fatal("second authenticated client returned to the portal")
+	}
+	if len(manager.portalAuthorized) != 2 {
+		t.Fatalf("authorizations=%d, want 2", len(manager.portalAuthorized))
+	}
+}
+
