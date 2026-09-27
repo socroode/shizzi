@@ -6,8 +6,10 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Typeface;
 import android.net.ConnectivityManager;
+import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.net.RouteInfo;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.Gravity;
@@ -18,13 +20,13 @@ import android.widget.TextView;
 import android.widget.Toast;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
+import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 
 public final class MainActivity extends Activity {
     private static final String BASE_URL = "http://192.0.2.1/";
-    private static final String REGISTRATION_IP = "203.0.113.1";
     private static final int REGISTRATION_PORT = 49200;
     private static final SecureRandom RANDOM = new SecureRandom();
 
@@ -130,19 +132,26 @@ public final class MainActivity extends Activity {
     }
 
     private boolean registerOnShizziWifi(String token) {
-        Network wifi = findWifiNetwork();
+        ConnectivityManager manager =
+            (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (manager == null) return false;
+
+        Network wifi = findWifiNetwork(manager);
         if (wifi == null) return false;
 
+        InetAddress gateway = findWifiGateway(manager, wifi);
+        if (gateway == null) return false;
+
         byte[] payload = token.getBytes(StandardCharsets.UTF_8);
-        for (int attempt = 0; attempt < 3; attempt++) {
+        for (int attempt = 0; attempt < 4; attempt++) {
             try (DatagramSocket socket = new DatagramSocket()) {
                 wifi.bindSocket(socket);
-                socket.setSoTimeout(1800);
+                socket.setSoTimeout(3500);
 
                 DatagramPacket request = new DatagramPacket(
                     payload,
                     payload.length,
-                    InetAddress.getByName(REGISTRATION_IP),
+                    gateway,
                     REGISTRATION_PORT
                 );
                 socket.send(request);
@@ -164,12 +173,13 @@ public final class MainActivity extends Activity {
                     return true;
                 }
             } catch (Exception ignored) {
-                // Retry: the tethering BPF entry can appear a few hundred ms
-                // after the first packet on some Android/OEM combinations.
+                // The hotspot host can need a moment to expose the new client
+                // in its tethering/neighbor tables. Retry locally without ever
+                // sending the identification request through the shared TUN.
             }
 
             try {
-                Thread.sleep(250L);
+                Thread.sleep(300L);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 return false;
@@ -178,15 +188,31 @@ public final class MainActivity extends Activity {
         return false;
     }
 
-    private Network findWifiNetwork() {
-        ConnectivityManager manager =
-            (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-        if (manager == null) return null;
-
+    private Network findWifiNetwork(ConnectivityManager manager) {
         for (Network network : manager.getAllNetworks()) {
             NetworkCapabilities caps = manager.getNetworkCapabilities(network);
             if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
                 return network;
+            }
+        }
+        return null;
+    }
+
+    private InetAddress findWifiGateway(ConnectivityManager manager, Network wifi) {
+        LinkProperties properties = manager.getLinkProperties(wifi);
+        if (properties == null) return null;
+
+        for (RouteInfo route : properties.getRoutes()) {
+            InetAddress gateway = route.getGateway();
+            if (route.isDefaultRoute() && gateway instanceof Inet4Address) {
+                return gateway;
+            }
+        }
+
+        for (RouteInfo route : properties.getRoutes()) {
+            InetAddress gateway = route.getGateway();
+            if (gateway instanceof Inet4Address) {
+                return gateway;
             }
         }
         return null;
