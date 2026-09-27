@@ -729,9 +729,15 @@ class TetherSession(private val context: Context) {
         val loginAttempts = managerStats.optLong("portalLoginAttempts")
         if (loginAttempts > lastPortalLoginAttemptLogged) {
             lastPortalLoginAttemptLogged = loginAttempts
+            val sourceIp = managerStats.optString("portalLoginClientIp")
+            val device = tetheredClients.snapshot().firstOrNull { sourceIp in it.addresses }
+            val identity = clientIdentities.byIp()[sourceIp]
+            val mac = device?.macAddress ?: identity?.mac.orEmpty()
+            val deviceId = device?.deviceId ?: identity?.deviceId.orEmpty()
             SessionLog.info(
                 "portal login: attempts=$loginAttempts " +
-                    "source=${managerStats.optString("portalLoginClientIp")} " +
+                    "source=$sourceIp " +
+                    "mac=$mac deviceId=$deviceId " +
                     "result=${managerStats.optString("portalLoginResult")} " +
                     "resolved=${managerStats.optLong("sharedResolvedFlows")} " +
                     "fallback=${managerStats.optLong("sharedFallbackResolvedFlows")} " +
