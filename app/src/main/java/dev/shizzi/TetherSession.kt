@@ -20,6 +20,7 @@ class TetherSession(private val context: Context) {
 
     private var activeSince: Long = 0
     private var lastAttributionDiagnosticAt: Long = 0
+    private var lastPortalLoginAttemptLogged: Long = 0
     private var vpnMode = VpnMode.AUTO
     private var watchdog: SessionWatchdog? = null
     private val teardown = SessionTeardown(context)
@@ -32,6 +33,13 @@ class TetherSession(private val context: Context) {
 
     fun start(mode: VpnMode = VpnMode.AUTO, managerConfigJson: String = ""): String {
         if (isActive) return status()
+
+        // A previous session may have stopped while its recovery callback was
+        // still running. Invalidate that watchdog before creating a new TUN.
+        watchdog?.stop()
+        watchdog = null
+        lastPortalLoginAttemptLogged = 0
+        lastAttributionDiagnosticAt = 0
 
         vpnMode = mode
         state = SessionState.STARTING
@@ -401,12 +409,19 @@ class TetherSession(private val context: Context) {
     }
 
     private fun startWatchdog(name: String) {
-        val guard = SessionWatchdog(
+        lateinit var guard: SessionWatchdog
+        guard = SessionWatchdog(
             expectedInterface = name,
-            onRecover = { problem -> recoverUpstream(name, problem) },
+            onRecover = { problem ->
+                if (watchdog === guard && isActive && interfaceName == name) {
+                    recoverUpstream(name, problem)
+                } else false
+            },
             onDrift = { problem ->
-                SessionLog.warn("upstream drift: $problem")
-                tearDownAfter(problem)
+                if (watchdog === guard && isActive && interfaceName == name) {
+                    SessionLog.warn("upstream drift: $problem")
+                    tearDownAfter(problem)
+                }
             },
         )
         watchdog = guard
@@ -504,11 +519,19 @@ class TetherSession(private val context: Context) {
             return true
         }
 
+        if (!isActive || interfaceName != name) return false
+
         SessionLog.warn("watchdog recovery: restarting hotspot to force upstream reselection")
 
         val restarted = runCatching {
+            check(isActive && interfaceName == name) {
+                "watchdog recovery: session changed while recovering $name"
+            }
             check(clearCompetingShizziNetworks(name)) {
                 "watchdog recovery: competing Shizzi test network could not be cleared"
+            }
+            check(isActive && interfaceName == name) {
+                "watchdog recovery: session changed before restarting hotspot"
             }
             restartDownstream()
             preferTestNetworks()
@@ -703,13 +726,26 @@ class TetherSession(private val context: Context) {
         put("bytesDown", traffic.down)
         val connectedClients = if (isActive) downstream.countDevices() else 0
         val managerStats = JSONObject(trafficStats())
+        val loginAttempts = managerStats.optLong("portalLoginAttempts")
+        if (loginAttempts > lastPortalLoginAttemptLogged) {
+            lastPortalLoginAttemptLogged = loginAttempts
+            SessionLog.info(
+                "portal login: attempts=$loginAttempts " +
+                    "source=${managerStats.optString("portalLoginClientIp")} " +
+                    "result=${managerStats.optString("portalLoginResult")} " +
+                    "resolved=${managerStats.optLong("sharedResolvedFlows")} " +
+                    "unresolved=${managerStats.optLong("sharedUnresolvedFlows")} " +
+                    "mappedClients=${managerStats.optInt("sharedAttributionClients")} " +
+                    "error=${managerStats.optString("sharedAttributionLastError")}",
+            )
+        }
         put("clientCount", connectedClients)
         put("trafficManager", managerStats)
         logAttributionDiagnostic(connectedClients, managerStats)
     }.toString()
 
     private fun logAttributionDiagnostic(connectedClients: Int, stats: JSONObject) {
-        if (connectedClients < 2) return
+        if (connectedClients < 1) return
         val now = System.currentTimeMillis()
         if (now - lastAttributionDiagnosticAt < 60_000L) return
         lastAttributionDiagnosticAt = now
