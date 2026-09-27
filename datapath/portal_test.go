@@ -2,6 +2,8 @@ package datapath
 
 import (
 	"fmt"
+	"io"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -678,5 +680,109 @@ func TestLocalDeviceRegistrationStillRejectsSharedTun(t *testing.T) {
 		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 	) {
 		t.Fatal("shared TUN address was accepted as a local physical device")
+	}
+}
+
+
+func TestAccountLoginPostCarriesEphemeralDeviceIdentity(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, `{
+	  "accounts": [{
+	    "number": "63057303",
+	    "pin": "583921",
+	    "name": "RONIU",
+	    "enabled": true,
+	    "dataBalanceBytes": 1000000000,
+	    "dataExpiresAtMillis": 2305843009213693951,
+	    "dataDownloadBps": 4000000,
+	    "dataUploadBps": 2000000
+	  }]
+	}`)
+
+	// Reproduce the Reno11 condition from the live report: several hotspot
+	// clients share 192.0.2.2 after Android NAT, so a login at the shared
+	// address must fail unless the per-session device token is recovered first.
+	manager.flowAttribution.mu.Lock()
+	manager.flowAttribution.flows = map[flowAttributionKey]string{
+		{Protocol: "tcp", PublicIP: "192.0.2.2", PublicPort: 41001, DstIP: "1.1.1.1", DstPort: 443}: "192.168.135.66",
+		{Protocol: "tcp", PublicIP: "192.0.2.2", PublicPort: 41002, DstIP: "8.8.8.8", DstPort: 443}: "192.168.135.162",
+	}
+	manager.flowAttribution.lastRefresh = time.Now()
+	manager.flowAttribution.mu.Unlock()
+
+	const deviceToken = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const physicalIP = "192.168.135.162"
+	if !manager.registerPortalDeviceToken(physicalIP, deviceToken) {
+		t.Fatal("device session registration failed")
+	}
+
+	body := "device=" + deviceToken + "&account=63057303&pin=583921"
+	request := fmt.Sprintf(
+		"POST /account/login HTTP/1.1\r\n"+
+			"Host: 192.0.2.1\r\n"+
+			"Content-Type: application/x-www-form-urlencoded\r\n"+
+			"Content-Length: %d\r\n"+
+			"Connection: close\r\n\r\n%s",
+		len(body),
+		body,
+	)
+
+	server, client := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		manager.servePortal(server, "192.0.2.2")
+		close(done)
+	}()
+
+	if _, err := io.WriteString(client, request); err != nil {
+		t.Fatalf("write portal request: %v", err)
+	}
+	response, err := io.ReadAll(client)
+	if err != nil {
+		t.Fatalf("read portal response: %v", err)
+	}
+	<-done
+	_ = client.Close()
+
+	manager.mu.Lock()
+	auth, physicalAuthorized := manager.portalAuthorized[physicalIP]
+	_, sharedAuthorized := manager.portalAuthorized["192.0.2.2"]
+	manager.mu.Unlock()
+
+	if !physicalAuthorized || auth.AccountNumber != "63057303" {
+		t.Fatalf("physical client authorization=%+v present=%v", auth, physicalAuthorized)
+	}
+	if sharedAuthorized {
+		t.Fatal("account was incorrectly attached to shared TUN address")
+	}
+	if !strings.Contains(string(response), "shizzi_device="+deviceToken) {
+		t.Fatal("portal response did not preserve the ephemeral device cookie")
+	}
+	if !strings.Contains(string(response), "Accès Internet actif") {
+		t.Fatalf("portal login did not activate account: %s", string(response))
+	}
+}
+
+func TestAccountLoginFormCarriesDeviceTokenWithoutCookie(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, `{
+	  "accounts": [{
+	    "number": "63057303",
+	    "pin": "583921",
+	    "enabled": true
+	  }]
+	}`)
+
+	const deviceToken = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	manager.mu.Lock()
+	panel := manager.portalAccountPanelLockedWithDevice(
+		"192.168.135.66",
+		"",
+		deviceToken,
+	)
+	manager.mu.Unlock()
+
+	if !strings.Contains(panel, `name="device" value="`+deviceToken+`"`) {
+		t.Fatalf("login form lost device token: %s", panel)
 	}
 }
