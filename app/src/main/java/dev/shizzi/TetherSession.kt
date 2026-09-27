@@ -19,6 +19,7 @@ class TetherSession(private val context: Context) {
     private var interfaceName: String? = null
 
     private var activeSince: Long = 0
+    private var lastAttributionDiagnosticAt: Long = 0
     private var vpnMode = VpnMode.AUTO
     private var watchdog: SessionWatchdog? = null
     private val teardown = SessionTeardown(context)
@@ -700,9 +701,41 @@ class TetherSession(private val context: Context) {
         val traffic = interfaceName?.let(InterfaceCounters::read) ?: Traffic()
         put("bytesUp", traffic.up)
         put("bytesDown", traffic.down)
-        put("clientCount", if (isActive) downstream.countDevices() else 0)
-        put("trafficManager", JSONObject(trafficStats()))
+        val connectedClients = if (isActive) downstream.countDevices() else 0
+        val managerStats = JSONObject(trafficStats())
+        put("clientCount", connectedClients)
+        put("trafficManager", managerStats)
+        logAttributionDiagnostic(connectedClients, managerStats)
     }.toString()
+
+    private fun logAttributionDiagnostic(connectedClients: Int, stats: JSONObject) {
+        if (connectedClients < 2) return
+        val now = System.currentTimeMillis()
+        if (now - lastAttributionDiagnosticAt < 60_000L) return
+        lastAttributionDiagnosticAt = now
+
+        val observation = runCatching { inspector.observe() }.getOrNull()
+        val lines = observation?.rawOutput.orEmpty().lineSequence().toList()
+        val upstreamIndex = lines.indexOfFirst { it.trim().startsWith("IPv4 Upstream:") }
+        val excerpt = if (upstreamIndex >= 0) {
+            lines.drop(upstreamIndex).take(22)
+        } else {
+            lines.filter { line ->
+                listOf("IPv4", "Forwarding rules", "offload", "testtun").any {
+                    line.contains(it, ignoreCase = true)
+                }
+            }.take(22)
+        }.joinToString(" | ") { it.trim() }.take(4_000)
+
+        SessionLog.info(
+            "attribution diagnostic: hotspotClients=$connectedClients " +
+                "resolved=${stats.optLong("sharedResolvedFlows")} " +
+                "unresolved=${stats.optLong("sharedUnresolvedFlows")} " +
+                "mappedClients=${stats.optInt("sharedAttributionClients")} " +
+                "error=${stats.optString("sharedAttributionLastError")} " +
+                "dumpTimedOut=${observation?.didTimeout} rules=$excerpt",
+        )
+    }
 
     private fun isVpnBypassed(): Boolean {
         if (vpnMode != VpnMode.NEVER) return false
