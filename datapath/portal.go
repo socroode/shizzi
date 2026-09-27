@@ -85,6 +85,8 @@ type PortalAccountSession struct {
 type PortalDeviceBinding struct {
 	Token           string
 	ClientIP        string
+	MacAddress      string
+	DeviceID        string
 	BoundAtMillis   int64
 	ExpiresAtMillis int64
 }
@@ -217,9 +219,21 @@ func (m *TrafficManager) prunePortalDeviceTokensLocked(now int64) {
 }
 
 func (m *TrafficManager) registerPortalDeviceToken(clientIP, rawToken string) bool {
+	return m.registerPortalDeviceTokenWithIdentity(clientIP, "", "", rawToken)
+}
+
+func (m *TrafficManager) registerPortalDeviceTokenWithIdentity(
+	clientIP, macAddress, deviceID, rawToken string,
+) bool {
 	token := normalizePortalDeviceToken(rawToken)
+	clientIP = strings.TrimSpace(clientIP)
+	macAddress = strings.ToLower(strings.TrimSpace(macAddress))
+	deviceID = strings.ToLower(strings.TrimSpace(deviceID))
 	if token == "" || clientIP == "" || isSharedTunnelAddress(clientIP) {
 		return false
+	}
+	if deviceID == "" {
+		deviceID = macAddress
 	}
 
 	now := time.Now().UnixMilli()
@@ -229,6 +243,8 @@ func (m *TrafficManager) registerPortalDeviceToken(clientIP, rawToken string) bo
 	m.portalDeviceTokens[token] = PortalDeviceBinding{
 		Token:           token,
 		ClientIP:        clientIP,
+		MacAddress:      macAddress,
+		DeviceID:        deviceID,
 		BoundAtMillis:   now,
 		ExpiresAtMillis: now + portalDeviceBindingTTL.Milliseconds(),
 	}
