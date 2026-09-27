@@ -30,6 +30,7 @@ const nicID tcpip.NICID = 1
 type Session struct {
 	stack   *stack.Stack
 	binding *networkBinding
+	traffic *TrafficManager
 }
 
 // Start builds a netstack over tunFD, already open, and attaches it to the TUN.
@@ -77,12 +78,13 @@ func Start(tunFD int, mtu int) (*Session, error) {
 	})
 
 	binding := &networkBinding{}
+	traffic := newTrafficManager()
 	installForwarders(netStack, &net.Dialer{
 		Timeout: dialTimeout,
 		Control: binding.control,
-	})
+	}, traffic)
 
-	return &Session{stack: netStack, binding: binding}, nil
+	return &Session{stack: netStack, binding: binding, traffic: traffic}, nil
 }
 
 // SetNetwork pins every subsequent dial to a handle from
@@ -100,6 +102,70 @@ func (s *Session) SetNetwork(handle int64) {
 		return
 	}
 	s.binding.set(uint64(handle))
+}
+
+
+// SetRequireClientAttribution enables fail-closed client identification.
+// Once enabled, a shared 192.0.2.2/2001:db8::2 flow is not forwarded until
+// Android's tethering NAT state resolves it to one physical hotspot client.
+func (s *Session) SetRequireClientAttribution(required bool) {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.setRequireClientAttribution(required)
+}
+
+// SetGlobalPolicy configures an optional aggregate speed/quota ceiling.
+// Values <= 0 mean unlimited.
+func (s *Session) SetGlobalPolicy(downloadBps, uploadBps, quotaBytes int64) {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.setGlobalPolicy(downloadBps, uploadBps, quotaBytes)
+}
+
+// SetDefaultClientPolicy configures newly discovered physical clients.
+func (s *Session) SetDefaultClientPolicy(
+	downloadBps, uploadBps, quotaBytes int64,
+	blocked bool,
+) {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.setDefaultClientPolicy(downloadBps, uploadBps, quotaBytes, blocked)
+}
+
+// SetClientPolicy configures one resolved physical client IP.
+func (s *Session) SetClientPolicy(
+	ip string,
+	downloadBps, uploadBps, quotaBytes int64,
+	blocked bool,
+) {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.setClientPolicy(ip, ClientPolicy{
+		DownloadBitsPerSecond: downloadBps,
+		UploadBitsPerSecond:   uploadBps,
+		QuotaBytes:            quotaBytes,
+		Blocked:               blocked,
+	})
+}
+
+// TrafficStatsJSON exposes per-client counters and attribution diagnostics.
+func (s *Session) TrafficStatsJSON() string {
+	if s.traffic == nil {
+		return "{}"
+	}
+	return s.traffic.statsJSON()
+}
+
+// ResetTrafficStats clears byte counters without changing policies.
+func (s *Session) ResetTrafficStats() {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.resetStats()
 }
 
 // Stop tears the netstack down. It does not close the TUN fd.
