@@ -431,8 +431,8 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 		"63057303",
 		"583921",
 	)
-	if !ok || roniuToken == "" {
-		t.Fatalf("RONIU login failed: ok=%v token=%q message=%s", ok, roniuToken, message)
+	if ok || roniuToken != "" || !strings.Contains(message, "identifier") {
+		t.Fatalf("unresolved TUN login was accepted: ok=%v token=%q message=%s", ok, roniuToken, message)
 	}
 
 	ok, message, clientToken := manager.submitPortalAccountLoginWithSession(
@@ -440,8 +440,8 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 		"70000002",
 		"654321",
 	)
-	if !ok || clientToken == "" || clientToken == roniuToken {
-		t.Fatalf("CLIENT-B login failed: ok=%v token=%q message=%s", ok, clientToken, message)
+	if ok || clientToken != "" || !strings.Contains(message, "identifier") {
+		t.Fatalf("ambiguous shared IP wrongly switched accounts: ok=%v token=%q message=%s", ok, clientToken, message)
 	}
 
 	manager.mu.Lock()
@@ -451,11 +451,11 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 	invalidPanel := manager.portalAccountPanelLocked(sharedIP, "not-a-real-session")
 	manager.mu.Unlock()
 
-	if !strings.Contains(roniuPanel, "RONIU") || strings.Contains(roniuPanel, "CLIENT-B") {
-		t.Fatalf("RONIU session saw the wrong account: %s", roniuPanel)
+	if strings.Contains(roniuPanel, "RONIU") || strings.Contains(roniuPanel, "CLIENT-B") {
+		t.Fatalf("unresolved TUN panel exposed an account: %s", roniuPanel)
 	}
-	if !strings.Contains(clientPanel, "CLIENT-B") || strings.Contains(clientPanel, "RONIU") {
-		t.Fatalf("CLIENT-B session saw the wrong account: %s", clientPanel)
+	if strings.Contains(clientPanel, "CLIENT-B") || strings.Contains(clientPanel, "RONIU") {
+		t.Fatalf("rejected session exposed an account: %s", clientPanel)
 	}
 	for label, panel := range map[string]string{
 		"anonymous": anonymousPanel,
@@ -551,7 +551,7 @@ func TestAmbiguousSharedVoucherLoginIsRejectedWithMultipleClients(t *testing.T) 
 	}
 }
 
-func TestAccountSessionCannotMoveFromSharedAddressWithoutNewLogin(t *testing.T) {
+func TestAccountLoginRejectsUnresolvedSharedAddress(t *testing.T) {
 	manager := newTrafficManager()
 	manager.setPortalConfig(true, `{
 	  "accounts": [{
@@ -567,20 +567,10 @@ func TestAccountSessionCannotMoveFromSharedAddressWithoutNewLogin(t *testing.T) 
 		"63057303",
 		"583921",
 	)
-	if !ok || token == "" {
-		t.Fatalf("single-client shared login failed: %s", message)
+	if ok || token != "" || !strings.Contains(message, "identifier") {
+		t.Fatalf("unresolved shared login was accepted: ok=%v token=%q message=%s", ok, token, message)
 	}
-
-	manager.mu.Lock()
-	_, rebound := manager.portalAuthorizationForSessionLocked("192.168.43.20", token)
-	_, staleShared := manager.portalAuthorized["192.0.2.2"]
-	_, resolved := manager.portalAuthorized["192.168.43.20"]
-	manager.mu.Unlock()
-
-	if rebound || resolved {
-		t.Fatal("account session moved to an unverified client IP")
-	}
-	if !staleShared {
-		t.Fatal("failed rebind deleted the original session")
+	if manager.portalAuthorizedFor("192.0.2.2") {
+		t.Fatal("unresolved TUN inherited Internet access")
 	}
 }
