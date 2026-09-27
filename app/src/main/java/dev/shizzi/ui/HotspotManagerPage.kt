@@ -165,6 +165,7 @@ fun HotspotManagerPage(
 
             SectionLabel("Access passes")
 
+            val accountMode = settings.prepaidAccounts.values.any { it.enabled }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -172,13 +173,15 @@ fun HotspotManagerPage(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 SettingsLabel(
-                    title = "Require an access pass",
-                    subtitle = "New clients stay offline until they enter a valid voucher",
+                    title = if (accountMode) "Compte obligatoire" else "Require an access pass",
+                    subtitle = if (accountMode) "Les vouchers rechargent les comptes, pas les appareils" else
+                        "New clients stay offline until they enter a valid voucher",
                     modifier = Modifier.weight(1f),
                 )
                 Switch(
-                    checked = settings.accessPassRequired,
+                    checked = accountMode || settings.accessPassRequired,
                     onCheckedChange = actions.onSetAccessPassRequired,
+                    enabled = !accountMode,
                 )
             }
 
@@ -254,12 +257,21 @@ fun HotspotManagerPage(
 
             settings.prepaidAccounts.values
                 .sortedByDescending { it.createdAtMillis }
-                .take(3)
                 .forEach { account ->
+                    val accountDevices = activeClients.filter { client ->
+                        stats.portalAccountAuthorizations.any { auth ->
+                            auth.ip == client.ip && auth.accountNumber == account.number
+                        }
+                    }
                     ManagerMetric(
                         title = account.name.ifBlank { "Compte " + account.number },
                         value = account.number,
-                        subtitle = prepaidAccountSummary(account, now),
+                        subtitle = prepaidAccountSummary(account, now) +
+                            if (accountDevices.isEmpty()) " · Aucun appareil identifié" else
+                                " · ${accountDevices.size} appareil(s) : " +
+                                    accountDevices.joinToString(" · ") { client ->
+                                        "${client.ip} (${client.macAddress.ifBlank { "MAC inconnue" }})"
+                                    },
                     )
                 }
 
@@ -294,12 +306,25 @@ fun HotspotManagerPage(
                     null
                 }
 
+                val accountNumber = stats.portalAccountAuthorizations.firstOrNull {
+                    it.ip == client.ip
+                }?.accountNumber
+                val accountDeviceCount = accountNumber?.let { number ->
+                    activeClients.count { other ->
+                        stats.portalAccountAuthorizations.any { auth ->
+                            auth.ip == other.ip && auth.accountNumber == number
+                        }
+                    }
+                } ?: 0
+
                 ClientRow(
                     client = client,
                     displayName = stored?.name.orEmpty(),
                     priority = stored?.priority ?: ClientPriority.NORMAL,
                     usage = usage,
                     voucher = authorization?.code?.let(settings.accessPasses::get),
+                    accountNumber = accountNumber,
+                    sharedAccount = accountDeviceCount > 1,
                     onClick = {
                         editingTarget = PolicyTarget(
                             deviceId = deviceId,
@@ -333,12 +358,7 @@ fun HotspotManagerPage(
                                 }
                             },
                         ),
-                        value = settings.accessPasses.values
-                            .firstOrNull { it.assignedDeviceId == deviceId }
-                            ?.let { pass ->
-                                if (pass.isExpired(now)) "Voucher expired" else pass.code
-                            }
-                            ?: "No active voucher",
+                        value = "Déconnecté",
                         onClick = {
                             editingTarget = PolicyTarget(
                                 deviceId = deviceId,
@@ -467,13 +487,16 @@ private fun ClientRow(
     priority: ClientPriority,
     usage: MonthlyUsageRecord?,
     voucher: AccessPass?,
+    accountNumber: String?,
+    sharedAccount: Boolean,
     onClick: () -> Unit,
 ) {
     val now = System.currentTimeMillis()
     val state = when {
         client.blocked -> "Blocked"
+        accountNumber != null -> limitsLabel(client.downloadBps, client.uploadBps)
         voucher?.isExpired(now) == true -> "Voucher expired"
-        voucher == null -> "No voucher"
+        voucher == null -> "Connexion requise"
         else -> limitsLabel(client.downloadBps, client.uploadBps)
     }
 
@@ -482,10 +505,14 @@ private fun ClientRow(
     SettingsChoice(
         label = SettingsText(
             title = displayName.ifBlank { identity },
-            subtitle = "${Traffic.format(currentMonthBytes(usage))} this month · " +
+            subtitle = "IP ${client.ip} · MAC ${client.macAddress.ifBlank { "inconnue" }} · " +
+                (accountNumber?.let { "Compte $it" +
+                    if (sharedAccount) " (partagé) · " else " · " }
+                    ?: "Compte non identifié · ") +
+                "${Traffic.format(currentMonthBytes(usage))} ce mois · " +
                 "${priority.displayLabel()} · $state",
         ),
-        value = voucher?.code ?: "No active voucher",
+        value = accountNumber?.let { "Compte $it" } ?: "Aucun compte",
         onClick = onClick,
     )
 }

@@ -77,7 +77,7 @@ func dumpTetheringState() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), attributionDumpTimeout)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, "dumpsys", "tethering").CombinedOutput()
+	out, err := exec.CommandContext(ctx, "/system/bin/dumpsys", "tethering").CombinedOutput()
 	if ctx.Err() != nil {
 		return "", fmt.Errorf("dumpsys tethering timeout: %w", ctx.Err())
 	}

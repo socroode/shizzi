@@ -78,6 +78,7 @@ type PortalAuthorization struct {
 type PortalAccountSession struct {
 	Token           string
 	AccountNumber   string
+	ClientIP        string
 	CreatedAtMillis int64
 	LastSeenMillis  int64
 }
@@ -147,6 +148,16 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 		nextAccounts[number] = account
 	}
 	m.portalAccounts = nextAccounts
+	accountMode := false
+	for _, account := range nextAccounts {
+		if account.Enabled {
+			accountMode = true
+			break
+		}
+	}
+	if accountMode {
+		m.portalRequired = true
+	}
 	for token, session := range m.portalAccountSessions {
 		account, exists := nextAccounts[session.AccountNumber]
 		if !exists || !account.Enabled {
@@ -155,6 +166,9 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 	}
 	for ip, auth := range m.portalAuthorized {
 		if auth.AccountNumber == "" {
+			if accountMode {
+				delete(m.portalAuthorized, ip)
+			}
 			continue
 		}
 		account, exists := nextAccounts[auth.AccountNumber]
@@ -172,7 +186,7 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 		m.portalAuthorized[ip] = auth
 	}
 
-	if !required {
+	if !m.portalRequired {
 		m.portalAuthorized = make(map[string]PortalAuthorization)
 		m.portalAccountSessions = make(map[string]PortalAccountSession)
 	}
@@ -242,6 +256,13 @@ func (m *TrafficManager) ambiguousSharedClientLocked(ip string) bool {
 }
 
 func (m *TrafficManager) portalAuthorizedLocked(ip string) bool {
+	if isSharedTunnelAddress(ip) {
+		for _, account := range m.portalAccounts {
+			if account.Enabled {
+				return false
+			}
+		}
+	}
 	auth, ok := m.portalAuthorized[ip]
 	if !ok {
 		return false
@@ -709,6 +730,12 @@ func (m *TrafficManager) submitPortalCode(ip, rawCode string) (bool, string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	for _, account := range m.portalAccounts {
+		if account.Enabled {
+			return false, "Connectez-vous à votre compte pour utiliser ce code."
+		}
+	}
+
 	if m.ambiguousSharedClientLocked(ip) {
 		return false, "Impossible d'identifier cet appareil pour le moment. Réessayez."
 	}
@@ -795,6 +822,10 @@ func (m *TrafficManager) portalAuthorizationForSessionLocked(
 	if token == "" {
 		return PortalAuthorization{}, false
 	}
+	session, exists := m.portalAccountSessions[token]
+	if !exists || session.ClientIP != ip {
+		return PortalAuthorization{}, false
+	}
 
 	// A prepaid account is identified by its browser session token, never by
 	// the TUN source IP alone. Android can collapse several hotspot clients to
@@ -811,10 +842,6 @@ func (m *TrafficManager) portalAuthorizationForSessionLocked(
 		}
 	}
 
-	session, ok := m.portalAccountSessions[token]
-	if !ok {
-		return PortalAuthorization{}, false
-	}
 	account, ok := m.portalAccounts[session.AccountNumber]
 	if !ok || !account.Enabled {
 		delete(m.portalAccountSessions, token)
@@ -882,22 +909,30 @@ func (m *TrafficManager) submitPortalAccountLoginWithSession(
 	if m.ambiguousSharedClientLocked(ip) {
 		return false, "Impossible d'identifier cet appareil pour le moment. Réessayez.", ""
 	}
+	if isSharedTunnelAddress(ip) {
+		return false, "Impossible d'identifier cet appareil pour le moment. Réessayez.", ""
+	}
 
 	account, ok := m.portalAccounts[number]
 	if !ok || !account.Enabled || account.Pin != pin {
 		return false, "Compte ou PIN invalide.", ""
 	}
+	// A different device may not take over an account that is already active.
+	// Keep the first device online even when the second knows its PIN.
+	for otherIP, auth := range m.portalAuthorized {
+		if otherIP != ip && auth.AccountNumber == number {
+			return false, "Ce compte est déjà utilisé sur un autre appareil.", ""
+		}
+	}
 
-	// A fresh login is the authority for the one-active-device rule.
-	// Invalidate previous browser/captive sessions for this account.
+	// A device may log into a different account or renew its own browser session.
+	// Invalidate the old token for this IP without disturbing another device.
+	if previous, exists := m.portalAuthorized[ip]; exists && previous.SessionToken != "" {
+		delete(m.portalAccountSessions, previous.SessionToken)
+	}
 	for token, session := range m.portalAccountSessions {
 		if session.AccountNumber == number {
 			delete(m.portalAccountSessions, token)
-		}
-	}
-	for otherIP, auth := range m.portalAuthorized {
-		if auth.AccountNumber == number {
-			delete(m.portalAuthorized, otherIP)
 		}
 	}
 
@@ -909,6 +944,7 @@ func (m *TrafficManager) submitPortalAccountLoginWithSession(
 	m.portalAccountSessions[token] = PortalAccountSession{
 		Token:           token,
 		AccountNumber:   number,
+		ClientIP:        ip,
 		CreatedAtMillis: now,
 		LastSeenMillis:  now,
 	}

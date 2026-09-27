@@ -149,6 +149,38 @@ func TestPrepaidAccountCanLoginEmptyAndRechargeData(t *testing.T) {
 	}
 }
 
+func TestCybercafeRequiresOwnAccountAndRedeemsVoucherOnlyIntoAccount(t *testing.T) {
+	m := newTrafficManager()
+	m.setPortalConfig(false, `{
+  "accounts": [
+    {"number":"11111111","pin":"123456","enabled":true,"dataBalanceBytes":10000},
+    {"number":"22222222","pin":"654321","enabled":true,"dataBalanceBytes":10000}
+  ],
+  "passes": [{"code":"DATA1","enabled":true,"quotaBytes":10000}]
+}`)
+	if !m.portalRequiredFor("192.168.7.66") {
+		t.Fatal("unregistered device received access despite enabled accounts")
+	}
+	if ok, _ := m.submitPortalCode("192.168.7.66", "DATA1"); ok {
+		t.Fatal("device redeemed a voucher without a client account")
+	}
+	if ok, _, _ := m.submitPortalAccountLoginWithSession("192.168.7.66", "11111111", "123456"); !ok {
+		t.Fatal("first device could not login")
+	}
+	if ok, _, _ := m.submitPortalAccountLoginWithSession("192.168.7.161", "22222222", "654321"); !ok {
+		t.Fatal("second device could not login with its own account")
+	}
+	if !m.portalAuthorizedFor("192.168.7.66") || !m.portalAuthorizedFor("192.168.7.161") {
+		t.Fatal("two distinct accounts did not authorize their respective devices")
+	}
+	if ok, _, _ := m.submitPortalAccountLoginWithSession("192.168.7.162", "11111111", "123456"); ok {
+		t.Fatal("third device took the first device's account")
+	}
+	if m.portalAuthorizedFor("192.168.7.162") || !m.portalAuthorizedFor("192.168.7.66") {
+		t.Fatal("rejected login changed an existing device's access")
+	}
+}
+
 func TestDataRechargeWaitsUntilUnlimitedEnds(t *testing.T) {
 	now := time.Now().UnixMilli()
 	account := PortalAccount{
@@ -199,7 +231,7 @@ func TestUnlimitedRechargeAccumulatesValidityAndPreservesData(t *testing.T) {
 	}
 }
 
-func TestPrepaidAccountMovesToNewClient(t *testing.T) {
+func TestPrepaidAccountCannotBeTakenByAnotherClient(t *testing.T) {
 	manager := newTrafficManager()
 	manager.setPortalConfig(true, `{
 	  "accounts": [{
@@ -214,14 +246,14 @@ func TestPrepaidAccountMovesToNewClient(t *testing.T) {
 	if ok, msg := manager.submitPortalAccountLogin("192.168.43.10", "47286153", "583921"); !ok {
 		t.Fatalf("first account login rejected: %s", msg)
 	}
-	if ok, msg := manager.submitPortalAccountLogin("192.168.43.20", "47286153", "583921"); !ok {
-		t.Fatalf("second account login rejected: %s", msg)
+	if ok, msg := manager.submitPortalAccountLogin("192.168.43.20", "47286153", "583921"); ok || !strings.Contains(msg, "déjà utilisé") {
+		t.Fatalf("second client unexpectedly took the account: ok=%v message=%s", ok, msg)
 	}
-	if manager.portalAuthorizedFor("192.168.43.10") {
-		t.Fatal("old client stayed authorized after account transfer")
+	if !manager.portalAuthorizedFor("192.168.43.10") {
+		t.Fatal("first client lost its account after rejected login")
 	}
-	if !manager.portalAuthorizedFor("192.168.43.20") {
-		t.Fatal("new client did not receive the account session")
+	if manager.portalAuthorizedFor("192.168.43.20") {
+		t.Fatal("second client inherited the first client's account")
 	}
 }
 
@@ -262,7 +294,7 @@ func TestAccountPanelShowsAllocatedRateAndValidity(t *testing.T) {
 }
 
 
-func TestAccountSessionAllowsRechargeAcrossPortalIPChange(t *testing.T) {
+func TestAccountSessionCannotRechargeFromAnotherDevice(t *testing.T) {
 	manager := newTrafficManager()
 	manager.setPortalConfig(true, `{
 	  "accounts": [{
@@ -296,8 +328,16 @@ func TestAccountSessionAllowsRechargeAcrossPortalIPChange(t *testing.T) {
 		"MZW4DVK",
 		token,
 	)
+	if ok {
+		t.Fatal("another IP recharged the account using the first device's token")
+	}
+	ok, message = manager.submitPortalRechargeWithSession(
+		"192.168.43.10",
+		"MZW4DVK",
+		token,
+	)
 	if !ok {
-		t.Fatalf("recharge after client IP change failed: %s", message)
+		t.Fatalf("original device could not recharge: %s", message)
 	}
 
 	account := manager.portalAccounts["63057303"]
@@ -341,21 +381,21 @@ func TestFreshAccountLoginInvalidatesPreviousBrowserSession(t *testing.T) {
 		t.Fatal("first account session was not created")
 	}
 
-	ok, _, secondToken := manager.submitPortalAccountLoginWithSession(
+	ok, message, secondToken := manager.submitPortalAccountLoginWithSession(
 		"192.168.43.20",
 		"63057303",
 		"583921",
 	)
-	if !ok || secondToken == "" || secondToken == firstToken {
-		t.Fatal("second account login did not replace the first session")
+	if ok || secondToken != "" || !strings.Contains(message, "déjà utilisé") {
+		t.Fatalf("second device was not refused: ok=%v token=%q message=%q", ok, secondToken, message)
 	}
 
 	if ok, _ := manager.submitPortalRechargeWithSession(
 		"192.168.43.10",
 		"DATA1",
 		firstToken,
-	); ok {
-		t.Fatal("invalidated first browser session was still able to recharge")
+	); !ok {
+		t.Fatal("first device lost its valid account session")
 	}
 }
 
@@ -391,8 +431,8 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 		"63057303",
 		"583921",
 	)
-	if !ok || roniuToken == "" {
-		t.Fatalf("RONIU login failed: ok=%v token=%q message=%s", ok, roniuToken, message)
+	if ok || roniuToken != "" || !strings.Contains(message, "identifier") {
+		t.Fatalf("unresolved TUN login was accepted: ok=%v token=%q message=%s", ok, roniuToken, message)
 	}
 
 	ok, message, clientToken := manager.submitPortalAccountLoginWithSession(
@@ -400,8 +440,8 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 		"70000002",
 		"654321",
 	)
-	if !ok || clientToken == "" || clientToken == roniuToken {
-		t.Fatalf("CLIENT-B login failed: ok=%v token=%q message=%s", ok, clientToken, message)
+	if ok || clientToken != "" || !strings.Contains(message, "identifier") {
+		t.Fatalf("ambiguous shared IP wrongly switched accounts: ok=%v token=%q message=%s", ok, clientToken, message)
 	}
 
 	manager.mu.Lock()
@@ -411,11 +451,11 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 	invalidPanel := manager.portalAccountPanelLocked(sharedIP, "not-a-real-session")
 	manager.mu.Unlock()
 
-	if !strings.Contains(roniuPanel, "RONIU") || strings.Contains(roniuPanel, "CLIENT-B") {
-		t.Fatalf("RONIU session saw the wrong account: %s", roniuPanel)
+	if strings.Contains(roniuPanel, "RONIU") || strings.Contains(roniuPanel, "CLIENT-B") {
+		t.Fatalf("unresolved TUN panel exposed an account: %s", roniuPanel)
 	}
-	if !strings.Contains(clientPanel, "CLIENT-B") || strings.Contains(clientPanel, "RONIU") {
-		t.Fatalf("CLIENT-B session saw the wrong account: %s", clientPanel)
+	if strings.Contains(clientPanel, "CLIENT-B") || strings.Contains(clientPanel, "RONIU") {
+		t.Fatalf("rejected session exposed an account: %s", clientPanel)
 	}
 	for label, panel := range map[string]string{
 		"anonymous": anonymousPanel,
@@ -434,13 +474,11 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 	anonymousStatus := manager.portalUsageStatusForSession(sharedIP, "")
 	invalidStatus := manager.portalUsageStatusForSession(sharedIP, "not-a-real-session")
 
-	if !roniuStatus.Authenticated || roniuStatus.AccountName != "RONIU" ||
-		roniuStatus.AccountNumber != "63057303" {
-		t.Fatalf("RONIU status leaked or disappeared: %+v", roniuStatus)
+	if roniuStatus.Authenticated || roniuStatus.AccountNumber != "" {
+		t.Fatalf("unresolved TUN status inherited RONIU: %+v", roniuStatus)
 	}
-	if !clientStatus.Authenticated || clientStatus.AccountName != "CLIENT-B" ||
-		clientStatus.AccountNumber != "70000002" {
-		t.Fatalf("CLIENT-B status leaked or disappeared: %+v", clientStatus)
+	if clientStatus.Authenticated || clientStatus.AccountNumber != "" {
+		t.Fatalf("unresolved TUN status inherited CLIENT-B: %+v", clientStatus)
 	}
 	if anonymousStatus.Authenticated || anonymousStatus.AccountNumber != "" {
 		t.Fatalf("anonymous browser inherited an account: %+v", anonymousStatus)
@@ -452,11 +490,11 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 	if manager.portalRequestAuthorizedFor(sharedIP, "") {
 		t.Fatal("shared tunnel browser without a session token was treated as account-authorized")
 	}
-	if !manager.portalRequestAuthorizedFor(sharedIP, roniuToken) {
-		t.Fatal("RONIU browser session was not recognized as authorized")
+	if manager.portalRequestAuthorizedFor(sharedIP, roniuToken) {
+		t.Fatal("unresolved shared address received RONIU access")
 	}
-	if !manager.portalRequestAuthorizedFor(sharedIP, clientToken) {
-		t.Fatal("CLIENT-B browser session was not recognized as authorized")
+	if manager.portalRequestAuthorizedFor(sharedIP, clientToken) {
+		t.Fatal("unresolved shared address received CLIENT-B access")
 	}
 }
 
@@ -511,7 +549,7 @@ func TestAmbiguousSharedVoucherLoginIsRejectedWithMultipleClients(t *testing.T) 
 	}
 }
 
-func TestAccountSessionMovesFromSharedAddressToResolvedClient(t *testing.T) {
+func TestAccountLoginRejectsUnresolvedSharedAddress(t *testing.T) {
 	manager := newTrafficManager()
 	manager.setPortalConfig(true, `{
 	  "accounts": [{
@@ -527,23 +565,10 @@ func TestAccountSessionMovesFromSharedAddressToResolvedClient(t *testing.T) {
 		"63057303",
 		"583921",
 	)
-	if !ok || token == "" {
-		t.Fatalf("single-client shared login failed: %s", message)
+	if ok || token != "" || !strings.Contains(message, "identifier") {
+		t.Fatalf("unresolved shared login was accepted: ok=%v token=%q message=%s", ok, token, message)
 	}
-
-	manager.mu.Lock()
-	auth, rebound := manager.portalAuthorizationForSessionLocked("192.168.43.20", token)
-	_, staleShared := manager.portalAuthorized["192.0.2.2"]
-	resolved := manager.portalAuthorized["192.168.43.20"]
-	manager.mu.Unlock()
-
-	if !rebound || auth.AccountNumber != "63057303" {
-		t.Fatalf("session did not rebind to resolved client: rebound=%v auth=%+v", rebound, auth)
-	}
-	if staleShared {
-		t.Fatal("shared authorization remained after session moved to resolved client")
-	}
-	if resolved.SessionToken != token {
-		t.Fatalf("resolved client token=%q, want %q", resolved.SessionToken, token)
+	if manager.portalAuthorizedFor("192.0.2.2") {
+		t.Fatal("unresolved TUN inherited Internet access")
 	}
 }
