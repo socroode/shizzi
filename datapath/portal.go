@@ -256,6 +256,13 @@ func (m *TrafficManager) ambiguousSharedClientLocked(ip string) bool {
 }
 
 func (m *TrafficManager) portalAuthorizedLocked(ip string) bool {
+	if isSharedTunnelAddress(ip) {
+		for _, account := range m.portalAccounts {
+			if account.Enabled {
+				return false
+			}
+		}
+	}
 	auth, ok := m.portalAuthorized[ip]
 	if !ok {
 		return false
@@ -902,12 +909,14 @@ func (m *TrafficManager) submitPortalAccountLoginWithSession(
 	if m.ambiguousSharedClientLocked(ip) {
 		return false, "Impossible d'identifier cet appareil pour le moment. Réessayez.", ""
 	}
+	if isSharedTunnelAddress(ip) {
+		return false, "Impossible d'identifier cet appareil pour le moment. Réessayez.", ""
+	}
 
 	account, ok := m.portalAccounts[number]
 	if !ok || !account.Enabled || account.Pin != pin {
 		return false, "Compte ou PIN invalide.", ""
 	}
-
 	// A different device may not take over an account that is already active.
 	// Keep the first device online even when the second knows its PIN.
 	for otherIP, auth := range m.portalAuthorized {
