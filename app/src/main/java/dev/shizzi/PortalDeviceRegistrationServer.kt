@@ -67,7 +67,7 @@ class PortalDeviceRegistrationServer(
                 continue
             } catch (failure: Throwable) {
                 SessionLog.warn(
-                    "device identification receive failed: \${failure.message}",
+                    "device identification receive failed: ${failure.message}",
                 )
                 continue
             }
@@ -90,7 +90,7 @@ class PortalDeviceRegistrationServer(
                         onRegistration(sourceIp, token)
                 }.getOrElse { failure ->
                     SessionLog.warn(
-                        "device identification failed for $sourceIp: \${failure.message}",
+                        "device identification failed for $sourceIp: ${failure.message}",
                     )
                     false
                 }
