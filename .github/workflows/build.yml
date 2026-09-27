@@ -123,7 +123,7 @@ jobs:
         run: |
           ./gradlew assembleRelease -PmigrationBuild=true --no-daemon
           mkdir -p signed-artifacts
-          cp app/build/outputs/apk/release/app-release.apk signed-artifacts/shizzi-v1.7.19-diagnostic-migration.apk
+          cp app/build/outputs/apk/release/app-release.apk signed-artifacts/shizzi-v1.7.20-diagnostic-migration.apk
 
       - name: Build release APK
         run: ./gradlew assembleRelease --no-daemon
@@ -141,7 +141,7 @@ jobs:
       - name: Upload Shizzi Conso APK
         uses: actions/upload-artifact@v5
         with:
-          name: shizzi-conso-v1.3.1-debug
+          name: shizzi-conso-v1.3.2-debug
           path: conso/build/outputs/apk/debug/conso-debug.apk
           if-no-files-found: error
 
@@ -149,7 +149,7 @@ jobs:
         if: ${{ env.SHIZZI_KEYSTORE_B64 != '' }}
         uses: actions/upload-artifact@v5
         with:
-          name: shizzi-conso-v1.3.1-signed
+          name: shizzi-conso-v1.3.2-signed
           path: conso/build/outputs/apk/release/conso-release.apk
           if-no-files-found: error
 
@@ -157,15 +157,15 @@ jobs:
         if: ${{ env.SHIZZI_KEYSTORE_B64 != '' }}
         uses: actions/upload-artifact@v5
         with:
-          name: shizzi-v1.7.19-diagnostic-migration-signed
-          path: signed-artifacts/shizzi-v1.7.19-diagnostic-migration.apk
+          name: shizzi-v1.7.20-diagnostic-migration-signed
+          path: signed-artifacts/shizzi-v1.7.20-diagnostic-migration.apk
           if-no-files-found: error
 
       - name: Upload permanently signed release APK
         if: ${{ env.SHIZZI_KEYSTORE_B64 != '' }}
         uses: actions/upload-artifact@v5
         with:
-          name: shizzi-v1.7.19-diagnostic-signed
+          name: shizzi-v1.7.20-diagnostic-signed
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
@@ -173,7 +173,7 @@ jobs:
         if: ${{ env.SHIZZI_KEYSTORE_B64 == '' }}
         uses: actions/upload-artifact@v5
         with:
-          name: shizzi-v1.7.19-diagnostic-unsigned
+          name: shizzi-v1.7.20-diagnostic-unsigned
           path: app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
 
