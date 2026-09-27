@@ -474,13 +474,11 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 	anonymousStatus := manager.portalUsageStatusForSession(sharedIP, "")
 	invalidStatus := manager.portalUsageStatusForSession(sharedIP, "not-a-real-session")
 
-	if !roniuStatus.Authenticated || roniuStatus.AccountName != "RONIU" ||
-		roniuStatus.AccountNumber != "63057303" {
-		t.Fatalf("RONIU status leaked or disappeared: %+v", roniuStatus)
+	if roniuStatus.Authenticated || roniuStatus.AccountNumber != "" {
+		t.Fatalf("unresolved TUN status inherited RONIU: %+v", roniuStatus)
 	}
-	if !clientStatus.Authenticated || clientStatus.AccountName != "CLIENT-B" ||
-		clientStatus.AccountNumber != "70000002" {
-		t.Fatalf("CLIENT-B status leaked or disappeared: %+v", clientStatus)
+	if clientStatus.Authenticated || clientStatus.AccountNumber != "" {
+		t.Fatalf("unresolved TUN status inherited CLIENT-B: %+v", clientStatus)
 	}
 	if anonymousStatus.Authenticated || anonymousStatus.AccountNumber != "" {
 		t.Fatalf("anonymous browser inherited an account: %+v", anonymousStatus)
@@ -492,11 +490,11 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 	if manager.portalRequestAuthorizedFor(sharedIP, "") {
 		t.Fatal("shared tunnel browser without a session token was treated as account-authorized")
 	}
-	if !manager.portalRequestAuthorizedFor(sharedIP, roniuToken) {
-		t.Fatal("RONIU browser session was not recognized as authorized")
+	if manager.portalRequestAuthorizedFor(sharedIP, roniuToken) {
+		t.Fatal("unresolved shared address received RONIU access")
 	}
-	if !manager.portalRequestAuthorizedFor(sharedIP, clientToken) {
-		t.Fatal("CLIENT-B browser session was not recognized as authorized")
+	if manager.portalRequestAuthorizedFor(sharedIP, clientToken) {
+		t.Fatal("unresolved shared address received CLIENT-B access")
 	}
 }
 
