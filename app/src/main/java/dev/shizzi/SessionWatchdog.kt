@@ -40,7 +40,17 @@ class SessionWatchdog(
             val didSleep = runCatching { Thread.sleep(POLL_INTERVAL_MS) }.isSuccess
             if (!didSleep || !isRunning.get()) return
 
-            val problem = checkUpstream()
+            val check = checkUpstream()
+            if (check.supersededBy != null) {
+                isRunning.set(false)
+                val message =
+                    "watchdog retired: $expectedInterface superseded by ${check.supersededBy}"
+                Log.i(TAG, message)
+                SessionLog.info(message)
+                return
+            }
+
+            val problem = check.problem
             if (problem != null) {
                 Log.w(TAG, "upstream problem: $problem; attempting recovery")
 
@@ -69,16 +79,47 @@ class SessionWatchdog(
         }
     }
 
-    private fun checkUpstream(): String? {
+    private fun checkUpstream(): WatchdogCheck {
         val observation = inspector.observe()
         val names = observation.liveInterfaceNames(expectedInterface)
-        val reading = classifyUpstream(names, expectedInterface, observation.didTimeout)
+        val supersededBy = newerShizziInterface(expectedInterface, names)
+        if (supersededBy != null) {
+            return WatchdogCheck(problem = null, supersededBy = supersededBy)
+        }
 
-        return tolerance.judge(reading, names)
+        val reading = classifyUpstream(names, expectedInterface, observation.didTimeout)
+        return WatchdogCheck(
+            problem = tolerance.judge(reading, names),
+            supersededBy = null,
+        )
     }
 
     private companion object {
         const val TAG = "SessionWatchdog"
         const val POLL_INTERVAL_MS = 5_000L
     }
+}
+
+internal data class WatchdogCheck(
+    val problem: String?,
+    val supersededBy: String?,
+)
+
+internal fun newerShizziInterface(
+    expectedInterface: String,
+    observedInterfaces: List<String>,
+): String? {
+    val expectedOrdinal = shizziInterfaceOrdinal(expectedInterface) ?: return null
+    return observedInterfaces
+        .mapNotNull { name ->
+            val ordinal = shizziInterfaceOrdinal(name) ?: return@mapNotNull null
+            if (ordinal > expectedOrdinal) ordinal to name else null
+        }
+        .maxByOrNull { it.first }
+        ?.second
+}
+
+private fun shizziInterfaceOrdinal(name: String): Int? {
+    if (!name.startsWith("testtun")) return null
+    return name.removePrefix("testtun").toIntOrNull()
 }

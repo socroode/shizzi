@@ -177,3 +177,62 @@ IPv4 Downstream: proto [inDstMac] iif(iface) src -> nat -> dst [outDstMac] pmtu 
 		t.Errorf("mapped clients=%d, want 3", got)
 	}
 }
+
+
+func TestFlowAttributionFallsBackToUniqueTranslatedPort(t *testing.T) {
+	raw := `IPv4 Upstream: proto [inDstMac] iif(iface) src -> nat -> dst [outDstMac] pmtu age
+ tcp [a2:91:de:17:d5:91] 47(47) 192.168.7.162:48442 -> 76(testtun28) 192.0.2.2:48442 -> 142.250.207.23:80 [00:00:00:00:00:00] 1500 3ms
+IPv4 Downstream:`
+
+	resolver := newFlowAttributionResolver()
+	resolver.dumpFn = func() (string, error) { return raw, nil }
+
+	// Reno11 logs showed Android knew the original client while Shizzi's exact
+	// tuple lookup still missed. A unique translated source port must therefore
+	// recover the client without authorizing the shared 192.0.2.2 address.
+	got := resolver.resolve(
+		flowAttributionKey{
+			Protocol:   "tcp",
+			PublicIP:   "192.0.2.2",
+			PublicPort: 48442,
+			DstIP:      "192.0.2.1",
+			DstPort:    80,
+		},
+		false,
+	)
+	if got != "192.168.7.162" {
+		t.Fatalf("fallback attribution=%q, want 192.168.7.162", got)
+	}
+	snapshot := resolver.snapshot()
+	if snapshot.ResolvedFlows != 1 || snapshot.FallbackResolvedFlows != 1 {
+		t.Fatalf("unexpected counters: %+v", snapshot)
+	}
+}
+
+func TestFlowAttributionFallbackFailsClosedWhenPortIsAmbiguous(t *testing.T) {
+	raw := `IPv4 Upstream: proto [inDstMac] iif(iface) src -> nat -> dst [outDstMac] pmtu age
+ tcp [aa:aa:aa:aa:aa:01] 47(47) 192.168.7.66:50000 -> 76(testtun28) 192.0.2.2:50000 -> 142.250.1.1:443 [00:00:00:00:00:00] 1500 3ms
+ tcp [aa:aa:aa:aa:aa:02] 47(47) 192.168.7.162:50000 -> 76(testtun28) 192.0.2.2:50000 -> 157.240.1.1:443 [00:00:00:00:00:00] 1500 3ms
+IPv4 Downstream:`
+
+	resolver := newFlowAttributionResolver()
+	resolver.dumpFn = func() (string, error) { return raw, nil }
+
+	got := resolver.resolve(
+		flowAttributionKey{
+			Protocol:   "tcp",
+			PublicIP:   "192.0.2.2",
+			PublicPort: 50000,
+			DstIP:      "203.0.113.10",
+			DstPort:    443,
+		},
+		false,
+	)
+	if got != "" {
+		t.Fatalf("ambiguous fallback attributed to %q; want fail-closed", got)
+	}
+	snapshot := resolver.snapshot()
+	if snapshot.UnresolvedFlows != 1 {
+		t.Fatalf("unresolved=%d, want 1", snapshot.UnresolvedFlows)
+	}
+}
