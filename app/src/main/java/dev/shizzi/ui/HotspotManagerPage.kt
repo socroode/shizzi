@@ -165,6 +165,7 @@ fun HotspotManagerPage(
 
             SectionLabel("Access passes")
 
+            val accountMode = settings.prepaidAccounts.values.any { it.enabled }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -172,13 +173,15 @@ fun HotspotManagerPage(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 SettingsLabel(
-                    title = "Require an access pass",
-                    subtitle = "New clients stay offline until they enter a valid voucher",
+                    title = if (accountMode) "Compte obligatoire" else "Require an access pass",
+                    subtitle = if (accountMode) "Les vouchers rechargent les comptes, pas les appareils" else
+                        "New clients stay offline until they enter a valid voucher",
                     modifier = Modifier.weight(1f),
                 )
                 Switch(
-                    checked = settings.accessPassRequired,
+                    checked = accountMode || settings.accessPassRequired,
                     onCheckedChange = actions.onSetAccessPassRequired,
+                    enabled = !accountMode,
                 )
             }
 
@@ -355,12 +358,7 @@ fun HotspotManagerPage(
                                 }
                             },
                         ),
-                        value = settings.accessPasses.values
-                            .firstOrNull { it.assignedDeviceId == deviceId }
-                            ?.let { pass ->
-                                if (pass.isExpired(now)) "Voucher expired" else pass.code
-                            }
-                            ?: "No active voucher",
+                        value = "Déconnecté",
                         onClick = {
                             editingTarget = PolicyTarget(
                                 deviceId = deviceId,
@@ -496,8 +494,9 @@ private fun ClientRow(
     val now = System.currentTimeMillis()
     val state = when {
         client.blocked -> "Blocked"
+        accountNumber != null -> limitsLabel(client.downloadBps, client.uploadBps)
         voucher?.isExpired(now) == true -> "Voucher expired"
-        voucher == null -> "No voucher"
+        voucher == null -> "Connexion requise"
         else -> limitsLabel(client.downloadBps, client.uploadBps)
     }
 
@@ -513,7 +512,7 @@ private fun ClientRow(
                 "${Traffic.format(currentMonthBytes(usage))} ce mois · " +
                 "${priority.displayLabel()} · $state",
         ),
-        value = voucher?.code ?: "No active voucher",
+        value = accountNumber?.let { "Compte $it" } ?: "Aucun compte",
         onClick = onClick,
     )
 }
