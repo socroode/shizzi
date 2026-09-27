@@ -918,6 +918,19 @@ func (m *TrafficManager) portalAuthorizationForSessionLocked(
 	if !ok {
 		return PortalAuthorization{}, false
 	}
+
+	if m.ambiguousSharedClientLocked(ip) {
+		for _, existing := range m.portalAuthorized {
+			if existing.AccountNumber == session.AccountNumber &&
+				existing.SessionToken == token {
+				session.LastSeenMillis = time.Now().UnixMilli()
+				m.portalAccountSessions[token] = session
+				return existing, true
+			}
+		}
+		return PortalAuthorization{}, false
+	}
+
 	account, ok := m.portalAccounts[session.AccountNumber]
 	if !ok || !account.Enabled {
 		delete(m.portalAccountSessions, token)
@@ -1244,6 +1257,18 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 				portalDeviceCookieName,
 				deviceToken,
 			))
+		}
+	}
+
+	// The captive-portal TCP socket can still arrive as the shared TestNetwork
+	// address (192.0.2.2) even though dumpsys tethering already knows the real
+	// hotspot client. If Android proves that exactly one physical client is
+	// attached, bind the portal session directly to that client. With 2+
+	// clients this deliberately returns no fallback and identification remains
+	// fail-closed.
+	if isSharedTunnelAddress(clientIP) && m.flowAttribution != nil {
+		if resolvedIP := m.flowAttribution.singleConnectedClient(); resolvedIP != "" {
+			clientIP = resolvedIP
 		}
 	}
 
