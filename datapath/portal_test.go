@@ -511,7 +511,7 @@ func TestAmbiguousSharedVoucherLoginIsRejectedWithMultipleClients(t *testing.T) 
 	}
 }
 
-func TestAccountSessionMovesFromSharedAddressToResolvedClient(t *testing.T) {
+func TestSharedAddressCannotHoldAccountSession(t *testing.T) {
 	manager := newTrafficManager()
 	manager.setPortalConfig(true, `{
 	  "accounts": [{
@@ -527,23 +527,10 @@ func TestAccountSessionMovesFromSharedAddressToResolvedClient(t *testing.T) {
 		"63057303",
 		"583921",
 	)
-	if !ok || token == "" {
-		t.Fatalf("single-client shared login failed: %s", message)
+	if ok || token != "" || !strings.Contains(message, "identifier cet appareil") {
+		t.Fatalf("shared source accepted without device attribution: ok=%v message=%q", ok, message)
 	}
-
-	manager.mu.Lock()
-	auth, rebound := manager.portalAuthorizationForSessionLocked("192.168.43.20", token)
-	_, staleShared := manager.portalAuthorized["192.0.2.2"]
-	resolved := manager.portalAuthorized["192.168.43.20"]
-	manager.mu.Unlock()
-
-	if !rebound || auth.AccountNumber != "63057303" {
-		t.Fatalf("session did not rebind to resolved client: rebound=%v auth=%+v", rebound, auth)
-	}
-	if staleShared {
-		t.Fatal("shared authorization remained after session moved to resolved client")
-	}
-	if resolved.SessionToken != token {
-		t.Fatalf("resolved client token=%q, want %q", resolved.SessionToken, token)
+	if manager.portalAuthorizedFor("192.0.2.2") {
+		t.Fatal("shared TUN address authorized internet")
 	}
 }
