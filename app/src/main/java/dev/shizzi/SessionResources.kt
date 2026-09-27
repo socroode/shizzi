@@ -135,6 +135,19 @@ class SessionResources(
         )
     }
 
+    fun registerPortalDeviceToken(
+        clientIp: String,
+        macAddress: String,
+        deviceId: String,
+        token: String,
+    ): Boolean =
+        datapathSession?.registerPortalDeviceToken(
+            clientIp,
+            macAddress,
+            deviceId,
+            token,
+        ) ?: false
+
     fun clearPortalClaims() {
         datapathSession?.clearPortalClaims()
     }
