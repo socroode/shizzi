@@ -108,6 +108,14 @@ class SessionResources(
         datapathSession?.resetTrafficStats()
     }
 
+    fun setPortalConfig(required: Boolean, configJson: String) {
+        datapathSession?.setPortalConfig(required, configJson)
+    }
+
+    fun clearPortalClaims() {
+        datapathSession?.clearPortalClaims()
+    }
+
     fun bindDatapathTo(handle: Long) {
         val session = datapathSession
             ?: error("bindDatapathTo($handle): no datapath session; startDatapath must succeed first")

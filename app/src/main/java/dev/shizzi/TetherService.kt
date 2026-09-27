@@ -83,6 +83,14 @@ class TetherService : ITetherService.Stub {
         session.resetTrafficStats()
     }
 
+    override fun setPortalConfig(required: Boolean, configJson: String?) {
+        session.setPortalConfig(required, configJson.orEmpty())
+    }
+
+    override fun clearPortalClaims() {
+        session.clearPortalClaims()
+    }
+
     override fun setLogging(enabled: Boolean) {
         SessionLog.setEnabled(enabled)
     }

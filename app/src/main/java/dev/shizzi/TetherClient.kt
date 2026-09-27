@@ -294,6 +294,19 @@ class TetherClient {
         bound.resetTrafficStats()
     }
 
+    suspend fun setPortalConfig(required: Boolean, configJson: String) =
+        withContext(Dispatchers.IO) {
+            val bound = service()
+            verifyContract(bound)
+            bound.setPortalConfig(required, configJson)
+        }
+
+    suspend fun clearPortalClaims() = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.clearPortalClaims()
+    }
+
     private fun verifyContract(bound: ITetherService) {
         val remote = bound.contractVersion
         check(remote == TetherService.CONTRACT_VERSION) {

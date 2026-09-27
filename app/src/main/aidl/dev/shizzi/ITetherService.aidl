@@ -35,6 +35,10 @@ interface ITetherService {
 
     void resetTrafficStats();
 
+    void setPortalConfig(boolean required, String configJson);
+
+    void clearPortalClaims();
+
     String runProbes(boolean attemptTethering, int availabilityTimeoutMs);
 
     void clearLog();

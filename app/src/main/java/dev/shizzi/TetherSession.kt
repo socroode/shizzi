@@ -247,6 +247,14 @@ class TetherSession(private val context: Context) {
         resources?.resetTrafficStats()
     }
 
+    fun setPortalConfig(required: Boolean, configJson: String) {
+        resources?.setPortalConfig(required, configJson)
+    }
+
+    fun clearPortalClaims() {
+        resources?.clearPortalClaims()
+    }
+
     fun status(): String = JSONObject().apply {
         put("state", state.name)
         put("detail", detail)
