@@ -167,6 +167,13 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 		}
 	}
 	for ip, auth := range m.portalAuthorized {
+		// Never carry an authorization on the shared TestNetwork address.
+		// A stale 192.0.2.2 record can otherwise suppress the captive portal
+		// for every phone before per-device attribution has completed.
+		if isSharedTunnelAddress(ip) {
+			delete(m.portalAuthorized, ip)
+			continue
+		}
 		if auth.AccountNumber == "" {
 			continue
 		}
@@ -332,6 +339,14 @@ func (m *TrafficManager) ambiguousSharedClientLocked(ip string) bool {
 }
 
 func (m *TrafficManager) portalAuthorizedLocked(ip string) bool {
+	// 192.0.2.2 is the common post-NAT TestNetwork identity, not a physical
+	// hotspot client. Authorizing it would let one stale account/voucher bypass
+	// the captive barrier for other devices. Shared flows must first resolve to
+	// a real downstream IP.
+	if isSharedTunnelAddress(ip) {
+		return false
+	}
+
 	auth, ok := m.portalAuthorized[ip]
 	if !ok {
 		return false

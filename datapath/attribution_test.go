@@ -257,3 +257,40 @@ func TestParseTetheringConnectedClientsIncludesIdlePhones(t *testing.T) {
 		t.Fatal("missing .162")
 	}
 }
+
+
+func TestSingleConnectedClientDoesNotNeedFlowRule(t *testing.T) {
+	r := newFlowAttributionResolver()
+	r.dumpFn = func() (string, error) {
+		return `Tethering:
+  IPv4 Upstream: proto [inDstMac] iif(iface) src -> nat -> dst [outDstMac] pmtu age
+  No rules
+  IPv4 Downstream: proto [inDstMac] iif(iface) src -> nat -> dst [outDstMac] pmtu age
+  No rules
+  Client Information:
+  {android.net.ip.IpServer@1={/192.168.116.66=downstream: 41 (ca:99:bb:ea:38:92), client: /192.168.116.66 (8e:e1:38:c6:a0:35)}}
+`, nil
+	}
+
+	if got := r.singleConnectedClient(); got != "192.168.116.66" {
+		t.Fatalf("single connected client=%q, want 192.168.116.66", got)
+	}
+}
+
+func TestSingleConnectedClientFailsClosedWithTwoPhonesAndNoRules(t *testing.T) {
+	r := newFlowAttributionResolver()
+	r.dumpFn = func() (string, error) {
+		return `Tethering:
+  IPv4 Upstream: proto [inDstMac] iif(iface) src -> nat -> dst [outDstMac] pmtu age
+  No rules
+  IPv4 Downstream: proto [inDstMac] iif(iface) src -> nat -> dst [outDstMac] pmtu age
+  No rules
+  Client Information:
+  {android.net.ip.IpServer@1={/192.168.116.66=downstream: 41 (ca:99:bb:ea:38:92), client: /192.168.116.66 (8e:e1:38:c6:a0:35), /192.168.116.77=downstream: 41 (ca:99:bb:ea:38:92), client: /192.168.116.77 (a6:10:bd:03:d4:58)}}
+`, nil
+	}
+
+	if got := r.singleConnectedClient(); got != "" {
+		t.Fatalf("ambiguous connected client=%q, want empty", got)
+	}
+}
