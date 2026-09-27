@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,6 +80,7 @@ data class HomeActions(
     val onToggle: () -> Unit,
     val onCancel: () -> Unit,
     val onOpenSettings: () -> Unit,
+    val onOpenCybercafe: () -> Unit,
     val onOpenEasterEgg: () -> Unit,
 )
 
@@ -152,6 +155,10 @@ private fun HomeBody(state: SessionUiState, actions: HomeActions) {
             RiseIn(isVisible = isStarting) {
                 CancelButton(onClick = actions.onCancel)
             }
+        }
+
+        TextButton(onClick = actions.onOpenCybercafe) {
+            Text("Account / Voucher Editor")
         }
     }
 }

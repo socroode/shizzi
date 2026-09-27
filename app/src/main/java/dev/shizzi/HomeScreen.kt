@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import dev.shizzi.ui.CybercafeAdminPage
 import dev.shizzi.ui.DiagnosticsToast
 import dev.shizzi.ui.EasterEggPage
 import dev.shizzi.ui.HandleBack
@@ -111,6 +112,7 @@ private fun ScreenBody(screen: Screen, context: ScreenContext) {
     when (screen) {
         Screen.HOME -> HomeRoute(context)
         Screen.SETTINGS -> SettingsRoute(context)
+        Screen.CYBERCAFE -> CybercafeAdminPage(onBack = context.navigation.goHome)
         Screen.LOG -> LogRoute(context)
         Screen.EASTER_EGG -> EasterEggPage(onDismiss = context.navigation.goHome)
     }
@@ -126,6 +128,7 @@ private fun HomeRoute(context: ScreenContext) {
             onToggle = actions.onToggle,
             onCancel = actions.onCancel,
             onOpenSettings = { context.navigation.open(Screen.SETTINGS) },
+            onOpenCybercafe = { context.navigation.open(Screen.CYBERCAFE) },
             onOpenEasterEgg = { context.navigation.open(Screen.EASTER_EGG) },
         ),
     )

@@ -12,6 +12,8 @@ class App : Application() {
 
     val settingsStore: SettingsStore by lazy { SettingsStore(this) }
 
+    val cybercafeStore: CybercafeStore by lazy { CybercafeStore(this) }
+
     override fun onCreate() {
         super.onCreate()
         instance = this

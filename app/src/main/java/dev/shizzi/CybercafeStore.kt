@@ -221,6 +221,71 @@ class CybercafeStore(context: Context) {
         )
     }
 
+
+    @Synchronized
+    fun renameAccount(numberRaw: String, name: String): RuleOutcome {
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        val account = state.value.accounts[number]
+            ?: return RuleOutcome(state.value, false, "Compte introuvable.")
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(
+                    accounts = state.value.accounts + (number to account.copy(name = name.trim())),
+                ),
+                success = true,
+                message = "Compte modifié.",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun upsertOffer(offer: Offer): RuleOutcome {
+        val id = offer.id.trim().lowercase()
+        if (id.isBlank() || offer.name.isBlank()) {
+            return RuleOutcome(state.value, false, "Nom d'offre invalide.")
+        }
+        if (offer.downloadBps < 0L || offer.uploadBps < 0L || offer.quotaBytes < 0L) {
+            return RuleOutcome(state.value, false, "Valeurs d'offre invalides.")
+        }
+        if (offer.durationDays <= 0 || offer.priceXpf < 0) {
+            return RuleOutcome(state.value, false, "Durée ou prix invalide.")
+        }
+        val normalized = offer.copy(
+            id = id,
+            name = offer.name.trim(),
+            quotaBytes = if (offer.kind == VoucherKind.UNLIMITED) 0L else offer.quotaBytes,
+        )
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(offers = state.value.offers + (id to normalized)),
+                success = true,
+                message = "Offre enregistrée.",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun deleteOffer(offerIdRaw: String): RuleOutcome {
+        val offerId = offerIdRaw.trim().lowercase()
+        if (!state.value.offers.containsKey(offerId)) {
+            return RuleOutcome(state.value, false, "Offre introuvable.")
+        }
+        if (state.value.vouchers.values.any { it.offerId == offerId }) {
+            return RuleOutcome(
+                state.value,
+                false,
+                "Impossible de supprimer une offre utilisée par des vouchers.",
+            )
+        }
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(offers = state.value.offers - offerId),
+                success = true,
+                message = "Offre supprimée.",
+            ),
+        )
+    }
+
     private fun commit(outcome: RuleOutcome): RuleOutcome {
         if (outcome.success) persist(outcome.state)
         return outcome
