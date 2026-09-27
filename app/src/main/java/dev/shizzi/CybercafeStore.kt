@@ -108,7 +108,7 @@ class CybercafeStore(context: Context) {
         val current = state.value
         if (!current.offers.containsKey(offerId)) return emptyList()
 
-        val created = buildList {
+        val created = buildList<Voucher> {
             repeat(count.coerceIn(1, 100)) {
                 var code: String
                 do {
