@@ -212,7 +212,8 @@ func copyDatagramsManaged(
 
 		read, err := src.Read(buffer)
 		if read > 0 {
-			if traffic != nil && !traffic.waitAllowed(clientIP, dir, read) {
+			if traffic != nil &&
+				!traffic.waitAllowedWithPortalBypass(clientIP, dir, read, bypassPortal) {
 				return
 			}
 
