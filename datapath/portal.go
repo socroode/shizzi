@@ -236,9 +236,11 @@ func (m *TrafficManager) portalAuthorizedFor(ip string) bool {
 }
 
 func (m *TrafficManager) ambiguousSharedClientLocked(ip string) bool {
-	return isSharedTunnelAddress(ip) &&
-		m.flowAttribution != nil &&
-		m.flowAttribution.hasMultipleClients()
+	// A translated TUN address does not identify a hotspot device, even when
+	// the current flow table happens to contain only one client (or no rules).
+	// Counting observed rules is not a reliable way to prove exclusivity: rules
+	// can expire, be offloaded, or appear only after a connection is accepted.
+	return isSharedTunnelAddress(ip)
 }
 
 func (m *TrafficManager) portalAuthorizedLocked(ip string) bool {
@@ -247,10 +249,8 @@ func (m *TrafficManager) portalAuthorizedLocked(ip string) bool {
 		return false
 	}
 
-	// Once Android exposes more than one original downstream client in its
-	// tethering flow table, a still-unresolved 192.0.2.2 flow is ambiguous.
-	// Never let one account/voucher authorize that shared fallback for every
-	// phone. Resolved flows use the original client IP and continue normally.
+	// An unresolved TUN source cannot identify the account to charge. Never
+	// allow its authorization to be inherited by another hotspot client.
 	if m.ambiguousSharedClientLocked(ip) {
 		return false
 	}
