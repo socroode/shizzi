@@ -95,12 +95,12 @@ class MainActivity : Activity() {
                     url: String?,
                     favicon: android.graphics.Bitmap?,
                 ) {
-                    progress.visibility = View.VISIBLE
-                    status.visibility = View.GONE
+                    this@MainActivity.progress.visibility = View.VISIBLE
+                    this@MainActivity.status.visibility = View.GONE
                 }
 
                 override fun onPageFinished(view: WebView?, url: String?) {
-                    progress.visibility = View.GONE
+                    this@MainActivity.progress.visibility = View.GONE
                 }
 
                 override fun onReceivedError(
@@ -109,9 +109,9 @@ class MainActivity : Activity() {
                     error: WebResourceError?,
                 ) {
                     if (request?.isForMainFrame == true) {
-                        progress.visibility = View.GONE
-                        status.visibility = View.VISIBLE
-                        status.text =
+                        this@MainActivity.progress.visibility = View.GONE
+                        this@MainActivity.status.visibility = View.VISIBLE
+                        this@MainActivity.status.text =
                             "Shizzi Hotspot n'est pas joignable. Vérifiez la connexion Wi-Fi."
                     }
                 }
@@ -168,7 +168,7 @@ class MainActivity : Activity() {
     private fun openPortal(url: String) {
         menu.visibility = View.GONE
         webView.visibility = View.VISIBLE
-        progress.visibility = View.VISIBLE
+        this@MainActivity.progress.visibility = View.VISIBLE
         webView.loadUrl(url)
     }
 
@@ -178,8 +178,8 @@ class MainActivity : Activity() {
             webView.visibility == View.VISIBLE && webView.canGoBack() -> webView.goBack()
             webView.visibility == View.VISIBLE -> {
                 webView.visibility = View.GONE
-                progress.visibility = View.GONE
-                status.visibility = View.GONE
+                this@MainActivity.progress.visibility = View.GONE
+                this@MainActivity.status.visibility = View.GONE
                 menu.visibility = View.VISIBLE
             }
             else -> super.onBackPressed()
