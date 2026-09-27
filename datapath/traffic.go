@@ -391,9 +391,11 @@ type trafficStatsSnapshot struct {
 	SharedUpBytes               int64                         `json:"sharedUpBytes"`
 	SharedDownBytes             int64                         `json:"sharedDownBytes"`
 	SharedResolvedFlows         int64                         `json:"sharedResolvedFlows"`
+	SharedFallbackResolvedFlows int64                         `json:"sharedFallbackResolvedFlows"`
 	SharedUnresolvedFlows       int64                         `json:"sharedUnresolvedFlows"`
 	SharedAttributionClients    int                           `json:"sharedAttributionClients"`
 	SharedAttributionLastError  string                        `json:"sharedAttributionLastError,omitempty"`
+	SharedAttributionLastMiss   string                        `json:"sharedAttributionLastMiss,omitempty"`
 	PortalLoginAttempts         int64                         `json:"portalLoginAttempts"`
 	PortalLoginClientIP         string                        `json:"portalLoginClientIp,omitempty"`
 	PortalLoginResult           string                        `json:"portalLoginResult,omitempty"`
@@ -445,9 +447,11 @@ func (m *TrafficManager) statsJSON() string {
 		SharedUpBytes:               m.sharedUpBytes,
 		SharedDownBytes:             m.sharedDownBytes,
 		SharedResolvedFlows:         attribution.ResolvedFlows,
+		SharedFallbackResolvedFlows: attribution.FallbackResolvedFlows,
 		SharedUnresolvedFlows:       attribution.UnresolvedFlows,
 		SharedAttributionClients:    attribution.ClientCount,
 		SharedAttributionLastError:  attribution.LastError,
+		SharedAttributionLastMiss:   attribution.LastMiss,
 		PortalLoginAttempts:        m.portalLoginAttempts,
 		PortalLoginClientIP:        m.portalLoginClientIP,
 		PortalLoginResult:          m.portalLoginResult,
