@@ -786,3 +786,179 @@ func TestAccountLoginFormCarriesDeviceTokenWithoutCookie(t *testing.T) {
 		t.Fatalf("login form lost device token: %s", panel)
 	}
 }
+
+
+const singlePhysicalClientDump = `Tethering:
+  Forwarding rules:
+    IPv4 Upstream: proto [inDstMac] iif(iface) src -> nat -> dst [outDstMac] pmtu age
+      tcp [aa:bb:cc:dd:ee:ff] 41(wlan0) 192.168.161.66:51446 -> 42(testtun0) 192.0.2.2:51446 -> 142.251.151.119:443 [00:00:00:00:00:00] 1500 10ms
+    IPv4 Downstream: proto [inDstMac] iif(iface) src -> nat -> dst [outDstMac] pmtu age
+  Client Information:
+    {android.net.ip.IpServer@1={/192.168.161.66=downstream: 41 (aa:bb:cc:dd:ee:ff), client: /192.168.161.66 (8e:e1:38:c6:a0:35)}}
+`
+
+const twoPhysicalClientsOneActiveFlowDump = `Tethering:
+  Forwarding rules:
+    IPv4 Upstream: proto [inDstMac] iif(iface) src -> nat -> dst [outDstMac] pmtu age
+      tcp [aa:bb:cc:dd:ee:ff] 41(wlan0) 192.168.161.66:51446 -> 42(testtun0) 192.0.2.2:51446 -> 142.251.151.119:443 [00:00:00:00:00:00] 1500 10ms
+    IPv4 Downstream: proto [inDstMac] iif(iface) src -> nat -> dst [outDstMac] pmtu age
+  Client Information:
+    {android.net.ip.IpServer@1={/192.168.161.66=downstream: 41 (aa:bb:cc:dd:ee:ff), client: /192.168.161.66 (8e:e1:38:c6:a0:35), /192.168.161.162=downstream: 41 (aa:bb:cc:dd:ee:ff), client: /192.168.161.162 (a6:10:bd:03:d4:58)}}
+`
+
+func TestSinglePhysicalClientSharedPortalLoginBindsRealIP(t *testing.T) {
+	manager := newTrafficManager()
+	manager.flowAttribution.dumpFn = func() (string, error) {
+		return singlePhysicalClientDump, nil
+	}
+	manager.setPortalConfig(true, `{
+	  "accounts": [{
+	    "number": "49662461",
+	    "pin": "123456",
+	    "name": "vini2",
+	    "enabled": true,
+	    "dataBalanceBytes": 1000000000,
+	    "dataExpiresAtMillis": 2305843009213693951,
+	    "dataDownloadBps": 1000000,
+	    "dataUploadBps": 1000000
+	  }]
+	}`)
+
+	body := "account=49662461&pin=123456"
+	request := fmt.Sprintf(
+		"POST /account/login HTTP/1.1\r\n"+
+			"Host: 192.0.2.1\r\n"+
+			"Content-Type: application/x-www-form-urlencoded\r\n"+
+			"Content-Length: %d\r\n"+
+			"Connection: close\r\n\r\n%s",
+		len(body),
+		body,
+	)
+
+	server, client := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		manager.servePortal(server, "192.0.2.2")
+		close(done)
+	}()
+	_, _ = io.WriteString(client, request)
+	response, err := io.ReadAll(client)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	<-done
+	_ = client.Close()
+
+	manager.mu.Lock()
+	auth, physical := manager.portalAuthorized["192.168.161.66"]
+	_, shared := manager.portalAuthorized["192.0.2.2"]
+	manager.mu.Unlock()
+
+	if !physical || auth.AccountNumber != "49662461" {
+		t.Fatalf("physical authorization=%+v present=%v", auth, physical)
+	}
+	if shared {
+		t.Fatal("single-client account remained attached to shared TUN address")
+	}
+	if !strings.Contains(string(response), "Accès Internet actif") {
+		t.Fatalf("portal did not authorize physical client: %s", string(response))
+	}
+}
+
+func TestTwoConnectedClientsNeverUseStaleSingleClientFallback(t *testing.T) {
+	manager := newTrafficManager()
+	manager.flowAttribution.dumpFn = func() (string, error) {
+		return twoPhysicalClientsOneActiveFlowDump, nil
+	}
+	manager.setPortalConfig(true, `{
+	  "accounts": [{
+	    "number": "49662461",
+	    "pin": "123456",
+	    "enabled": true,
+	    "dataBalanceBytes": 1000000000
+	  }]
+	}`)
+
+	body := "account=49662461&pin=123456"
+	request := fmt.Sprintf(
+		"POST /account/login HTTP/1.1\r\n"+
+			"Host: 192.0.2.1\r\n"+
+			"Content-Type: application/x-www-form-urlencoded\r\n"+
+			"Content-Length: %d\r\n"+
+			"Connection: close\r\n\r\n%s",
+		len(body),
+		body,
+	)
+
+	server, client := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		manager.servePortal(server, "192.0.2.2")
+		close(done)
+	}()
+	_, _ = io.WriteString(client, request)
+	response, err := io.ReadAll(client)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	<-done
+	_ = client.Close()
+
+	manager.mu.Lock()
+	_, first := manager.portalAuthorized["192.168.161.66"]
+	_, shared := manager.portalAuthorized["192.0.2.2"]
+	manager.mu.Unlock()
+
+	if first || shared {
+		t.Fatal("ambiguous two-client login was attached to a client")
+	}
+	if !strings.Contains(string(response), "identifier cet appareil") {
+		t.Fatalf("two-client login did not fail closed: %s", string(response))
+	}
+}
+
+func TestPhysicalSessionIsNotMovedBackToSharedTunAfterSecondClientJoins(t *testing.T) {
+	manager := newTrafficManager()
+	dump := singlePhysicalClientDump
+	manager.flowAttribution.dumpFn = func() (string, error) {
+		return dump, nil
+	}
+	manager.setPortalConfig(true, `{
+	  "accounts": [{
+	    "number": "49662461",
+	    "pin": "123456",
+	    "enabled": true,
+	    "dataBalanceBytes": 1000000000
+	  }]
+	}`)
+
+	ip := manager.flowAttribution.singleConnectedClient()
+	if ip != "192.168.161.66" {
+		t.Fatalf("single client=%q", ip)
+	}
+	ok, message, token := manager.submitPortalAccountLoginWithSession(
+		ip, "49662461", "123456",
+	)
+	if !ok || token == "" {
+		t.Fatalf("login failed: %s", message)
+	}
+
+	dump = twoPhysicalClientsOneActiveFlowDump
+	manager.flowAttribution.singleConnectedClient() // forced refresh; now ambiguous
+
+	status := manager.portalUsageStatusForSession("192.0.2.2", token)
+	if !status.Authenticated || status.AccountNumber != "49662461" {
+		t.Fatalf("existing physical session disappeared: %+v", status)
+	}
+
+	manager.mu.Lock()
+	_, physical := manager.portalAuthorized["192.168.161.66"]
+	_, shared := manager.portalAuthorized["192.0.2.2"]
+	manager.mu.Unlock()
+	if !physical {
+		t.Fatal("physical authorization was removed")
+	}
+	if shared {
+		t.Fatal("physical session was moved back onto shared TUN address")
+	}
+}

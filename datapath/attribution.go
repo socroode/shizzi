@@ -40,9 +40,10 @@ type flowAttributionResolver struct {
 
 	dumpFn func() (string, error)
 
-	flows       map[flowAttributionKey]string
-	lastRefresh time.Time
-	lastError   string
+	flows            map[flowAttributionKey]string
+	connectedClients map[string]struct{}
+	lastRefresh      time.Time
+	lastError        string
 
 	resolvedFlows         int64
 	fallbackResolvedFlows int64
@@ -70,10 +71,19 @@ var ipv4TuplePattern = regexp.MustCompile(
 	`([0-9]{1,3}(?:\.[0-9]{1,3}){3}):(\d+)`,
 )
 
+// Android's tethering dump also exposes the clients currently attached to the
+// hotspot, even when one of them is idle and therefore has no upstream flow.
+// Use that list before falling back to flow-derived clients so a newly joined
+// second phone can never be mistaken for the first phone during portal login.
+var tetheringConnectedClientPattern = regexp.MustCompile(
+	`/([0-9]{1,3}(?:\.[0-9]{1,3}){3})=downstream:`,
+)
+
 func newFlowAttributionResolver() *flowAttributionResolver {
 	return &flowAttributionResolver{
-		dumpFn: dumpTetheringState,
-		flows:  make(map[flowAttributionKey]string),
+		dumpFn:           dumpTetheringState,
+		flows:            make(map[flowAttributionKey]string),
+		connectedClients: make(map[string]struct{}),
 	}
 }
 
@@ -89,6 +99,22 @@ func dumpTetheringState() (string, error) {
 		return "", fmt.Errorf("dumpsys tethering: %w", err)
 	}
 	return string(out), nil
+}
+
+func parseTetheringConnectedClients(raw string) map[string]struct{} {
+	result := make(map[string]struct{})
+	for _, match := range tetheringConnectedClientPattern.FindAllStringSubmatch(raw, -1) {
+		if len(match) != 2 {
+			continue
+		}
+		ip := strings.TrimSpace(match[1])
+		parsed := net.ParseIP(ip)
+		if parsed == nil || parsed.To4() == nil || isSharedTunnelAddress(ip) {
+			continue
+		}
+		result[ip] = struct{}{}
+	}
+	return result
 }
 
 func parseIPv4UpstreamAttributions(raw string) map[flowAttributionKey]string {
@@ -310,7 +336,28 @@ func (r *flowAttributionResolver) refreshLocked() {
 	}
 
 	r.flows = parseIPv4UpstreamAttributions(raw)
+	r.connectedClients = parseTetheringConnectedClients(raw)
 	r.lastError = ""
+}
+
+func (r *flowAttributionResolver) clientSetLocked() map[string]struct{} {
+	if len(r.connectedClients) > 0 {
+		clients := make(map[string]struct{}, len(r.connectedClients))
+		for clientIP := range r.connectedClients {
+			clients[clientIP] = struct{}{}
+		}
+		return clients
+	}
+
+	// Compatibility fallback for OEM dumps/tests that do not expose the
+	// Client Information section.
+	clients := make(map[string]struct{})
+	for _, clientIP := range r.flows {
+		if clientIP != "" && !isSharedTunnelAddress(clientIP) {
+			clients[clientIP] = struct{}{}
+		}
+	}
+	return clients
 }
 
 func (r *flowAttributionResolver) hasMultipleClients() bool {
@@ -320,18 +367,30 @@ func (r *flowAttributionResolver) hasMultipleClients() bool {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return len(r.clientSetLocked()) > 1
+}
 
-	clients := make(map[string]struct{})
-	for _, clientIP := range r.flows {
-		if clientIP == "" {
-			continue
-		}
-		clients[clientIP] = struct{}{}
-		if len(clients) > 1 {
-			return true
-		}
+// singleConnectedClient returns a physical hotspot client only when Android's
+// current tethering state proves there is exactly one. The refresh is forced:
+// this path is used for portal identity, where a stale one-client snapshot
+// after a second phone joins would attach an account to the wrong device.
+func (r *flowAttributionResolver) singleConnectedClient() string {
+	if r == nil {
+		return ""
 	}
-	return false
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.refreshLocked()
+
+	clients := r.clientSetLocked()
+	if len(clients) != 1 {
+		return ""
+	}
+	for clientIP := range clients {
+		return clientIP
+	}
+	return ""
 }
 
 func (r *flowAttributionResolver) snapshot() flowAttributionSnapshot {

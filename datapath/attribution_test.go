@@ -236,3 +236,24 @@ IPv4 Downstream:`
 		t.Fatalf("unresolved=%d, want 1", snapshot.UnresolvedFlows)
 	}
 }
+
+
+func TestParseTetheringConnectedClientsIncludesIdlePhones(t *testing.T) {
+	raw := `Tethering:
+  Forwarding rules:
+    IPv4 Upstream: proto [inDstMac] iif(iface) src -> nat -> dst [outDstMac] pmtu age
+      tcp [aa:bb:cc:dd:ee:ff] 41(wlan0) 192.168.161.66:51446 -> 42(testtun0) 192.0.2.2:51446 -> 142.251.151.119:443 [00:00:00:00:00:00] 1500 10ms
+  Client Information:
+    {android.net.ip.IpServer@1={/192.168.161.66=downstream: 41 (aa:bb:cc:dd:ee:ff), client: /192.168.161.66 (8e:e1:38:c6:a0:35), /192.168.161.162=downstream: 41 (aa:bb:cc:dd:ee:ff), client: /192.168.161.162 (a6:10:bd:03:d4:58)}}
+`
+	clients := parseTetheringConnectedClients(raw)
+	if len(clients) != 2 {
+		t.Fatalf("connected clients=%v", clients)
+	}
+	if _, ok := clients["192.168.161.66"]; !ok {
+		t.Fatal("missing .66")
+	}
+	if _, ok := clients["192.168.161.162"]; !ok {
+		t.Fatal("missing .162")
+	}
+}
