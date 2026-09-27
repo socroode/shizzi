@@ -106,7 +106,7 @@ class CybercafeStore(context: Context) {
     @Synchronized
     fun generateVouchers(offerId: String, count: Int, nowMillis: Long): List<Voucher> {
         val current = state.value
-        if (!current.offers.containsKey(offerId)) return emptyList()
+        val offer = current.offers[offerId] ?: return emptyList()
 
         val created = buildList<Voucher> {
             repeat(count.coerceIn(1, 100)) {
@@ -119,6 +119,14 @@ class CybercafeStore(context: Context) {
                         code = code,
                         offerId = offerId,
                         createdAtMillis = nowMillis,
+                        snapshotVersion = 1,
+                        snapshotName = offer.name,
+                        snapshotKind = offer.kind,
+                        snapshotDownloadBps = offer.downloadBps,
+                        snapshotUploadBps = offer.uploadBps,
+                        snapshotQuotaBytes = offer.quotaBytes,
+                        snapshotDurationDays = offer.durationDays,
+                        snapshotPriceXpf = offer.priceXpf,
                     ),
                 )
             }
@@ -280,13 +288,6 @@ class CybercafeStore(context: Context) {
         if (!state.value.offers.containsKey(offerId)) {
             return RuleOutcome(state.value, false, "Offre introuvable.")
         }
-        if (state.value.vouchers.values.any { it.offerId == offerId }) {
-            return RuleOutcome(
-                state.value,
-                false,
-                "Impossible de supprimer une offre utilisée par des vouchers.",
-            )
-        }
         return commit(
             RuleOutcome(
                 state = state.value.copy(offers = state.value.offers - offerId),
@@ -424,6 +425,14 @@ private fun encodeState(state: CybercafeState): String =
                     put("enabled", voucher.enabled)
                     put("redeemedByAccount", voucher.redeemedByAccount)
                     put("redeemedAtMillis", voucher.redeemedAtMillis)
+                    put("snapshotVersion", voucher.snapshotVersion)
+                    put("snapshotName", voucher.snapshotName)
+                    put("snapshotKind", voucher.snapshotKind.name)
+                    put("snapshotDownloadBps", voucher.snapshotDownloadBps)
+                    put("snapshotUploadBps", voucher.snapshotUploadBps)
+                    put("snapshotQuotaBytes", voucher.snapshotQuotaBytes)
+                    put("snapshotDurationDays", voucher.snapshotDurationDays)
+                    put("snapshotPriceXpf", voucher.snapshotPriceXpf)
                 })
             }
         })
@@ -497,6 +506,16 @@ private fun decodeState(raw: String?): CybercafeState {
             enabled = item.optBoolean("enabled", true),
             redeemedByAccount = item.optString("redeemedByAccount"),
             redeemedAtMillis = item.optLong("redeemedAtMillis"),
+            snapshotVersion = item.optInt("snapshotVersion", 0),
+            snapshotName = item.optString("snapshotName"),
+            snapshotKind = runCatching {
+                VoucherKind.valueOf(item.optString("snapshotKind", VoucherKind.DATA.name))
+            }.getOrDefault(VoucherKind.DATA),
+            snapshotDownloadBps = item.optLong("snapshotDownloadBps"),
+            snapshotUploadBps = item.optLong("snapshotUploadBps"),
+            snapshotQuotaBytes = item.optLong("snapshotQuotaBytes"),
+            snapshotDurationDays = item.optInt("snapshotDurationDays"),
+            snapshotPriceXpf = item.optInt("snapshotPriceXpf"),
         )
     }
 
@@ -514,8 +533,8 @@ private fun decodeState(raw: String?): CybercafeState {
     }
 
     return CybercafeState(
-        schemaVersion = root.optInt("schemaVersion", 1),
-        offers = defaultOffers() + offers,
+        schemaVersion = 2,
+        offers = if (offers.isEmpty()) defaultOffers() else offers,
         accounts = accounts,
         vouchers = vouchers,
         devices = devices,

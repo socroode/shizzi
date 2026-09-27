@@ -93,7 +93,7 @@ class CybercafeModelTest {
     }
 
     @Test
-    fun oneAccountCannotBeBoundToTwoDifferentDevices() {
+    fun oneAccountCanBeUsedByTwoDifferentDevices() {
         val state = CybercafeState(accounts = mapOf("1001" to account()))
         val first = CybercafeRules.bindDevice(
             state,
@@ -113,7 +113,56 @@ class CybercafeModelTest {
             "11:22:33:44:55:66",
             2L,
         )
-        assertFalse(second.success)
+        assertTrue(second.success)
+        assertEquals(2, second.state.devices.size)
+        assertEquals("1001", second.state.devices.getValue("device-a").accountNumber)
+        assertEquals("1001", second.state.devices.getValue("device-b").accountNumber)
+    }
+
+    @Test
+    fun generatedVoucherKeepsItsOwnOfferSnapshot() {
+        val customized = Offer(
+            id = "weekend",
+            name = "Week-end",
+            kind = VoucherKind.DATA,
+            downloadBps = 10_000_000L,
+            uploadBps = 5_000_000L,
+            quotaBytes = 25_000_000_000L,
+            durationDays = 3,
+            priceXpf = 2_500,
+        )
+        val voucher = Voucher(
+            code = "SNAP",
+            offerId = customized.id,
+            createdAtMillis = 0L,
+            snapshotVersion = 1,
+            snapshotName = customized.name,
+            snapshotKind = customized.kind,
+            snapshotDownloadBps = customized.downloadBps,
+            snapshotUploadBps = customized.uploadBps,
+            snapshotQuotaBytes = customized.quotaBytes,
+            snapshotDurationDays = customized.durationDays,
+            snapshotPriceXpf = customized.priceXpf,
+        )
+        val changedOffer = customized.copy(
+            name = "Week-end modifié",
+            quotaBytes = 1_000_000_000L,
+            durationDays = 1,
+        )
+        val state = CybercafeState(
+            offers = mapOf(changedOffer.id to changedOffer),
+            accounts = mapOf("1001" to account()),
+            vouchers = mapOf("SNAP" to voucher),
+        )
+
+        val result = CybercafeRules.redeemVoucher(state, "1001", "SNAP", 1_000L)
+
+        assertTrue(result.success)
+        val updated = result.state.accounts.getValue("1001")
+        assertEquals(25_000_000_000L, updated.dataBalanceBytes)
+        assertEquals(1_000L + 3L * day, updated.dataValidUntilMillis)
+        assertEquals(10_000_000L, updated.dataDownloadBps)
+        assertEquals(5_000_000L, updated.dataUploadBps)
     }
 
     @Test
