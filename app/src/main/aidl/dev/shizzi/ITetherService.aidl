@@ -39,6 +39,8 @@ interface ITetherService {
 
     void clearPortalClaims();
 
+    void revokePortalClient(String ip);
+
     String runProbes(boolean attemptTethering, int availabilityTimeoutMs);
 
     void clearLog();

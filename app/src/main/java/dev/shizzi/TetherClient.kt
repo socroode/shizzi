@@ -307,6 +307,12 @@ class TetherClient {
         bound.clearPortalClaims()
     }
 
+    suspend fun revokePortalClient(ip: String) = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.revokePortalClient(ip)
+    }
+
     private fun verifyContract(bound: ITetherService) {
         val remote = bound.contractVersion
         check(remote == TetherService.CONTRACT_VERSION) {

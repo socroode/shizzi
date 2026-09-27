@@ -255,6 +255,10 @@ class TetherSession(private val context: Context) {
         resources?.clearPortalClaims()
     }
 
+    fun revokePortalClient(ip: String) {
+        resources?.revokePortalClient(ip)
+    }
+
     fun status(): String = JSONObject().apply {
         put("state", state.name)
         put("detail", detail)

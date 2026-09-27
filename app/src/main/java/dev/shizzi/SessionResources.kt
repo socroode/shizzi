@@ -116,6 +116,10 @@ class SessionResources(
         datapathSession?.clearPortalClaims()
     }
 
+    fun revokePortalClient(ip: String) {
+        datapathSession?.revokePortalClient(ip)
+    }
+
     fun bindDatapathTo(handle: Long) {
         val session = datapathSession
             ?: error("bindDatapathTo($handle): no datapath session; startDatapath must succeed first")

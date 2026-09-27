@@ -91,6 +91,10 @@ class TetherService : ITetherService.Stub {
         session.clearPortalClaims()
     }
 
+    override fun revokePortalClient(ip: String?) {
+        session.revokePortalClient(ip.orEmpty())
+    }
+
     override fun setLogging(enabled: Boolean) {
         SessionLog.setEnabled(enabled)
     }
