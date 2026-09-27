@@ -58,6 +58,20 @@ func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer, traffic *Traf
 		}
 	}
 
+	if traffic != nil && uint16(id.LocalPort) == 80 &&
+		(traffic.portalRequiredFor(clientIP) || addressString(id.LocalAddress) == portalIP) {
+		var queue waiter.Queue
+		endpoint, tcpipErr := request.CreateEndpoint(&queue)
+		if tcpipErr != nil {
+			request.Complete(true)
+			return
+		}
+		request.Complete(false)
+		client := gonet.NewTCPConn(&queue, endpoint)
+		go traffic.servePortal(client, clientIP)
+		return
+	}
+
 	upstream, err := dialer.Dial("tcp", destinationOf(id))
 	if err != nil {
 		request.Complete(true)
@@ -106,7 +120,13 @@ func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer, traffic *Traf
 	}
 
 	client := gonet.NewUDPConn(&queue, endpoint)
-	go relayDatagrams(client, upstream, clientIP, traffic)
+	go relayDatagrams(
+		client,
+		upstream,
+		clientIP,
+		traffic,
+		uint16(id.LocalPort) == 53,
+	)
 	return true
 }
 
@@ -159,17 +179,18 @@ func relayDatagrams(
 	client, upstream net.Conn,
 	clientIP string,
 	traffic *TrafficManager,
+	bypassPortal bool,
 ) {
 	defer client.Close()
 	defer upstream.Close()
 
 	done := make(chan struct{}, 2)
 	go func() {
-		copyDatagramsManaged(upstream, client, clientIP, directionUpload, traffic)
+		copyDatagramsManaged(upstream, client, clientIP, directionUpload, traffic, bypassPortal)
 		done <- struct{}{}
 	}()
 	go func() {
-		copyDatagramsManaged(client, upstream, clientIP, directionDownload, traffic)
+		copyDatagramsManaged(client, upstream, clientIP, directionDownload, traffic, bypassPortal)
 		done <- struct{}{}
 	}()
 	<-done
@@ -180,6 +201,7 @@ func copyDatagramsManaged(
 	clientIP string,
 	dir direction,
 	traffic *TrafficManager,
+	bypassPortal bool,
 ) {
 	buffer := make([]byte, maxDatagramSize)
 

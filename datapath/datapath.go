@@ -152,6 +152,25 @@ func (s *Session) SetClientPolicy(
 	})
 }
 
+
+// SetPortalConfig enables/disables account-gated captive access and supplies
+// the current account snapshot from Android. The Android store remains the
+// durable source of truth.
+func (s *Session) SetPortalConfig(required bool, configJSON string) {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.setPortalConfig(required, configJSON)
+}
+
+// ClearPortalClaims acknowledges recharge requests already handled by Android.
+func (s *Session) ClearPortalClaims() {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.clearPortalClaims()
+}
+
 // TrafficStatsJSON exposes per-client counters and attribution diagnostics.
 func (s *Session) TrafficStatsJSON() string {
 	if s.traffic == nil {

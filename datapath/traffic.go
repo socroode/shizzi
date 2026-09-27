@@ -119,6 +119,13 @@ type TrafficManager struct {
 
 	defaultClientPolicy ClientPolicy
 	clients             map[string]*clientTraffic
+
+	portalRequired       bool
+	portalTitle          string
+	portalMessage        string
+	portalAccounts       map[string]PortalAccount
+	portalAuthorized     map[string]PortalAuthorization
+	portalRechargeClaims []PortalRechargeClaim
 }
 
 func newTrafficManager() *TrafficManager {
@@ -127,6 +134,10 @@ func newTrafficManager() *TrafficManager {
 		globalDownloadLimiter: newBandwidthLimiter(0),
 		globalUploadLimiter:   newBandwidthLimiter(0),
 		clients:               make(map[string]*clientTraffic),
+		portalTitle:           "Shizzi Hotspot",
+		portalMessage:         "Connectez-vous à votre compte Shizzi.",
+		portalAccounts:        make(map[string]PortalAccount),
+		portalAuthorized:      make(map[string]PortalAuthorization),
 	}
 }
 
@@ -222,12 +233,27 @@ func (m *TrafficManager) clientLocked(ip string) *clientTraffic {
 }
 
 func (m *TrafficManager) waitAllowed(ip string, dir direction, byteCount int) bool {
+	return m.waitAllowedWithPortalBypass(ip, dir, byteCount, false)
+}
+
+func (m *TrafficManager) waitAllowedWithPortalBypass(
+	ip string,
+	dir direction,
+	byteCount int,
+	bypassPortal bool,
+) bool {
 	if ip == "" {
 		// Identity is mandatory once prepaid/account enforcement is enabled.
 		return false
 	}
 
 	m.mu.Lock()
+	if !bypassPortal && m.portalRequired &&
+		!m.portalAuthorizedLocked(ip, time.Now().UnixMilli()) {
+		m.mu.Unlock()
+		return false
+	}
+
 	globalUsed := m.totalUpBytes + m.totalDownBytes
 	if m.globalQuotaBytes > 0 && globalUsed >= m.globalQuotaBytes {
 		m.mu.Unlock()
@@ -308,7 +334,9 @@ type trafficStatsSnapshot struct {
 	TotalDownBytes          int64                   `json:"totalDownBytes"`
 	RequireClientAttribution bool                    `json:"requireClientAttribution"`
 	Clients                 []clientStatsSnapshot   `json:"clients"`
-	Attribution             flowAttributionSnapshot `json:"attribution"`
+	Attribution             flowAttributionSnapshot       `json:"attribution"`
+	PortalAuthorizations    []PortalAuthorizationStatus    `json:"portalAuthorizations,omitempty"`
+	PortalRechargeClaims    []PortalRechargeClaim          `json:"portalRechargeClaims,omitempty"`
 }
 
 func (m *TrafficManager) statsJSON() string {
@@ -321,6 +349,25 @@ func (m *TrafficManager) statsJSON() string {
 		TotalDownBytes:           m.totalDownBytes,
 		RequireClientAttribution: m.requireClientAttribution,
 		Clients:                  make([]clientStatsSnapshot, 0, len(m.clients)),
+		PortalAuthorizations:     make([]PortalAuthorizationStatus, 0, len(m.portalAuthorized)),
+		PortalRechargeClaims:     append([]PortalRechargeClaim(nil), m.portalRechargeClaims...),
+	}
+
+	for ip, authorization := range m.portalAuthorized {
+		client := m.clientLocked(ip)
+		used := client.UpBytes + client.DownBytes - authorization.StartClientBytes
+		if used < 0 {
+			used = 0
+		}
+		snapshot.PortalAuthorizations = append(
+			snapshot.PortalAuthorizations,
+			PortalAuthorizationStatus{
+				IP:                   ip,
+				AccountNumber:        authorization.AccountNumber,
+				StartedAtMillis:      authorization.StartedAtMillis,
+				SessionDataUsedBytes: used,
+			},
+		)
 	}
 
 	for _, client := range m.clients {
