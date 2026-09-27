@@ -152,3 +152,28 @@ func TestParseIPv4UpstreamAttributionsAcceptsOEMFormatting(t *testing.T) {
 		t.Fatalf("OEM attribution=%q, want 192.168.43.31; flows=%v", got, flows)
 	}
 }
+
+func TestParseReno11ThreeHotspotClients(t *testing.T) {
+	raw := `IPv4 Upstream: proto [inDstMac] iif(iface) src -> nat -> dst [outDstMac] pmtu age
+ tcp [da:e5:d7:05:3d:c8] 47(47) 192.168.7.66:34776 -> 69(testtun21) 192.0.2.2:34776 -> 157.240.8.13:443 [00:00:00:00:00:00] 1500 142668ms
+ tcp [da:e5:d7:05:3d:c8] 47(47) 192.168.7.161:60396 -> 69(testtun21) 192.0.2.2:60396 -> 157.240.8.40:443 [00:00:00:00:00:00] 1500 4975ms
+ udp [da:e5:d7:05:3d:c8] 47(47) 192.168.7.162:49254 -> 69(testtun21) 192.0.2.2:49254 -> 142.251.156.6:443 [00:00:00:00:00:00] 1500 7778ms
+IPv4 Downstream: proto [inDstMac] iif(iface) src -> nat -> dst [outDstMac] pmtu age`
+	resolver := newFlowAttributionResolver()
+	resolver.dumpFn = func() (string, error) { return raw, nil }
+	for _, test := range []struct {
+		key flowAttributionKey
+		want string
+	}{
+		{flowAttributionKey{"tcp", "192.0.2.2", 34776, "157.240.8.13", 443}, "192.168.7.66"},
+		{flowAttributionKey{"tcp", "192.0.2.2", 60396, "157.240.8.40", 443}, "192.168.7.161"},
+		{flowAttributionKey{"udp", "192.0.2.2", 49254, "142.251.156.6", 443}, "192.168.7.162"},
+	} {
+		if got := resolver.resolve(test.key, false); got != test.want {
+			t.Errorf("resolve(%v)=%q, want %q", test.key, got, test.want)
+		}
+	}
+	if got := resolver.snapshot().ClientCount; got != 3 {
+		t.Errorf("mapped clients=%d, want 3", got)
+	}
+}

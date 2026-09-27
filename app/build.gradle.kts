@@ -62,8 +62,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = if (migrationBuild) 33 else 34
-        versionName = if (migrationBuild) "1.7.4-migration" else "1.7.4"
+        versionCode = if (migrationBuild) 43 else 48
+        versionName = if (migrationBuild) "1.7.17-diagnostic-migration" else "1.7.17-diagnostic"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 

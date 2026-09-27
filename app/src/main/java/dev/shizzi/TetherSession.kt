@@ -19,6 +19,8 @@ class TetherSession(private val context: Context) {
     private var interfaceName: String? = null
 
     private var activeSince: Long = 0
+    private var lastAttributionDiagnosticAt: Long = 0
+    private var lastPortalLoginAttemptLogged: Long = 0
     private var vpnMode = VpnMode.AUTO
     private var watchdog: SessionWatchdog? = null
     private val teardown = SessionTeardown(context)
@@ -31,6 +33,13 @@ class TetherSession(private val context: Context) {
 
     fun start(mode: VpnMode = VpnMode.AUTO, managerConfigJson: String = ""): String {
         if (isActive) return status()
+
+        // A previous session may have stopped while its recovery callback was
+        // still running. Invalidate that watchdog before creating a new TUN.
+        watchdog?.stop()
+        watchdog = null
+        lastPortalLoginAttemptLogged = 0
+        lastAttributionDiagnosticAt = 0
 
         vpnMode = mode
         state = SessionState.STARTING
@@ -400,12 +409,19 @@ class TetherSession(private val context: Context) {
     }
 
     private fun startWatchdog(name: String) {
-        val guard = SessionWatchdog(
+        lateinit var guard: SessionWatchdog
+        guard = SessionWatchdog(
             expectedInterface = name,
-            onRecover = { problem -> recoverUpstream(name, problem) },
+            onRecover = { problem ->
+                if (watchdog === guard && isActive && interfaceName == name) {
+                    recoverUpstream(name, problem)
+                } else false
+            },
             onDrift = { problem ->
-                SessionLog.warn("upstream drift: $problem")
-                tearDownAfter(problem)
+                if (watchdog === guard && isActive && interfaceName == name) {
+                    SessionLog.warn("upstream drift: $problem")
+                    tearDownAfter(problem)
+                }
             },
         )
         watchdog = guard
@@ -503,11 +519,19 @@ class TetherSession(private val context: Context) {
             return true
         }
 
+        if (!isActive || interfaceName != name) return false
+
         SessionLog.warn("watchdog recovery: restarting hotspot to force upstream reselection")
 
         val restarted = runCatching {
+            check(isActive && interfaceName == name) {
+                "watchdog recovery: session changed while recovering $name"
+            }
             check(clearCompetingShizziNetworks(name)) {
                 "watchdog recovery: competing Shizzi test network could not be cleared"
+            }
+            check(isActive && interfaceName == name) {
+                "watchdog recovery: session changed before restarting hotspot"
             }
             restartDownstream()
             preferTestNetworks()
@@ -700,9 +724,54 @@ class TetherSession(private val context: Context) {
         val traffic = interfaceName?.let(InterfaceCounters::read) ?: Traffic()
         put("bytesUp", traffic.up)
         put("bytesDown", traffic.down)
-        put("clientCount", if (isActive) downstream.countDevices() else 0)
-        put("trafficManager", JSONObject(trafficStats()))
+        val connectedClients = if (isActive) downstream.countDevices() else 0
+        val managerStats = JSONObject(trafficStats())
+        val loginAttempts = managerStats.optLong("portalLoginAttempts")
+        if (loginAttempts > lastPortalLoginAttemptLogged) {
+            lastPortalLoginAttemptLogged = loginAttempts
+            SessionLog.info(
+                "portal login: attempts=$loginAttempts " +
+                    "source=${managerStats.optString("portalLoginClientIp")} " +
+                    "result=${managerStats.optString("portalLoginResult")} " +
+                    "resolved=${managerStats.optLong("sharedResolvedFlows")} " +
+                    "unresolved=${managerStats.optLong("sharedUnresolvedFlows")} " +
+                    "mappedClients=${managerStats.optInt("sharedAttributionClients")} " +
+                    "error=${managerStats.optString("sharedAttributionLastError")}",
+            )
+        }
+        put("clientCount", connectedClients)
+        put("trafficManager", managerStats)
+        logAttributionDiagnostic(connectedClients, managerStats)
     }.toString()
+
+    private fun logAttributionDiagnostic(connectedClients: Int, stats: JSONObject) {
+        if (connectedClients < 1) return
+        val now = System.currentTimeMillis()
+        if (now - lastAttributionDiagnosticAt < 60_000L) return
+        lastAttributionDiagnosticAt = now
+
+        val observation = runCatching { inspector.observe() }.getOrNull()
+        val lines = observation?.rawOutput.orEmpty().lineSequence().toList()
+        val upstreamIndex = lines.indexOfFirst { it.trim().startsWith("IPv4 Upstream:") }
+        val excerpt = if (upstreamIndex >= 0) {
+            lines.drop(upstreamIndex).take(22)
+        } else {
+            lines.filter { line ->
+                listOf("IPv4", "Forwarding rules", "offload", "testtun").any {
+                    line.contains(it, ignoreCase = true)
+                }
+            }.take(22)
+        }.joinToString(" | ") { it.trim() }.take(4_000)
+
+        SessionLog.info(
+            "attribution diagnostic: hotspotClients=$connectedClients " +
+                "resolved=${stats.optLong("sharedResolvedFlows")} " +
+                "unresolved=${stats.optLong("sharedUnresolvedFlows")} " +
+                "mappedClients=${stats.optInt("sharedAttributionClients")} " +
+                "error=${stats.optString("sharedAttributionLastError")} " +
+                "dumpTimedOut=${observation?.didTimeout} rules=$excerpt",
+        )
+    }
 
     private fun isVpnBypassed(): Boolean {
         if (vpnMode != VpnMode.NEVER) return false

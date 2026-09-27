@@ -878,13 +878,18 @@ func (m *TrafficManager) submitPortalAccountLoginWithSession(
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.portalLoginAttempts++
+	m.portalLoginClientIP = ip
+	m.portalLoginResult = "checking"
 
 	if m.ambiguousSharedClientLocked(ip) {
+		m.portalLoginResult = "shared tunnel address ambiguous"
 		return false, "Impossible d'identifier cet appareil pour le moment. Réessayez.", ""
 	}
 
 	account, ok := m.portalAccounts[number]
 	if !ok || !account.Enabled || account.Pin != pin {
+		m.portalLoginResult = "invalid account or PIN"
 		return false, "Compte ou PIN invalide.", ""
 	}
 
@@ -903,6 +908,7 @@ func (m *TrafficManager) submitPortalAccountLoginWithSession(
 
 	token := newPortalSessionToken()
 	if token == "" {
+		m.portalLoginResult = "session token unavailable"
 		return false, "Impossible de créer la session du compte.", ""
 	}
 	now := time.Now().UnixMilli()
@@ -920,8 +926,10 @@ func (m *TrafficManager) submitPortalAccountLoginWithSession(
 	if account.UnlimitedUntilMillis > now ||
 		(account.DataBalanceBytes > 0 &&
 			(account.DataExpiresAtMillis <= 0 || now < account.DataExpiresAtMillis)) {
+		m.portalLoginResult = "account authorized"
 		return true, "Compte connecté. Accès Internet actif.", token
 	}
+	m.portalLoginResult = "account connected without active balance"
 	return true, "Compte connecté. Rechargez votre compte pour accéder à Internet.", token
 }
 

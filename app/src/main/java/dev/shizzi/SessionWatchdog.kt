@@ -50,6 +50,10 @@ class SessionWatchdog(
                         false
                     }
 
+                // stop() may have interrupted a recovery callback. Do not
+                // dispatch a teardown after this watchdog was cancelled.
+                if (!isRunning.get()) return
+
                 if (recovered) {
                     tolerance.reset()
                     Log.i(TAG, "recovery succeeded for $expectedInterface")

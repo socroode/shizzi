@@ -91,6 +91,9 @@ type TrafficManager struct {
 	mu sync.Mutex
 
 	flowAttribution *flowAttributionResolver
+	portalLoginAttempts int64
+	portalLoginClientIP string
+	portalLoginResult string
 
 	globalDownloadLimiter *bandwidthLimiter
 	globalUploadLimiter   *bandwidthLimiter
@@ -391,6 +394,9 @@ type trafficStatsSnapshot struct {
 	SharedUnresolvedFlows       int64                         `json:"sharedUnresolvedFlows"`
 	SharedAttributionClients    int                           `json:"sharedAttributionClients"`
 	SharedAttributionLastError  string                        `json:"sharedAttributionLastError,omitempty"`
+	PortalLoginAttempts         int64                         `json:"portalLoginAttempts"`
+	PortalLoginClientIP         string                        `json:"portalLoginClientIp,omitempty"`
+	PortalLoginResult           string                        `json:"portalLoginResult,omitempty"`
 	Clients                     []clientStatsSnapshot         `json:"clients"`
 	PortalClaims                []PortalClaim                        `json:"portalClaims,omitempty"`
 	PortalAuthorizations        []portalAuthorizationSnapshot        `json:"portalAuthorizations,omitempty"`
@@ -442,6 +448,9 @@ func (m *TrafficManager) statsJSON() string {
 		SharedUnresolvedFlows:       attribution.UnresolvedFlows,
 		SharedAttributionClients:    attribution.ClientCount,
 		SharedAttributionLastError:  attribution.LastError,
+		PortalLoginAttempts:        m.portalLoginAttempts,
+		PortalLoginClientIP:        m.portalLoginClientIP,
+		PortalLoginResult:          m.portalLoginResult,
 		Clients:                     make([]clientStatsSnapshot, 0, len(m.clients)),
 		PortalClaims:                append([]PortalClaim(nil), m.portalClaims...),
 		PortalAuthorizations:        make([]portalAuthorizationSnapshot, 0, len(m.portalAuthorized)),
