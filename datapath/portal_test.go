@@ -360,7 +360,7 @@ func TestFreshAccountLoginInvalidatesPreviousBrowserSession(t *testing.T) {
 }
 
 
-func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
+func TestResolvedClientsPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 	manager := newTrafficManager()
 	manager.setPortalConfig(true, `{
 	  "accounts": [
@@ -385,9 +385,10 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 	  ]
 	}`)
 
-	const sharedIP = "192.0.2.2"
+	const roniuIP = "192.168.43.20"
+	const clientIP = "192.168.43.21"
 	ok, message, roniuToken := manager.submitPortalAccountLoginWithSession(
-		sharedIP,
+		roniuIP,
 		"63057303",
 		"583921",
 	)
@@ -396,7 +397,7 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 	}
 
 	ok, message, clientToken := manager.submitPortalAccountLoginWithSession(
-		sharedIP,
+		clientIP,
 		"70000002",
 		"654321",
 	)
@@ -405,10 +406,10 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 	}
 
 	manager.mu.Lock()
-	roniuPanel := manager.portalAccountPanelLocked(sharedIP, roniuToken)
-	clientPanel := manager.portalAccountPanelLocked(sharedIP, clientToken)
-	anonymousPanel := manager.portalAccountPanelLocked(sharedIP, "")
-	invalidPanel := manager.portalAccountPanelLocked(sharedIP, "not-a-real-session")
+	roniuPanel := manager.portalAccountPanelLocked(roniuIP, roniuToken)
+	clientPanel := manager.portalAccountPanelLocked(clientIP, clientToken)
+	anonymousPanel := manager.portalAccountPanelLocked(clientIP, "")
+	invalidPanel := manager.portalAccountPanelLocked(clientIP, "not-a-real-session")
 	manager.mu.Unlock()
 
 	if !strings.Contains(roniuPanel, "RONIU") || strings.Contains(roniuPanel, "CLIENT-B") {
@@ -429,10 +430,10 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 		}
 	}
 
-	roniuStatus := manager.portalUsageStatusForSession(sharedIP, roniuToken)
-	clientStatus := manager.portalUsageStatusForSession(sharedIP, clientToken)
-	anonymousStatus := manager.portalUsageStatusForSession(sharedIP, "")
-	invalidStatus := manager.portalUsageStatusForSession(sharedIP, "not-a-real-session")
+	roniuStatus := manager.portalUsageStatusForSession(roniuIP, roniuToken)
+	clientStatus := manager.portalUsageStatusForSession(clientIP, clientToken)
+	anonymousStatus := manager.portalUsageStatusForSession(clientIP, "")
+	invalidStatus := manager.portalUsageStatusForSession(clientIP, "not-a-real-session")
 
 	if !roniuStatus.Authenticated || roniuStatus.AccountName != "RONIU" ||
 		roniuStatus.AccountNumber != "63057303" {
@@ -449,13 +450,13 @@ func TestSharedTunnelPrepaidPagesRequireOwnSessionToken(t *testing.T) {
 		t.Fatalf("invalid browser session inherited an account: %+v", invalidStatus)
 	}
 
-	if manager.portalRequestAuthorizedFor(sharedIP, "") {
-		t.Fatal("shared tunnel browser without a session token was treated as account-authorized")
+	if manager.portalRequestAuthorizedFor(clientIP, "") {
+		t.Fatal("resolved client browser without a session token was treated as account-authorized")
 	}
-	if !manager.portalRequestAuthorizedFor(sharedIP, roniuToken) {
+	if !manager.portalRequestAuthorizedFor(roniuIP, roniuToken) {
 		t.Fatal("RONIU browser session was not recognized as authorized")
 	}
-	if !manager.portalRequestAuthorizedFor(sharedIP, clientToken) {
+	if !manager.portalRequestAuthorizedFor(clientIP, clientToken) {
 		t.Fatal("CLIENT-B browser session was not recognized as authorized")
 	}
 }
