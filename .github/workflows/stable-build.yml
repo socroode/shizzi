@@ -87,7 +87,7 @@ jobs:
 
           "$BUILD_TOOLS/apksigner" verify --print-certs "$APK"
           ACTUAL=$("$BUILD_TOOLS/apksigner" verify --print-certs "$APK" \
-            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' \
+            | sed -n 's/^.*certificate SHA-256 digest: //p' \
             | head -1 | tr '[:lower:]' '[:upper:]')
           ACTUAL_NORM=$(echo "$ACTUAL" | tr -d ': ')
           EXPECTED_NORM=$(echo "$EXPECTED_CERT_SHA256" | tr -d ': ')
