@@ -360,9 +360,12 @@ class CybercafeStore(context: Context) {
     }
 
     private fun newVoucherCode(): String {
-        val chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-        val raw = CharArray(8) { chars[random.nextInt(chars.length)] }
-        return "SHZ-" + String(raw, 0, 4) + "-" + String(raw, 4, 4)
+        val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        return buildString(10) {
+            repeat(10) {
+                append(chars[random.nextInt(chars.length)])
+            }
+        }
     }
 
     private companion object {
