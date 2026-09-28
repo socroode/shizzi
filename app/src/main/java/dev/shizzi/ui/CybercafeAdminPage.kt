@@ -634,10 +634,11 @@ private fun ConnectedDevices(
     }
     Text(
         "dumpsys : " + diagnostics.dumpCount + " appels, dernier " +
-            diagnostics.lastDumpMillis + " ms · attente max " +
+            diagnostics.lastDumpMillis + " ms, max " +
+            diagnostics.slowestDumpMillis + " ms · attente max " +
             diagnostics.slowestResolveMillis + " ms",
     )
-    Text("DNS non attribué (non facturé) : " + formatBytes(diagnostics.unattributedDnsBytes))
+    Text("DNS transporté (non facturé) : " + formatBytes(diagnostics.unattributedDnsBytes))
     if (diagnostics.lastError.isNotBlank()) Text("Erreur : " + diagnostics.lastError)
     if (diagnostics.lastMiss.isNotBlank()) Text("Dernier refus : " + diagnostics.lastMiss)
 }

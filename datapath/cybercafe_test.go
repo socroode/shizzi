@@ -424,3 +424,16 @@ func TestLoginOnOneAddressDoesNotAuthorizeAnother(t *testing.T) {
 		t.Fatal("unexpected cross-address authorization")
 	}
 }
+
+// dumpsys lends its stdout to system_server; killing dumpsys leaves the pipe
+// open. The dump must still return close to its timeout.
+func TestDumpTimeoutHoldsWhenPipeOutlivesProcess(t *testing.T) {
+	started := time.Now()
+	_, err := runBoundedDump(300*time.Millisecond, "/bin/sh", "-c", "sleep 5 & sleep 5")
+	if err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("dump blocked %v past its timeout", elapsed)
+	}
+}

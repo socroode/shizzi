@@ -36,6 +36,7 @@ type flowAttributionSnapshot struct {
 	SlowestResolveMillis  int64  `json:"slowestResolveMillis"`
 	DumpCount             int64  `json:"dumpCount"`
 	LastDumpMillis        int64  `json:"lastDumpMillis"`
+	SlowestDumpMillis     int64  `json:"slowestDumpMillis"`
 	LastError             string `json:"lastError,omitempty"`
 	LastMiss              string `json:"lastMiss,omitempty"`
 }
@@ -73,6 +74,7 @@ type flowAttributionResolver struct {
 	slowestResolve        time.Duration
 	dumpCount             int64
 	lastDumpDuration      time.Duration
+	slowestDump           time.Duration
 	lastMiss              string
 }
 
@@ -86,6 +88,7 @@ const (
 	attributionMultiClientWait = 3500 * time.Millisecond
 	attributionRetryDelay      = 50 * time.Millisecond
 	attributionDumpTimeout     = 1200 * time.Millisecond
+	attributionDumpWaitDelay   = 200 * time.Millisecond
 	attributionMissMemory      = 5 * time.Second
 	presenceMaxAge             = 15 * time.Second
 )
@@ -121,12 +124,22 @@ func newFlowAttributionResolver() *flowAttributionResolver {
 }
 
 func dumpTetheringState() (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), attributionDumpTimeout)
-	defer cancel()
-
 	// Use the absolute binary path. The Shizuku shell process does not always
 	// inherit a PATH containing dumpsys on OEM Android builds.
-	out, err := exec.CommandContext(ctx, "/system/bin/dumpsys", "tethering").CombinedOutput()
+	return runBoundedDump(attributionDumpTimeout, "/system/bin/dumpsys", "tethering")
+}
+
+func runBoundedDump(timeout time.Duration, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	command := exec.CommandContext(ctx, name, args...)
+	// dumpsys hands its stdout to system_server, which writes the dump
+	// itself. Killing dumpsys on timeout does not close that pipe, so without
+	// WaitDelay CombinedOutput waits for system_server to finish and the
+	// timeout bounds nothing (seen on the Reno11: 13 s attribution waits).
+	command.WaitDelay = attributionDumpWaitDelay
+	out, err := command.CombinedOutput()
 	if ctx.Err() != nil {
 		return "", fmt.Errorf("dumpsys tethering timeout: %w", ctx.Err())
 	}
@@ -301,6 +314,9 @@ func (r *flowAttributionResolver) resolve(key flowAttributionKey, waitForRule bo
 			return r.recordResolved(client, fallback, startedAt)
 		}
 
+		if attempt > 0 && !time.Now().Before(deadline) {
+			break
+		}
 		r.refreshIfOlderThan(attributionRefreshInterval)
 
 		r.mu.Lock()
@@ -492,6 +508,9 @@ func (r *flowAttributionResolver) refreshIfOlderThan(maxAge time.Duration) {
 	r.lastRefresh = finished
 	r.dumpCount++
 	r.lastDumpDuration = finished.Sub(started)
+	if r.lastDumpDuration > r.slowestDump {
+		r.slowestDump = r.lastDumpDuration
+	}
 	if err != nil {
 		r.lastError = err.Error()
 		return
@@ -553,6 +572,7 @@ func (r *flowAttributionResolver) snapshot() flowAttributionSnapshot {
 		SlowestResolveMillis:  r.slowestResolve.Milliseconds(),
 		DumpCount:             r.dumpCount,
 		LastDumpMillis:        r.lastDumpDuration.Milliseconds(),
+		SlowestDumpMillis:     r.slowestDump.Milliseconds(),
 		LastError:             r.lastError,
 		LastMiss:              r.lastMiss,
 	}

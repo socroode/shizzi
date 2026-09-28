@@ -79,7 +79,12 @@ func handleTCP(
 	dns := isDNSPort(destinationPort)
 	clientIP := sourceOf(id)
 
-	if traffic != nil {
+	if traffic != nil && dns {
+		// DNS is carried unbilled whoever sent it. Most of it is the
+		// router's own resolver forwarding hotspot queries (never in the
+		// NAT rules), so it is not worth a dumpsys lookup.
+		clientIP = ""
+	} else if traffic != nil {
 		clientIP = traffic.resolveFlowClient(
 			"tcp",
 			clientIP,
@@ -149,9 +154,10 @@ func handleUDP(
 	dns := isDNSPort(destinationPort)
 	clientIP := sourceOf(id)
 
-	if traffic != nil {
-		// DNS never waits: it is allowed before login and unattributed DNS
-		// is carried without billing anyone.
+	if traffic != nil && dns {
+		// DNS is carried unbilled whoever sent it; see handleTCP.
+		clientIP = ""
+	} else if traffic != nil {
 		clientIP = traffic.resolveFlowClient(
 			"udp",
 			clientIP,
