@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.security.SecureRandom
 
 class CybercafeModelTest {
 
@@ -177,6 +178,49 @@ class CybercafeModelTest {
         assertEquals(1_000L + 3L * day, updated.dataValidUntilMillis)
         assertEquals(10_000_000L, updated.dataDownloadBps)
         assertEquals(5_000_000L, updated.dataUploadBps)
+    }
+
+    @Test
+    fun generatedVoucherCodesAvoidAmbiguousCharacters() {
+        val random = SecureRandom()
+        repeat(1_000) {
+            val code = generateVoucherCode(random)
+            assertEquals(10, code.length)
+            assertTrue(code.all(VOUCHER_ALPHABET::contains))
+            assertFalse(code.any { it in "ILO01" })
+        }
+    }
+
+    @Test
+    fun legacyVoucherFormatRemainsRedeemable() {
+        val code = "SHZ-ABCD-EFGH"
+        val legacy = Voucher(
+            code = code,
+            offerId = "eco-12",
+            createdAtMillis = 0L,
+            snapshotVersion = 1,
+            snapshotName = "Eco 12 Go",
+            snapshotKind = VoucherKind.DATA,
+            snapshotDownloadBps = 2_000_000L,
+            snapshotUploadBps = 1_000_000L,
+            snapshotQuotaBytes = 12_000_000_000L,
+            snapshotDurationDays = 30,
+            snapshotPriceXpf = 1_000,
+        )
+        val state = CybercafeState(
+            accounts = mapOf("1001" to account()),
+            vouchers = mapOf(code to legacy),
+        )
+
+        val result = CybercafeRules.redeemVoucher(
+            state,
+            "1001",
+            "shz-abcd-efgh",
+            1_000L,
+        )
+
+        assertTrue(result.success)
+        assertEquals("1001", result.state.vouchers.getValue(code).redeemedByAccount)
     }
 
     @Test

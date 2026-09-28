@@ -8,6 +8,15 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.security.SecureRandom
 
+internal const val VOUCHER_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+internal fun generateVoucherCode(random: SecureRandom): String =
+    buildString(10) {
+        repeat(10) {
+            append(VOUCHER_ALPHABET[random.nextInt(VOUCHER_ALPHABET.length)])
+        }
+    }
+
 class CybercafeStore(context: Context) {
 
     private val preferences =
@@ -359,14 +368,7 @@ class CybercafeStore(context: Context) {
         usageDirty = false
     }
 
-    private fun newVoucherCode(): String {
-        val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-        return buildString(10) {
-            repeat(10) {
-                append(chars[random.nextInt(chars.length)])
-            }
-        }
-    }
+    private fun newVoucherCode(): String = generateVoucherCode(random)
 
     private companion object {
         const val KEY_STATE = "state"
