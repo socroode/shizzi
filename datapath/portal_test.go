@@ -164,3 +164,14 @@ func TestPortalCustomizationInjectsContentWhenPlaceholderIsMissing(t *testing.T)
 		t.Fatal("functional content was injected after body")
 	}
 }
+
+
+func TestPortalAutoRefreshRunsEveryTwoSeconds(t *testing.T) {
+	page := injectPortalAutoRefresh(`<html><body><div id="shizzi-account"></div></body></html>`)
+	if !strings.Contains(page, "setInterval(shizziRefresh,2000)") {
+		t.Fatal("portal is not configured for a two-second refresh")
+	}
+	if !strings.Contains(page, "/status.json?ts=") {
+		t.Fatal("portal refresh does not use status.json")
+	}
+}

@@ -86,7 +86,10 @@ class MainActivity : Activity() {
         webView = WebView(this).apply {
             visibility = View.GONE
             setBackgroundColor(Color.rgb(7, 17, 31))
-            settings.javaScriptEnabled = false
+            // The Shizzi portal uses a small local script to refresh account
+            // consumption, validity and rates every two seconds without
+            // reloading the page or clearing a voucher being typed.
+            settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.loadsImagesAutomatically = true
             webViewClient = object : WebViewClient() {

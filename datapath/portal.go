@@ -516,33 +516,41 @@ func (m *TrafficManager) writePortalHTML(
 		if status.Unlimited {
 			remaining = "Illimité"
 		}
-		reserve := ""
+		reserveStyle := " style=\"display:none\""
 		if status.Unlimited && status.StoredDataBytes > 0 {
-			reserve = fmt.Sprintf(
-				`<div><span>Data en réserve</span><strong>%s</strong></div>`,
-				html.EscapeString(formatPortalBytes(status.StoredDataBytes)),
-			)
+			reserveStyle = ""
 		}
-		access := `<div class="alert ok">Internet actif sur cet appareil.</div>`
+		reserve := fmt.Sprintf(
+			`<div id="shizzi-reserve-wrap"%s><span>Data en réserve</span><strong id="shizzi-reserve">%s</strong></div>`,
+			reserveStyle,
+			html.EscapeString(formatPortalBytes(status.StoredDataBytes)),
+		)
+		access := `<div id="shizzi-access" class="alert ok">Internet actif sur cet appareil.</div>`
 		if !status.Authorized {
-			access = `<div class="alert error">Pas d'Internet : aucun forfait actif. Rechargez avec un voucher.</div>`
+			access = `<div id="shizzi-access" class="alert error">Pas d'Internet : aucun forfait actif. Rechargez avec un voucher.</div>`
 		}
-		claim := ""
+		claimClass := "error"
+		if status.ClaimSuccess || status.ClaimPending {
+			claimClass = "ok"
+		}
+		claimStyle := ` style="display:none"`
 		if status.ClaimMessage != "" {
-			className := "error"
-			if status.ClaimSuccess || status.ClaimPending {
-				className = "ok"
-			}
-			claim = fmt.Sprintf(`<div class="alert %s">%s</div>`, className, html.EscapeString(status.ClaimMessage))
+			claimStyle = ""
 		}
+		claim := fmt.Sprintf(
+			`<div id="shizzi-claim" class="alert %s"%s>%s</div>`,
+			claimClass,
+			claimStyle,
+			html.EscapeString(status.ClaimMessage),
+		)
 		content = fmt.Sprintf(
-			`%s%s<div class="account"><div class="eyebrow">COMPTE SHIZZI</div>
-<h2>%s</h2><div class="muted">N° %s</div>
-<div class="plan"><span>Forfait actif</span><strong>%s</strong></div>
-<div class="grid"><div><span>Restant</span><strong>%s</strong></div>
-<div><span>Utilisé (compte)</span><strong>%s</strong></div>
-<div><span>Débit</span><strong>%s ↓ / %s ↑</strong></div>
-<div><span>Validité</span><strong>%s</strong></div>%s</div>
+			`%s%s<div id="shizzi-account" class="account"><div class="eyebrow">COMPTE SHIZZI</div>
+<h2 id="shizzi-account-name">%s</h2><div class="muted">N° <span id="shizzi-account-number">%s</span></div>
+<div class="plan"><span>Forfait actif</span><strong id="shizzi-plan">%s</strong></div>
+<div class="grid"><div><span>Restant</span><strong id="shizzi-remaining">%s</strong></div>
+<div><span>Utilisé (compte)</span><strong id="shizzi-used">%s</strong></div>
+<div><span>Débit</span><strong id="shizzi-rate">%s ↓ / %s ↑</strong></div>
+<div><span>Validité</span><strong id="shizzi-expiry">%s</strong></div>%s</div>
 <form method="post" action="/recharge"><label>Recharger avec un voucher</label>
 <input name="code" autocomplete="one-time-code" autocapitalize="characters" required>
 <button type="submit">Recharger</button></form>
@@ -604,6 +612,7 @@ button.secondary{background:#1e293b;color:#e2e8f0}
 		}
 	}
 
+	page = injectPortalAutoRefresh(page)
 	writeHTTP(conn, "text/html; charset=utf-8", []byte(page))
 }
 
@@ -635,6 +644,90 @@ func applyPortalCustomization(
 		return rendered[:index] + functional + rendered[index:]
 	}
 	return rendered + functional
+}
+
+func injectPortalAutoRefresh(page string) string {
+	script := `<script>
+(function(){
+  function byId(id){ return document.getElementById(id); }
+  function setText(id, value){ var el=byId(id); if(el){ el.textContent=value; } }
+  function bytes(value){
+    value=Number(value||0);
+    if(value<=0) return "0 Mo";
+    if(value>=1000000000) return (value/1000000000).toFixed(2)+" Go";
+    return (value/1000000).toFixed(1)+" Mo";
+  }
+  function rate(value){
+    value=Number(value||0);
+    if(value<=0) return "0 Mbps";
+    return (value/1000000).toFixed(1)+" Mbps";
+  }
+  function expiry(epoch){
+    epoch=Number(epoch||0);
+    if(epoch<=0) return "—";
+    var remaining=epoch-Date.now();
+    if(remaining<=0) return "Expiré";
+    var totalMinutes=Math.floor(remaining/60000);
+    var days=Math.floor(totalMinutes/1440);
+    var hours=Math.floor((totalMinutes%1440)/60);
+    if(days>0) return days+" j "+hours+" h";
+    return hours+" h";
+  }
+  async function shizziRefresh(){
+    try{
+      var response=await fetch("/status.json?ts="+Date.now(),{cache:"no-store"});
+      if(!response.ok) return;
+      var s=await response.json();
+      if(!s.authenticated){
+        if(byId("shizzi-account")) location.reload();
+        return;
+      }
+      setText("shizzi-account-name",s.accountName||"");
+      setText("shizzi-account-number",s.accountNumber||"");
+      setText("shizzi-plan",s.plan||"Aucun forfait actif");
+      setText("shizzi-remaining",s.unlimited ? "Illimité" : bytes(s.remainingBytes));
+      setText("shizzi-used",bytes(s.usedBytes));
+      setText("shizzi-rate",rate(s.downloadBps)+" ↓ / "+rate(s.uploadBps)+" ↑");
+      setText("shizzi-expiry",expiry(s.expiresAtMillis));
+
+      var access=byId("shizzi-access");
+      if(access){
+        access.className=s.authorized ? "alert ok" : "alert error";
+        access.textContent=s.authorized
+          ? "Internet actif sur cet appareil."
+          : "Pas d'Internet : aucun forfait actif. Rechargez avec un voucher.";
+      }
+
+      var reserveWrap=byId("shizzi-reserve-wrap");
+      if(reserveWrap){
+        var showReserve=Boolean(s.unlimited && Number(s.storedDataBytes||0)>0);
+        reserveWrap.style.display=showReserve ? "" : "none";
+        setText("shizzi-reserve",bytes(s.storedDataBytes));
+      }
+
+      var claim=byId("shizzi-claim");
+      if(claim){
+        if(s.claimMessage){
+          claim.style.display="";
+          claim.className=(s.claimSuccess||s.claimPending) ? "alert ok" : "alert error";
+          claim.textContent=s.claimMessage;
+        }else{
+          claim.style.display="none";
+          claim.textContent="";
+        }
+      }
+    }catch(_){}
+  }
+  window.shizziRefresh=shizziRefresh;
+  shizziRefresh();
+  setInterval(shizziRefresh,2000);
+})();
+</script>`
+	lower := strings.ToLower(page)
+	if index := strings.LastIndex(lower, "</body>"); index >= 0 {
+		return page[:index] + script + page[index:]
+	}
+	return page + script
 }
 
 func writeHTTP(conn net.Conn, contentType string, body []byte) {
