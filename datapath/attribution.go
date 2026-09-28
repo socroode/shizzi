@@ -28,6 +28,8 @@ type flowAttributionSnapshot struct {
 	ResolvedFlows         int64  `json:"resolvedFlows"`
 	FallbackResolvedFlows int64  `json:"fallbackResolvedFlows"`
 	UnresolvedFlows       int64  `json:"unresolvedFlows"`
+	UnresolvedTCPFlows    int64  `json:"unresolvedTcpFlows"`
+	UnresolvedUDPFlows    int64  `json:"unresolvedUdpFlows"`
 	LooseCandidateFlows   int64  `json:"looseCandidateFlows"`
 	ClientCount           int    `json:"mappedClients"`
 	ClientListKnown       bool   `json:"clientListKnown"`
@@ -65,6 +67,8 @@ type flowAttributionResolver struct {
 	resolvedFlows         int64
 	fallbackResolvedFlows int64
 	unresolvedFlows       int64
+	unresolvedTCPFlows    int64
+	unresolvedUDPFlows    int64
 	looseCandidateFlows   int64
 	slowestResolve        time.Duration
 	dumpCount             int64
@@ -343,6 +347,11 @@ func (r *flowAttributionResolver) resolve(key flowAttributionKey, waitForRule bo
 		r.looseCandidateFlows++
 	}
 	r.unresolvedFlows++
+	if key.Protocol == "udp" {
+		r.unresolvedUDPFlows++
+	} else {
+		r.unresolvedTCPFlows++
+	}
 	r.lastMiss = formatFlowAttributionKey(key)
 	if waitForRule {
 		r.recentMisses[key] = time.Now()
@@ -536,6 +545,8 @@ func (r *flowAttributionResolver) snapshot() flowAttributionSnapshot {
 		ResolvedFlows:         r.resolvedFlows,
 		FallbackResolvedFlows: r.fallbackResolvedFlows,
 		UnresolvedFlows:       r.unresolvedFlows,
+		UnresolvedTCPFlows:    r.unresolvedTCPFlows,
+		UnresolvedUDPFlows:    r.unresolvedUDPFlows,
 		LooseCandidateFlows:   r.looseCandidateFlows,
 		ClientCount:           len(r.connectedClients),
 		ClientListKnown:       len(r.connectedClients) > 0,

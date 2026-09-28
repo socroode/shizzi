@@ -50,6 +50,11 @@ func isDNSPort(port uint16) bool { return port == 53 }
 // the account check all happen before any upstream dial.
 func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer, traffic *TrafficManager) {
 	id := request.ID()
+	if traffic != nil && traffic.refuseClientIPv6(sourceOf(id)) {
+		// RST at once so the client falls back to IPv4 immediately.
+		request.Complete(true)
+		return
+	}
 
 	var queue waiter.Queue
 	endpoint, tcpipErr := request.CreateEndpoint(&queue)
@@ -99,6 +104,7 @@ func handleTCP(
 			return
 		}
 		if !dns && !traffic.flowAllowed(clientIP) {
+			traffic.noteRefusedUnauthorized()
 			client.Close()
 			return
 		}
@@ -118,6 +124,9 @@ func handleTCP(
 // the first datagrams wait in the endpoint queue meanwhile.
 func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer, traffic *TrafficManager) bool {
 	id := request.ID()
+	if traffic != nil && traffic.refuseClientIPv6(sourceOf(id)) {
+		return false
+	}
 
 	var queue waiter.Queue
 	endpoint, tcpipErr := request.CreateEndpoint(&queue)
@@ -156,6 +165,7 @@ func handleUDP(
 			return
 		}
 		if !dns && !traffic.flowAllowed(clientIP) {
+			traffic.noteRefusedUnauthorized()
 			client.Close()
 			return
 		}

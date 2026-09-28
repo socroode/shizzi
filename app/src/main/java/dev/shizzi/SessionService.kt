@@ -90,7 +90,13 @@ class SessionService : Service() {
 
             val outcome = sessionLock.withLock {
                 if (attempt != generation) return@launch
-                runCatching { controller.start(settings.isLogging, settings.vpnMode) }
+                // Cybercafe mode (at least one account) runs the hotspot IPv4-only:
+                // portal sessions are keyed by the client's IPv4 identity, and a
+                // client with routed IPv6 would log in on one family and be
+                // refused on the other.
+                val ipv4Only = (application as App).cybercafeStore.state.value.accounts.isNotEmpty()
+                if (ipv4Only) SessionLog.info("cybercafe mode: hotspot IPv4-only")
+                runCatching { controller.start(settings.isLogging, settings.vpnMode, ipv4Only) }
             }
             if (attempt != generation) return@launch
 

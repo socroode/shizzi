@@ -2,6 +2,7 @@ package datapath
 
 import (
 	"encoding/json"
+	"net"
 	"sort"
 	"sync"
 	"time"
@@ -149,6 +150,9 @@ type TrafficManager struct {
 
 	unattributedDNSBytes int64
 
+	refusedIPv6Flows         int64
+	refusedUnauthorizedFlows int64
+
 	defaultClientPolicy ClientPolicy
 	clients             map[string]*clientTraffic
 
@@ -281,6 +285,32 @@ func (m *TrafficManager) clientLocked(ip string) *clientTraffic {
 	}
 	m.clients[ip] = created
 	return created
+}
+
+// refuseClientIPv6 reports whether a flow must be refused because it comes
+// from a hotspot client's own (routed, not NATed) IPv6 address while account
+// mode is on. Portal sessions are keyed by the client's IPv4 identity and
+// nothing yet links a client's IPv6 address to it reliably: accepting it
+// would log a phone in on one family and refuse it on the other. Refusing it
+// fast makes the client fall back to IPv4.
+func (m *TrafficManager) refuseClientIPv6(sourceIP string) bool {
+	parsed := net.ParseIP(sourceIP)
+	if parsed == nil || parsed.To4() != nil || isSharedTunnelAddress(sourceIP) {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.portalRequired {
+		return false
+	}
+	m.refusedIPv6Flows++
+	return true
+}
+
+func (m *TrafficManager) noteRefusedUnauthorized() {
+	m.mu.Lock()
+	m.refusedUnauthorizedFlows++
+	m.mu.Unlock()
 }
 
 // flowAllowed answers, without pacing, whether ip may open a general
@@ -474,6 +504,8 @@ type trafficStatsSnapshot struct {
 	TotalUpBytes             int64                       `json:"totalUpBytes"`
 	TotalDownBytes           int64                       `json:"totalDownBytes"`
 	UnattributedDNSBytes     int64                       `json:"unattributedDnsBytes"`
+	RefusedIPv6Flows         int64                       `json:"refusedIpv6Flows"`
+	RefusedUnauthorizedFlows int64                       `json:"refusedUnauthorizedFlows"`
 	RequireClientAttribution bool                        `json:"requireClientAttribution"`
 	PortalRequired           bool                        `json:"portalRequired"`
 	Clients                  []clientStatsSnapshot       `json:"clients"`
@@ -500,6 +532,8 @@ func (m *TrafficManager) statsJSON() string {
 		TotalUpBytes:             m.totalUpBytes,
 		TotalDownBytes:           m.totalDownBytes,
 		UnattributedDNSBytes:     m.unattributedDNSBytes,
+		RefusedIPv6Flows:         m.refusedIPv6Flows,
+		RefusedUnauthorizedFlows: m.refusedUnauthorizedFlows,
 		RequireClientAttribution: m.requireClientAttribution,
 		PortalRequired:           m.portalRequired,
 		Clients:                  make([]clientStatsSnapshot, 0, len(m.clients)),

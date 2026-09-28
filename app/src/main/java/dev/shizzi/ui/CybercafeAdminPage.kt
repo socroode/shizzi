@@ -616,7 +616,16 @@ private fun ConnectedDevices(
         "Flux identifiés : " + diagnostics.resolvedFlows +
             " (dont repli client unique : " + diagnostics.fallbackResolvedFlows + ")",
     )
-    Text("Flux refusés (non identifiés) : " + diagnostics.unresolvedFlows)
+    Text(
+        "Flux refusés (non identifiés) : " + diagnostics.unresolvedFlows +
+            " (TCP " + diagnostics.unresolvedTcpFlows +
+            " / UDP " + diagnostics.unresolvedUdpFlows + ")",
+    )
+    Text(
+        "Flux refusés (appareil identifié sans session ou sans forfait) : " +
+            diagnostics.refusedUnauthorizedFlows,
+    )
+    Text("Flux IPv6 client refusés (mode IPv4) : " + diagnostics.refusedIpv6Flows)
     if (diagnostics.looseCandidateFlows > 0L) {
         Text(
             "Refus avec port traduit connu : " + diagnostics.looseCandidateFlows +

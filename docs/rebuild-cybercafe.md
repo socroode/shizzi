@@ -81,3 +81,21 @@ same instant. Consumption is written to disk at most every 15 s (forced on stop)
   differently; adapt the parser, do not loosen matching.
 - *Clients listés par Android* = 0 → the connected-client list is not parsed on this
   build; departed-client release and the single-client fallback are then inactive.
+
+### IPv4-only in cybercafe mode (Reno11 finding)
+
+With the dual-stack TUN (`2001:db8::2/64` + IPv6 DNS) Android tethering hands each
+hotspot client its own IPv6 address, **routed without NAT**. Such flows reach the
+datapath with the client's real IPv6 source, bypass the IPv4 NAT attribution, and
+created a separate "client" per family. A phone that logged in over IPv6 was refused
+on IPv4 (and the reverse), and captive-portal probes over the other family kept
+hitting the portal.
+
+When at least one account exists, the session now brings the TUN up **without IPv6**
+(no v6 address, IPv4 DNS only), so clients stay IPv4-only. As a safety net, the
+datapath refuses client IPv6 in account mode (TCP RST, UDP drop), counted as
+`refusedIpv6Flows`, so a client falls back to IPv4 at once.
+
+Proper dual-stack needs a reliable IPv6 → client (MAC) link from `dumpsys tethering`
+on the target device, so that one physical device = one session with IPv4 + IPv6
+aliases.

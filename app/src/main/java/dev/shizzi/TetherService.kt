@@ -26,9 +26,9 @@ class TetherService : ITetherService.Stub {
 
     override fun getContractVersion(): Int = CONTRACT_VERSION
 
-    override fun start(logging: Boolean, vpnMode: String?): String {
+    override fun start(logging: Boolean, vpnMode: String?, ipv4Only: Boolean): String {
         SessionLog.setEnabled(logging)
-        return runCatching { session.start(parseVpnMode(vpnMode)) }
+        return runCatching { session.start(parseVpnMode(vpnMode), ipv4Only) }
             .getOrElse { failure -> sessionError("start", failure) }
     }
 

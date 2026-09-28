@@ -19,6 +19,7 @@ class TetherSession(private val context: Context) {
 
     private var activeSince: Long = 0
     private var vpnMode = VpnMode.AUTO
+    private var ipv4Only = false
     private var watchdog: SessionWatchdog? = null
     private val teardown = SessionTeardown(context)
     private val downstream = DownstreamInspector()
@@ -26,10 +27,11 @@ class TetherSession(private val context: Context) {
 
     val isActive: Boolean get() = state == SessionState.ACTIVE
 
-    fun start(mode: VpnMode = VpnMode.AUTO): String {
+    fun start(mode: VpnMode = VpnMode.AUTO, ipv4Only: Boolean = false): String {
         if (isActive) return status()
 
         vpnMode = mode
+        this.ipv4Only = ipv4Only
         state = SessionState.STARTING
         SessionLog.info("session start requested (vpn mode ${mode.name.lowercase()})")
 
@@ -56,9 +58,23 @@ class TetherSession(private val context: Context) {
         val group = SessionResources(testNetworkApi, context.connectivityManager())
         resources = group
 
-        val name = group.acquire(tunAddresses(), TEST_NETWORK_DNS_SERVERS, AVAILABILITY_TIMEOUT_MS)
+        // Without an IPv6 address and IPv6 DNS on the TUN, tethering does not
+        // provision IPv6 downstream: clients stay IPv4-only, and every flow
+        // reaches the datapath NATed to 192.0.2.2 where it can be attributed.
+        val dnsServers = if (ipv4Only) {
+            TEST_NETWORK_DNS_SERVERS.filterIsInstance<java.net.Inet4Address>()
+        } else {
+            TEST_NETWORK_DNS_SERVERS
+        }
+        val name = group.acquire(tunAddresses(), dnsServers, AVAILABILITY_TIMEOUT_MS)
         interfaceName = name
-        SessionLog.info("tun up: $name (mtu $TUN_MTU, $TUN_ADDRESS, $TUN_ADDRESS_V6)")
+        SessionLog.info(
+            if (ipv4Only) {
+                "tun up: $name (mtu $TUN_MTU, $TUN_ADDRESS, IPv4-only for cybercafe)"
+            } else {
+                "tun up: $name (mtu $TUN_MTU, $TUN_ADDRESS, $TUN_ADDRESS_V6)"
+            },
+        )
 
         group.startDatapath(TUN_MTU)
         SessionLog.info("datapath attached to $name")
@@ -280,10 +296,12 @@ class TetherSession(private val context: Context) {
         return vpn.isVpnPresent()
     }
 
-    private fun tunAddresses() = listOf(
-        buildLinkAddress(java.net.InetAddress.getByName(TUN_ADDRESS), TUN_PREFIX_LENGTH),
-        buildLinkAddress(java.net.InetAddress.getByName(TUN_ADDRESS_V6), TUN_PREFIX_LENGTH_V6),
-    )
+    private fun tunAddresses() = buildList {
+        add(buildLinkAddress(java.net.InetAddress.getByName(TUN_ADDRESS), TUN_PREFIX_LENGTH))
+        if (!ipv4Only) {
+            add(buildLinkAddress(java.net.InetAddress.getByName(TUN_ADDRESS_V6), TUN_PREFIX_LENGTH_V6))
+        }
+    }
 
     private companion object {
         const val TAG = "TetherSession"

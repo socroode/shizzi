@@ -4,7 +4,10 @@ import android.os.ParcelFileDescriptor;
 
 interface ITetherService {
 
-    String start(boolean logging, String vpnMode);
+    // ipv4Only: bring the TUN up without IPv6 so tethering does not hand
+    // hotspot clients routed (un-NATed) IPv6 addresses. Used in cybercafe mode,
+    // where portal sessions are keyed by the client's IPv4 identity.
+    String start(boolean logging, String vpnMode, boolean ipv4Only);
 
     void setLogging(boolean enabled);
 

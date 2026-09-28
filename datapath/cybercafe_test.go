@@ -395,3 +395,39 @@ func TestDownstreamRulesYieldClientMAC(t *testing.T) {
 		t.Fatalf("macs=%v", macs)
 	}
 }
+
+// Reno11 report: a phone logged in from its routed IPv6 address and was then
+// refused on IPv4 (and the reverse). In account mode client IPv6 is refused
+// outright so the phone logs in and browses on its single IPv4 identity.
+func TestClientIPv6IsRefusedInAccountMode(t *testing.T) {
+	manager := newPortalManager(t)
+	pushConfig(t, manager, accountForTest("1001", "aaaa", 1_000_000))
+
+	if !manager.refuseClientIPv6("2001:db8::deac:ced1:7032:2d0c") {
+		t.Fatal("client IPv6 accepted in account mode")
+	}
+	if manager.refuseClientIPv6("192.168.243.162") {
+		t.Fatal("client IPv4 refused")
+	}
+	if manager.refuseClientIPv6("2001:db8::2") {
+		t.Fatal("shared NAT66 address treated as a client address")
+	}
+	if statsOf(t, manager).RefusedIPv6Flows != 1 {
+		t.Fatal("IPv6 refusal not counted")
+	}
+
+	open := newTrafficManager()
+	open.setPortalConfig(false, "")
+	if open.refuseClientIPv6("2001:db8::deac:ced1:7032:2d0c") {
+		t.Fatal("IPv6 refused outside account mode")
+	}
+}
+
+func TestLoginOnOneAddressDoesNotAuthorizeAnother(t *testing.T) {
+	manager := newPortalManager(t)
+	pushConfig(t, manager, accountForTest("1001", "aaaa", 1_000_000))
+	manager.submitPortalAccountLogin("2001:db8::deac:ced1:7032:2d0c", "1001", "aaaa")
+	if manager.flowAllowed("192.168.243.200") {
+		t.Fatal("unexpected cross-address authorization")
+	}
+}
