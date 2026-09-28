@@ -93,8 +93,9 @@ type PortalClaimResult struct {
 }
 
 // PortalAuthorization is one logged-in session: one physical client (IP as
-// resolved from Android's pre-NAT state) using one account. Several sessions
-// may use the same account; they share its balance through accountUsage.
+// resolved from Android's pre-NAT state) using one account. An account may
+// have only one active device session at a time, but remains portable after
+// logout, admin disconnect, or departed-client cleanup.
 type PortalAuthorization struct {
 	AccountNumber   string
 	StartedAtMillis int64
@@ -265,8 +266,14 @@ func (m *TrafficManager) submitPortalAccountLogin(
 	if hashPortalPin(account.PinSalt, pin) != account.PinHash {
 		return false, "Compte ou code incorrect."
 	}
-	// The session belongs to this physical client only. Another client is
-	// never authorised by this login, even on the same account.
+	// One account = one active device. The account is not permanently bound
+	// to an IP/MAC: once the previous session is logged out, revoked by the
+	// admin, or pruned after departure, it can be opened on another device.
+	for otherIP, authorization := range m.portalAuthorized {
+		if otherIP != ip && authorization.AccountNumber == number {
+			return false, "Ce compte est déjà utilisé sur un autre appareil."
+		}
+	}
 	m.portalAuthorized[ip] = &PortalAuthorization{
 		AccountNumber:   number,
 		StartedAtMillis: now,
@@ -392,8 +399,8 @@ type portalStatusPayload struct {
 	ClaimPending    bool   `json:"claimPending,omitempty"`
 }
 
-// portalStatus reports the account (not the device) values: balance, total
-// usage and validity are the same on every device logged into the account.
+// portalStatus reports the account values for its single active device
+// session. The account remains portable after that session ends.
 func (m *TrafficManager) portalStatus(ip string) portalStatusPayload {
 	now := time.Now().UnixMilli()
 	m.mu.Lock()
