@@ -74,7 +74,7 @@ func TestPortalRechargeClaimCarriesAccountAndClient(t *testing.T) {
 	if !ok {
 		t.Fatal("login failed")
 	}
-	ok, _ = manager.submitPortalRecharge("192.168.7.66", "shz-abcd-1234")
+	ok, _ = manager.submitPortalRecharge("192.168.7.66", "abc123def4")
 	if !ok {
 		t.Fatal("recharge claim rejected")
 	}
@@ -88,12 +88,12 @@ func TestPortalRechargeClaimCarriesAccountAndClient(t *testing.T) {
 	}
 	claim := snapshot.PortalRechargeClaims[0]
 	if claim.AccountNumber != "1001" || claim.IP != "192.168.7.66" ||
-		claim.Code != "SHZ-ABCD-1234" {
+		claim.Code != "ABC123DEF4" {
 		t.Fatalf("claim=%+v", claim)
 	}
 }
 
-func TestSameAccountCanAuthenticateOnTwoDifferentClients(t *testing.T) {
+func TestSameAccountIsRefusedOnSecondActiveClient(t *testing.T) {
 	manager := newTrafficManager()
 	manager.setPortalConfig(true, portalConfigForTest(t))
 
@@ -111,18 +111,20 @@ func TestSameAccountCanAuthenticateOnTwoDifferentClients(t *testing.T) {
 		"1001",
 		"1234",
 	)
-	if !secondOK {
-		t.Fatalf("second login failed: %s", secondMessage)
+	if secondOK {
+		t.Fatal("second client unexpectedly opened the same account")
+	}
+	if secondMessage != "Ce compte est déjà utilisé sur un autre appareil." {
+		t.Fatalf("unexpected refusal message: %s", secondMessage)
 	}
 
 	if manager.portalRequiredFor("192.168.7.66") {
 		t.Fatal("first authenticated client returned to the portal")
 	}
-	if manager.portalRequiredFor("192.168.7.77") {
-		t.Fatal("second authenticated client returned to the portal")
+	if !manager.portalRequiredFor("192.168.7.77") {
+		t.Fatal("second client was authorized")
 	}
-	if len(manager.portalAuthorized) != 2 {
-		t.Fatalf("authorizations=%d, want 2", len(manager.portalAuthorized))
+	if len(manager.portalAuthorized) != 1 {
+		t.Fatalf("authorizations=%d, want 1", len(manager.portalAuthorized))
 	}
 }
-
