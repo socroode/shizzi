@@ -2,11 +2,15 @@ package dev.shizzi.conso
 
 import android.app.Activity
 import android.graphics.Color
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
@@ -21,9 +25,12 @@ class MainActivity : Activity() {
     private lateinit var progress: ProgressBar
     private lateinit var status: TextView
     private lateinit var menu: View
+    private lateinit var connectivityManager: ConnectivityManager
+    private var boundWifiNetwork: Network? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        connectivityManager = getSystemService(ConnectivityManager::class.java)
         buildUi()
     }
 
@@ -86,12 +93,12 @@ class MainActivity : Activity() {
         webView = WebView(this).apply {
             visibility = View.GONE
             setBackgroundColor(Color.rgb(7, 17, 31))
-            // The Shizzi portal uses a small local script to refresh account
-            // consumption, validity and rates every two seconds without
-            // reloading the page or clearing a voucher being typed.
+            // The Shizzi portal owns the two-second live refresh. Conso only
+            // enables JavaScript and keeps this WebView on the Shizzi Wi-Fi.
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.loadsImagesAutomatically = true
+            settings.cacheMode = WebSettings.LOAD_NO_CACHE
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(
                     view: WebView?,
@@ -104,6 +111,7 @@ class MainActivity : Activity() {
 
                 override fun onPageFinished(view: WebView?, url: String?) {
                     this@MainActivity.progress.visibility = View.GONE
+                    this@MainActivity.status.visibility = View.GONE
                 }
 
                 override fun onReceivedError(
@@ -114,8 +122,13 @@ class MainActivity : Activity() {
                     if (request?.isForMainFrame == true) {
                         this@MainActivity.progress.visibility = View.GONE
                         this@MainActivity.status.visibility = View.VISIBLE
+                        val detail = error?.description?.toString()?.trim().orEmpty()
                         this@MainActivity.status.text =
-                            "Shizzi Hotspot n'est pas joignable. Vérifiez la connexion Wi-Fi."
+                            if (detail.isEmpty()) {
+                                "Shizzi Hotspot n'est pas joignable. Vérifiez la connexion Wi-Fi."
+                            } else {
+                                "Shizzi Hotspot n'est pas joignable. Vérifiez la connexion Wi-Fi.\n$detail"
+                            }
                     }
                 }
             }
@@ -168,11 +181,60 @@ class MainActivity : Activity() {
             }
         }
 
+    private fun findWifiNetwork(): Network? {
+        val active = connectivityManager.activeNetwork
+        if (active != null) {
+            val activeCapabilities = connectivityManager.getNetworkCapabilities(active)
+            if (activeCapabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
+                return active
+            }
+        }
+
+        return connectivityManager.allNetworks.firstOrNull { network ->
+            connectivityManager.getNetworkCapabilities(network)
+                ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+        }
+    }
+
+    private fun bindPortalToWifi(): Boolean {
+        val wifi = findWifiNetwork() ?: return false
+        if (!connectivityManager.bindProcessToNetwork(wifi)) {
+            return false
+        }
+        boundWifiNetwork = wifi
+        return true
+    }
+
+    private fun releaseWifiBinding() {
+        if (boundWifiNetwork != null) {
+            connectivityManager.bindProcessToNetwork(null)
+            boundWifiNetwork = null
+        }
+    }
+
     private fun openPortal(url: String) {
         menu.visibility = View.GONE
         webView.visibility = View.VISIBLE
-        this@MainActivity.progress.visibility = View.VISIBLE
+        progress.visibility = View.VISIBLE
+        status.visibility = View.VISIBLE
+        status.text = "Connexion au Wi-Fi Shizzi…"
+
+        if (!bindPortalToWifi()) {
+            progress.visibility = View.GONE
+            status.text =
+                "Aucun réseau Wi-Fi Shizzi utilisable n'a été trouvé. Connectez ce téléphone au Wi-Fi Shizzi puis réessayez."
+            return
+        }
+
+        webView.stopLoading()
         webView.loadUrl(url)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::webView.isInitialized && webView.visibility == View.VISIBLE) {
+            bindPortalToWifi()
+        }
     }
 
     @Deprecated("Deprecated in Java")
@@ -181,15 +243,17 @@ class MainActivity : Activity() {
             webView.visibility == View.VISIBLE && webView.canGoBack() -> webView.goBack()
             webView.visibility == View.VISIBLE -> {
                 webView.visibility = View.GONE
-                this@MainActivity.progress.visibility = View.GONE
-                this@MainActivity.status.visibility = View.GONE
+                progress.visibility = View.GONE
+                status.visibility = View.GONE
                 menu.visibility = View.VISIBLE
+                releaseWifiBinding()
             }
             else -> super.onBackPressed()
         }
     }
 
     override fun onDestroy() {
+        releaseWifiBinding()
         webView.stopLoading()
         webView.destroy()
         super.onDestroy()
