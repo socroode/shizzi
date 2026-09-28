@@ -91,41 +91,34 @@ func TestThreeAccountsEachNeedTheirOwnPortalLogin(t *testing.T) {
 	}
 }
 
-// Test 2: one account, two phones, one shared Data pool.
-func TestSameAccountOnTwoPhonesSharesOneDataPool(t *testing.T) {
+// Test 2: one account may have only one active device at a time.
+func TestSameAccountOnSecondPhoneIsRefusedUntilLogout(t *testing.T) {
 	manager := newPortalManager(t)
 	pushConfig(t, manager, accountForTest("2000", "roniu", 20_000))
 
-	manager.submitPortalAccountLogin(phoneB, "2000", "roniu")
-	manager.submitPortalAccountLogin(phoneC, "2000", "roniu")
-
-	manager.account(phoneB, directionDownload, 3_000)
-	manager.account(phoneC, directionDownload, 2_000)
-
-	manager.mu.Lock()
-	remaining := manager.remainingDataLocked(manager.portalAccounts["2000"])
-	manager.mu.Unlock()
-	if remaining != 15_000 {
-		t.Fatalf("remaining=%d, want 15000 (one pool, not 20000 per phone)", remaining)
+	if ok, _ := manager.submitPortalAccountLogin(phoneB, "2000", "roniu"); !ok {
+		t.Fatal("first login failed")
+	}
+	if ok, message := manager.submitPortalAccountLogin(phoneC, "2000", "roniu"); ok {
+		t.Fatal("second phone unexpectedly opened the same account")
+	} else if message != "Ce compte est déjà utilisé sur un autre appareil." {
+		t.Fatalf("unexpected refusal message: %q", message)
+	}
+	if !manager.flowAllowed(phoneB) {
+		t.Fatal("first phone lost Internet after refused second login")
+	}
+	if manager.flowAllowed(phoneC) {
+		t.Fatal("second phone inherited Internet")
 	}
 
-	stats := statsOf(t, manager)
-	if len(stats.PortalAuthorizations) != 2 {
-		t.Fatalf("sessions=%d, want 2", len(stats.PortalAuthorizations))
+	if ok, _ := manager.submitPortalLogout(phoneB); !ok {
+		t.Fatal("logout failed")
 	}
-	for _, session := range stats.PortalAuthorizations {
-		if session.AccountNumber != "2000" {
-			t.Fatalf("session %s on account %s", session.IP, session.AccountNumber)
-		}
+	if ok, _ := manager.submitPortalAccountLogin(phoneC, "2000", "roniu"); !ok {
+		t.Fatal("account was not portable after logout")
 	}
-
-	// C drains the rest: both phones stop together.
-	manager.account(phoneC, directionDownload, 15_000)
-	if manager.flowAllowed(phoneB) || manager.flowAllowed(phoneC) {
-		t.Fatal("a phone kept Internet after the shared pool ran out")
-	}
-	if !manager.portalRequiredFor(phoneB) {
-		t.Fatal("portal not reachable for recharge once pool is empty")
+	if !manager.flowAllowed(phoneC) {
+		t.Fatal("second phone has no Internet after taking over the released account")
 	}
 }
 
