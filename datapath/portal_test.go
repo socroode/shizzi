@@ -2,6 +2,7 @@ package datapath
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -126,5 +127,40 @@ func TestSameAccountIsRefusedOnSecondActiveClient(t *testing.T) {
 	}
 	if len(manager.portalAuthorized) != 1 {
 		t.Fatalf("authorizations=%d, want 1", len(manager.portalAuthorized))
+	}
+}
+
+
+func TestPortalCustomizationPreservesFunctionalContent(t *testing.T) {
+	custom := `<!doctype html><html><head><title>{{TITLE}}</title></head><body><h1>{{MESSAGE}}</h1>{{CONTENT}}</body></html>`
+	rendered := applyPortalCustomization(
+		custom,
+		"TEKOMOPAO WIFI",
+		"Bienvenue",
+		"",
+		`<form action="/login"><input name="account"></form>`,
+	)
+	if !strings.Contains(rendered, "TEKOMOPAO WIFI") {
+		t.Fatal("custom title was not rendered")
+	}
+	if !strings.Contains(rendered, `name="account"`) {
+		t.Fatal("functional account login content was lost")
+	}
+}
+
+func TestPortalCustomizationInjectsContentWhenPlaceholderIsMissing(t *testing.T) {
+	custom := `<html><body><div>branding only</div></body></html>`
+	rendered := applyPortalCustomization(
+		custom,
+		"Title",
+		"Message",
+		"",
+		`<form action="/login"><button>Login</button></form>`,
+	)
+	if !strings.Contains(rendered, `action="/login"`) {
+		t.Fatal("functional content was not injected")
+	}
+	if strings.Index(rendered, `action="/login"`) > strings.Index(rendered, "</body>") {
+		t.Fatal("functional content was injected after body")
 	}
 }

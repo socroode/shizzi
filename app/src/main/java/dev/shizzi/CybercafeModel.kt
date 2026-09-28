@@ -90,12 +90,19 @@ data class DeviceBinding(
     val lastSeenMillis: Long = 0L,
 )
 
+data class PortalCustomization(
+    val title: String = "Shizzi Hotspot",
+    val message: String = "Ouvrez votre compte ou rechargez avec un voucher.",
+    val html: String = "",
+)
+
 data class CybercafeState(
-    val schemaVersion: Int = 2,
+    val schemaVersion: Int = 3,
     val offers: Map<String, Offer> = defaultOffers(),
     val accounts: Map<String, PrepaidAccount> = emptyMap(),
     val vouchers: Map<String, Voucher> = emptyMap(),
     val devices: Map<String, DeviceBinding> = emptyMap(),
+    val portal: PortalCustomization = PortalCustomization(),
 )
 
 data class RuleOutcome(

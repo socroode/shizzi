@@ -159,6 +159,7 @@ type TrafficManager struct {
 	portalRequired       bool
 	portalTitle          string
 	portalMessage        string
+	portalHTML           string
 	portalAccounts       map[string]PortalAccount
 	portalAuthorized     map[string]*PortalAuthorization
 	portalRechargeClaims []PortalRechargeClaim

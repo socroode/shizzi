@@ -21,6 +21,65 @@ class CybercafeModelTest {
     }
 
     @Test
+    fun version2StateMigratesWithoutLosingAccountsOrVouchers() {
+        val raw = """
+            {
+              "schemaVersion":2,
+              "offers":[{
+                "id":"eco-12","name":"Eco 12 Go","kind":"DATA",
+                "downloadBps":2000000,"uploadBps":1000000,
+                "quotaBytes":12000000000,"durationDays":30,"priceXpf":1000
+              }],
+              "accounts":[{
+                "number":"1001","name":"RONIU","pinSalt":"salt","pinHash":"hash",
+                "enabled":true,"dataBalanceBytes":5000000000,
+                "dataValidUntilMillis":123456789,"dataDownloadBps":2000000,
+                "dataUploadBps":1000000,"unlimitedUntilMillis":0,
+                "unlimitedDownloadBps":0,"unlimitedUploadBps":0,
+                "unlimitedPlanName":"","totalUpBytes":10,"totalDownBytes":20,
+                "createdAtMillis":1
+              }],
+              "vouchers":[{
+                "code":"SHZ-ABCD-EFGH","offerId":"eco-12","createdAtMillis":2,
+                "enabled":true,"redeemedByAccount":"","redeemedAtMillis":0,
+                "snapshotVersion":1,"snapshotName":"Eco 12 Go","snapshotKind":"DATA",
+                "snapshotDownloadBps":2000000,"snapshotUploadBps":1000000,
+                "snapshotQuotaBytes":12000000000,"snapshotDurationDays":30,
+                "snapshotPriceXpf":1000
+              }],
+              "devices":[]
+            }
+        """.trimIndent()
+
+        val migrated = decodeCybercafeState(raw)
+
+        assertEquals(3, migrated.schemaVersion)
+        assertEquals("RONIU", migrated.accounts.getValue("1001").name)
+        assertTrue(migrated.vouchers.containsKey("SHZ-ABCD-EFGH"))
+        assertEquals("Shizzi Hotspot", migrated.portal.title)
+        assertEquals("", migrated.portal.html)
+    }
+
+    @Test
+    fun portalCustomizationRoundTripsWithoutChangingAccountData() {
+        val state = CybercafeState(
+            accounts = mapOf("1001" to account()),
+            portal = PortalCustomization(
+                title = "TEKOMOPAO WIFI",
+                message = "Bienvenue",
+                html = "<html><body>{{CONTENT}}</body></html>",
+            ),
+        )
+
+        val decoded = decodeCybercafeState(encodeCybercafeState(state))
+
+        assertEquals("TEKOMOPAO WIFI", decoded.portal.title)
+        assertEquals("Bienvenue", decoded.portal.message)
+        assertEquals("<html><body>{{CONTENT}}</body></html>", decoded.portal.html)
+        assertTrue(decoded.accounts.containsKey("1001"))
+    }
+
+    @Test
     fun dataVouchersAccumulateBytesButResetValidityFromRechargeTime() {
         val first = Voucher("A", "eco-12", 0L)
         val second = Voucher("B", "eco-20", 0L)

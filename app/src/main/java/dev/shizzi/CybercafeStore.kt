@@ -23,7 +23,7 @@ class CybercafeStore(context: Context) {
         context.getSharedPreferences("shizzi_cybercafe_v1", Context.MODE_PRIVATE)
 
     private val mutableState = MutableStateFlow(
-        decodeState(preferences.getString(KEY_STATE, null)),
+        decodeCybercafeState(preferences.getString(KEY_STATE, null)),
     )
 
     val state: StateFlow<CybercafeState> = mutableState.asStateFlow()
@@ -319,6 +319,27 @@ class CybercafeStore(context: Context) {
         )
     }
 
+    @Synchronized
+    fun setPortalCustomization(
+        titleRaw: String,
+        messageRaw: String,
+        htmlRaw: String,
+    ): RuleOutcome {
+        val defaults = PortalCustomization()
+        val portal = PortalCustomization(
+            title = titleRaw.trim().ifBlank { defaults.title }.take(80),
+            message = messageRaw.trim().ifBlank { defaults.message }.take(240),
+            html = htmlRaw.take(100_000),
+        )
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(portal = portal),
+                success = true,
+                message = "Portail enregistré.",
+            ),
+        )
+    }
+
 
     /**
      * Applies consumption measured by the datapath to the shared account
@@ -364,7 +385,7 @@ class CybercafeStore(context: Context) {
     }
 
     private fun writeToDisk(value: CybercafeState) {
-        preferences.edit().putString(KEY_STATE, encodeState(value)).apply()
+        preferences.edit().putString(KEY_STATE, encodeCybercafeState(value)).apply()
         usageDirty = false
     }
 
@@ -377,9 +398,14 @@ class CybercafeStore(context: Context) {
     }
 }
 
-private fun encodeState(state: CybercafeState): String =
+internal fun encodeCybercafeState(state: CybercafeState): String =
     JSONObject().apply {
         put("schemaVersion", state.schemaVersion)
+        put("portal", JSONObject().apply {
+            put("title", state.portal.title)
+            put("message", state.portal.message)
+            put("html", state.portal.html)
+        })
         put("offers", JSONArray().apply {
             state.offers.values.sortedBy(Offer::id).forEach { offer ->
                 put(JSONObject().apply {
@@ -449,7 +475,7 @@ private fun encodeState(state: CybercafeState): String =
         })
     }.toString()
 
-private fun decodeState(raw: String?): CybercafeState {
+internal fun decodeCybercafeState(raw: String?): CybercafeState {
     val root = runCatching { JSONObject(raw.orEmpty()) }.getOrNull()
         ?: return CybercafeState()
 
@@ -519,6 +545,24 @@ private fun decodeState(raw: String?): CybercafeState {
         )
     }
 
+    val portalObject = root.optJSONObject("portal")
+    val portalDefaults = PortalCustomization()
+    val portal = PortalCustomization(
+        title = portalObject?.optString("title").orEmpty()
+            .ifBlank { root.optString("portalTitle") }
+            .ifBlank { portalDefaults.title }
+            .take(80),
+        message = portalObject?.optString("message").orEmpty()
+            .ifBlank { root.optString("portalMessage") }
+            .ifBlank { portalDefaults.message }
+            .take(240),
+        html = if (portalObject != null) {
+            portalObject.optString("html").take(100_000)
+        } else {
+            root.optString("portalHtml").take(100_000)
+        },
+    )
+
     val devices = linkedMapOf<String, DeviceBinding>()
     root.optJSONArray("devices")?.forEachObject { item ->
         val key = item.optString("deviceKey").trim().lowercase()
@@ -533,11 +577,12 @@ private fun decodeState(raw: String?): CybercafeState {
     }
 
     return CybercafeState(
-        schemaVersion = 2,
+        schemaVersion = 3,
         offers = if (offers.isEmpty()) defaultOffers() else offers,
         accounts = accounts,
         vouchers = vouchers,
         devices = devices,
+        portal = portal,
     )
 }
 

@@ -194,8 +194,9 @@ fun CybercafeState.toPortalConfigJson(
     claimResults: List<PortalClaimResult> = emptyList(),
 ): String =
     JSONObject().apply {
-        put("title", "Shizzi Hotspot")
-        put("message", "Ouvrez votre compte ou rechargez avec un voucher.")
+        put("title", portal.title)
+        put("message", portal.message)
+        put("html", portal.html)
         put(
             "accounts",
             JSONArray().apply {

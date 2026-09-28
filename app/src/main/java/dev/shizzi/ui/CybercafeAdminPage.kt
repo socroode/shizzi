@@ -44,6 +44,7 @@ private enum class AdminTab {
     ACCOUNTS,
     VOUCHERS,
     DEVICES,
+    PORTAL,
 }
 
 @Composable
@@ -69,6 +70,7 @@ fun CybercafeAdminPage(onBack: () -> Unit) {
             TextButton(onClick = { tab = AdminTab.ACCOUNTS }) { Text("Accounts") }
             TextButton(onClick = { tab = AdminTab.VOUCHERS }) { Text("Vouchers") }
             TextButton(onClick = { tab = AdminTab.DEVICES }) { Text("Devices") }
+            TextButton(onClick = { tab = AdminTab.PORTAL }) { Text("Portal") }
         }
 
         if (message.isNotBlank()) {
@@ -99,8 +101,86 @@ fun CybercafeAdminPage(onBack: () -> Unit) {
                     state = state,
                     onMessage = { message = it },
                 )
+                AdminTab.PORTAL -> PortalEditor(
+                    state = state,
+                    onMessage = { message = it },
+                )
             }
             Spacer(Modifier.height(ShizziTheme.spacing.xxxl))
+        }
+    }
+}
+
+@Composable
+private fun PortalEditor(
+    state: CybercafeState,
+    onMessage: (String) -> Unit,
+) {
+    val store = App.instance.cybercafeStore
+    val portal = state.portal
+    var title by remember(portal.title) { mutableStateOf(portal.title) }
+    var portalMessage by remember(portal.message) { mutableStateOf(portal.message) }
+    var customHtml by remember(portal.html) { mutableStateOf(portal.html) }
+
+    SectionTitle("Portail captif")
+    Text(
+        text = "Personnalisation visuelle uniquement : le TUN, les comptes, les quotas et les débits ne changent pas.",
+        color = ShizziTheme.colors.onSurfaceMuted,
+    )
+    OutlinedTextField(
+        value = title,
+        onValueChange = { title = it.take(80) },
+        label = { Text("Titre / nom du Wi-Fi") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = portalMessage,
+        onValueChange = { portalMessage = it.take(240) },
+        label = { Text("Message d'accueil") },
+        modifier = Modifier.fillMaxWidth(),
+        minLines = 2,
+        maxLines = 4,
+    )
+    Text(
+        text = "HTML/CSS personnalisé (facultatif). Placeholders : {{TITLE}}, {{MESSAGE}}, {{CONTENT}}. " +
+            "{{ACCOUNT_PANEL}} reste accepté pour les anciens modèles. Si aucun emplacement fonctionnel " +
+            "n'est fourni, Shizzi ajoute automatiquement la connexion/recharge avant </body>.",
+        color = ShizziTheme.colors.onSurfaceMuted,
+        modifier = Modifier.padding(vertical = ShizziTheme.spacing.sm),
+    )
+    OutlinedTextField(
+        value = customHtml,
+        onValueChange = { customHtml = it.take(100_000) },
+        label = { Text("HTML / CSS personnalisé") },
+        modifier = Modifier.fillMaxWidth(),
+        minLines = 12,
+        maxLines = 24,
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = ShizziTheme.spacing.md),
+        horizontalArrangement = Arrangement.spacedBy(ShizziTheme.spacing.sm),
+    ) {
+        Button(
+            onClick = {
+                onMessage(store.setPortalCustomization(title, portalMessage, customHtml).message)
+            },
+            modifier = Modifier.weight(1f),
+        ) {
+            Text("Enregistrer")
+        }
+        TextButton(
+            onClick = {
+                val defaults = dev.shizzi.PortalCustomization()
+                title = defaults.title
+                portalMessage = defaults.message
+                customHtml = ""
+                onMessage(store.setPortalCustomization(title, portalMessage, customHtml).message)
+            },
+        ) {
+            Text("Réinitialiser")
         }
     }
 }

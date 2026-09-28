@@ -79,6 +79,7 @@ func (a PortalAccount) uploadBps(nowMillis int64) int64 {
 type portalConfig struct {
 	Title    string          `json:"title"`
 	Message  string          `json:"message"`
+	HTML     string          `json:"html"`
 	Accounts []PortalAccount `json:"accounts"`
 	// ClaimResults lets Android tell the portal how a voucher claim ended so
 	// the client sees "accepted"/"rejected" instead of a silent drop.
@@ -165,6 +166,7 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 	if m.portalMessage == "" {
 		m.portalMessage = "Connectez-vous à votre compte Shizzi."
 	}
+	m.portalHTML = config.HTML
 	m.portalAccounts = accounts
 	if m.portalClaimResults == nil {
 		m.portalClaimResults = make(map[string]PortalClaimResult)
@@ -484,6 +486,7 @@ func (m *TrafficManager) writePortalHTML(
 	m.mu.Lock()
 	title := m.portalTitle
 	subtitle := m.portalMessage
+	custom := m.portalHTML
 	m.mu.Unlock()
 
 	alert := ""
@@ -588,7 +591,50 @@ button.secondary{background:#1e293b;color:#e2e8f0}
 		alert,
 		content,
 	)
+
+	if strings.TrimSpace(custom) != "" {
+		page = applyPortalCustomization(custom, title, subtitle, alert, content)
+		if refresh != "" {
+			lower := strings.ToLower(page)
+			if index := strings.LastIndex(lower, "</head>"); index >= 0 {
+				page = page[:index] + refresh + page[index:]
+			} else {
+				page = refresh + page
+			}
+		}
+	}
+
 	writeHTTP(conn, "text/html; charset=utf-8", []byte(page))
+}
+
+func applyPortalCustomization(
+	custom, title, subtitle, status, content string,
+) string {
+	hasFunctionalPlaceholder :=
+		strings.Contains(custom, "{{CONTENT}}") ||
+			strings.Contains(custom, "{{ACCOUNT_PANEL}}") ||
+			strings.Contains(custom, "{{LOGIN_FORM}}")
+
+	functional := status + content
+	rendered := strings.NewReplacer(
+		"{{TITLE}}", html.EscapeString(title),
+		"{{MESSAGE}}", html.EscapeString(subtitle),
+		"{{STATUS}}", status,
+		"{{CONTENT}}", functional,
+		"{{ACCOUNT_PANEL}}", functional,
+		"{{LOGIN_FORM}}", functional,
+		"{{FORM_ACTION}}", "/login",
+	).Replace(custom)
+
+	if hasFunctionalPlaceholder {
+		return rendered
+	}
+
+	lower := strings.ToLower(rendered)
+	if index := strings.LastIndex(lower, "</body>"); index >= 0 {
+		return rendered[:index] + functional + rendered[index:]
+	}
+	return rendered + functional
 }
 
 func writeHTTP(conn net.Conn, contentType string, body []byte) {
