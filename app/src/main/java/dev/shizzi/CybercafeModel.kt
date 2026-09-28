@@ -260,6 +260,17 @@ object CybercafeRules {
             return RuleOutcome(state, false, "Identifiant appareil manquant.")
         }
 
+        val activeOnAnotherDevice = state.devices.values.any {
+            it.accountNumber == number && it.deviceKey != normalizedKey
+        }
+        if (activeOnAnotherDevice) {
+            return RuleOutcome(
+                state,
+                false,
+                "Ce compte est déjà utilisé sur un autre appareil.",
+            )
+        }
+
         val binding = DeviceBinding(
             deviceKey = normalizedKey,
             accountNumber = number,
