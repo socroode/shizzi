@@ -36,10 +36,10 @@ func TestTwoPhonesBehindSharedTunStaySeparate(t *testing.T) {
 	}
 
 	first := manager.resolveFlowClient(
-		"tcp", "192.0.2.2", 61001, "142.250.74.14", 443,
+		"tcp", "192.0.2.2", 61001, "142.250.74.14", 443, true,
 	)
 	second := manager.resolveFlowClient(
-		"udp", "192.0.2.2", 62002, "1.1.1.1", 53,
+		"udp", "192.0.2.2", 62002, "1.1.1.1", 53, true,
 	)
 
 	if first != "192.168.43.20" || second != "192.168.43.21" {
@@ -95,7 +95,7 @@ Client Information:
 
 	start := time.Now()
 	got := manager.resolveFlowClient(
-		"tcp", "192.0.2.2", 55555, "203.0.113.10", 443,
+		"tcp", "192.0.2.2", 55555, "203.0.113.10", 443, true,
 	)
 	if got != "" {
 		t.Fatalf("unknown shared client resolved to %q", got)

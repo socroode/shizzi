@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	maxInFlightTCP = 512
-	defaultRcvWnd  = 0
-	dialTimeout    = 10 * time.Second
-	udpFlowTimeout = 60 * time.Second
+	maxInFlightTCP    = 512
+	defaultRcvWnd     = 0
+	dialTimeout       = 10 * time.Second
+	udpFlowTimeout    = 60 * time.Second
 	tcpCopyBufferSize = 32 * 1024
 )
 
@@ -41,106 +41,145 @@ func installForwarders(netStack *stack.Stack, dialer *net.Dialer, traffic *Traff
 	netStack.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
 }
 
+func isDNSPort(port uint16) bool { return port == 53 }
+
+// forwardTCP accepts the client's handshake first and only then identifies the
+// client. Android publishes the tethering NAT rule for a TCP flow once the
+// connection is tracked as established, which cannot happen while the SYN is
+// held waiting for that same rule. Identification, the portal decision and
+// the account check all happen before any upstream dial.
 func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer, traffic *TrafficManager) {
 	id := request.ID()
+
+	var queue waiter.Queue
+	endpoint, tcpipErr := request.CreateEndpoint(&queue)
+	if tcpipErr != nil {
+		request.Complete(true)
+		return
+	}
+	request.Complete(false)
+	client := gonet.NewTCPConn(&queue, endpoint)
+
+	go handleTCP(client, id, dialer, traffic)
+}
+
+func handleTCP(
+	client net.Conn,
+	id stack.TransportEndpointID,
+	dialer *net.Dialer,
+	traffic *TrafficManager,
+) {
+	destinationIP := addressString(id.LocalAddress)
+	destinationPort := uint16(id.LocalPort)
+	dns := isDNSPort(destinationPort)
 	clientIP := sourceOf(id)
+
 	if traffic != nil {
 		clientIP = traffic.resolveFlowClient(
 			"tcp",
 			clientIP,
 			uint16(id.RemotePort),
-			addressString(id.LocalAddress),
-			uint16(id.LocalPort),
+			destinationIP,
+			destinationPort,
+			true,
 		)
-		if clientIP == "" {
-			request.Complete(true)
+		if clientIP == "" && !dns {
+			// Unknown physical client: never guess, never bill someone else.
+			client.Close()
 			return
 		}
-	}
 
-	if traffic != nil && uint16(id.LocalPort) == 80 &&
-		(traffic.portalRequiredFor(clientIP) || addressString(id.LocalAddress) == portalIP) {
-		var queue waiter.Queue
-		endpoint, tcpipErr := request.CreateEndpoint(&queue)
-		if tcpipErr != nil {
-			request.Complete(true)
+		if destinationPort == 80 && clientIP != "" &&
+			(destinationIP == portalIP || traffic.portalRequiredFor(clientIP)) {
+			traffic.servePortal(client, clientIP)
 			return
 		}
-		request.Complete(false)
-		client := gonet.NewTCPConn(&queue, endpoint)
-		go traffic.servePortal(client, clientIP)
-		return
+		if destinationPort == 80 && clientIP == "" && destinationIP == portalIP {
+			client.Close()
+			return
+		}
+		if !dns && !traffic.flowAllowed(clientIP) {
+			client.Close()
+			return
+		}
 	}
 
 	upstream, err := dialer.Dial("tcp", destinationOf(id))
 	if err != nil {
-		request.Complete(true)
+		client.Close()
 		return
 	}
+	relay(client, upstream, clientIP, traffic, dns)
+}
+
+// forwardUDP runs inside the netstack's packet dispatch: it must never block,
+// or every client on the shared TUN stalls while one flow waits for its NAT
+// rule. It only creates the endpoint; identification runs in a goroutine and
+// the first datagrams wait in the endpoint queue meanwhile.
+func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer, traffic *TrafficManager) bool {
+	id := request.ID()
 
 	var queue waiter.Queue
 	endpoint, tcpipErr := request.CreateEndpoint(&queue)
 	if tcpipErr != nil {
-		upstream.Close()
-		request.Complete(true)
-		return
+		return false
 	}
-	request.Complete(false)
+	client := gonet.NewUDPConn(&queue, endpoint)
 
-	client := gonet.NewTCPConn(&queue, endpoint)
-	go relay(client, upstream, clientIP, traffic)
+	go handleUDP(client, id, dialer, traffic)
+	return true
 }
 
-func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer, traffic *TrafficManager) bool {
-	id := request.ID()
+func handleUDP(
+	client net.Conn,
+	id stack.TransportEndpointID,
+	dialer *net.Dialer,
+	traffic *TrafficManager,
+) {
+	destinationPort := uint16(id.LocalPort)
+	dns := isDNSPort(destinationPort)
 	clientIP := sourceOf(id)
+
 	if traffic != nil {
+		// DNS never waits: it is allowed before login and unattributed DNS
+		// is carried without billing anyone.
 		clientIP = traffic.resolveFlowClient(
 			"udp",
 			clientIP,
 			uint16(id.RemotePort),
 			addressString(id.LocalAddress),
-			uint16(id.LocalPort),
+			destinationPort,
+			!dns,
 		)
-		if clientIP == "" {
-			return false
+		if clientIP == "" && !dns {
+			client.Close()
+			return
+		}
+		if !dns && !traffic.flowAllowed(clientIP) {
+			client.Close()
+			return
 		}
 	}
 
 	upstream, err := dialer.Dial("udp", destinationOf(id))
 	if err != nil {
-		return false
+		client.Close()
+		return
 	}
-
-	var queue waiter.Queue
-	endpoint, tcpipErr := request.CreateEndpoint(&queue)
-	if tcpipErr != nil {
-		upstream.Close()
-		return false
-	}
-
-	client := gonet.NewUDPConn(&queue, endpoint)
-	go relayDatagrams(
-		client,
-		upstream,
-		clientIP,
-		traffic,
-		uint16(id.LocalPort) == 53,
-	)
-	return true
+	relayDatagrams(client, upstream, clientIP, traffic, dns)
 }
 
-func relay(client, upstream net.Conn, clientIP string, traffic *TrafficManager) {
+func relay(client, upstream net.Conn, clientIP string, traffic *TrafficManager, bypassPortal bool) {
 	defer client.Close()
 	defer upstream.Close()
 
 	done := make(chan struct{}, 2)
 	go func() {
-		copyStreamManaged(upstream, client, clientIP, directionUpload, traffic)
+		copyStreamManaged(upstream, client, clientIP, directionUpload, traffic, bypassPortal)
 		done <- struct{}{}
 	}()
 	go func() {
-		copyStreamManaged(client, upstream, clientIP, directionDownload, traffic)
+		copyStreamManaged(client, upstream, clientIP, directionDownload, traffic, bypassPortal)
 		done <- struct{}{}
 	}()
 	<-done
@@ -151,13 +190,15 @@ func copyStreamManaged(
 	clientIP string,
 	dir direction,
 	traffic *TrafficManager,
+	bypassPortal bool,
 ) {
 	buffer := make([]byte, tcpCopyBufferSize)
 
 	for {
 		read, err := src.Read(buffer)
 		if read > 0 {
-			if traffic != nil && !traffic.waitAllowed(clientIP, dir, read) {
+			if traffic != nil &&
+				!traffic.waitAllowedWithPortalBypass(clientIP, dir, read, bypassPortal) {
 				return
 			}
 

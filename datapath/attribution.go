@@ -28,33 +28,62 @@ type flowAttributionSnapshot struct {
 	ResolvedFlows         int64  `json:"resolvedFlows"`
 	FallbackResolvedFlows int64  `json:"fallbackResolvedFlows"`
 	UnresolvedFlows       int64  `json:"unresolvedFlows"`
+	LooseCandidateFlows   int64  `json:"looseCandidateFlows"`
 	ClientCount           int    `json:"mappedClients"`
+	ClientListKnown       bool   `json:"clientListKnown"`
+	SlowestResolveMillis  int64  `json:"slowestResolveMillis"`
+	DumpCount             int64  `json:"dumpCount"`
+	LastDumpMillis        int64  `json:"lastDumpMillis"`
 	LastError             string `json:"lastError,omitempty"`
 	LastMiss              string `json:"lastMiss,omitempty"`
 }
 
+// clientPresence is Android's own list of connected hotspot clients.
+type clientPresence struct {
+	clients       map[string]struct{}
+	macs          map[string]string
+	authoritative bool
+}
+
 type flowAttributionResolver struct {
 	mu sync.Mutex
+	// refreshMu makes dumpsys single-flight and keeps it outside mu, so flows
+	// that already have an answer never queue behind a slow dumpsys.
+	refreshMu sync.Mutex
 
 	dumpFn func() (string, error)
 
 	flows            map[flowAttributionKey]string
 	connectedClients map[string]struct{}
+	clientMACs       map[string]string
 	lastRefresh      time.Time
+	lastSuccess      time.Time
 	lastError        string
+
+	recentMisses map[flowAttributionKey]time.Time
 
 	resolvedFlows         int64
 	fallbackResolvedFlows int64
 	unresolvedFlows       int64
+	looseCandidateFlows   int64
+	slowestResolve        time.Duration
+	dumpCount             int64
+	lastDumpDuration      time.Duration
 	lastMiss              string
 }
 
 const (
 	attributionRefreshInterval = 100 * time.Millisecond
-	attributionWait             = 1500 * time.Millisecond
-	attributionMultiClientWait  = 3500 * time.Millisecond
-	attributionRetryDelay       = 50 * time.Millisecond
-	attributionDumpTimeout      = 1200 * time.Millisecond
+	// A rule seen in a dump this recent is trusted without another dump. The
+	// kernel cannot hand the same translated tuple to a second client while
+	// the first conntrack entry (and so its rule) still exists.
+	attributionCacheTTL        = time.Second
+	attributionWait            = 1500 * time.Millisecond
+	attributionMultiClientWait = 3500 * time.Millisecond
+	attributionRetryDelay      = 50 * time.Millisecond
+	attributionDumpTimeout     = 1200 * time.Millisecond
+	attributionMissMemory      = 5 * time.Second
+	presenceMaxAge             = 15 * time.Second
 )
 
 var ipv4UpstreamRulePattern = regexp.MustCompile(
@@ -71,11 +100,19 @@ var tetheringConnectedClientPattern = regexp.MustCompile(
 	`/([0-9]{1,3}(?:\.[0-9]{1,3}){3})=downstream:`,
 )
 
+// In "IPv4 Downstream" rules the last tuple is the physical client and the
+// bracketed MAC that follows it is the client's MAC (outDstMac).
+var ipv4DownstreamClientMACPattern = regexp.MustCompile(
+	`([0-9]{1,3}(?:\.[0-9]{1,3}){3}):\d+\s+\[([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})\]`,
+)
+
 func newFlowAttributionResolver() *flowAttributionResolver {
 	return &flowAttributionResolver{
 		dumpFn:           dumpTetheringState,
 		flows:            make(map[flowAttributionKey]string),
 		connectedClients: make(map[string]struct{}),
+		clientMACs:       make(map[string]string),
+		recentMisses:     make(map[flowAttributionKey]time.Time),
 	}
 }
 
@@ -199,6 +236,39 @@ func parseAttributionPort(raw string) (uint16, error) {
 	return uint16(value), nil
 }
 
+func parseIPv4DownstreamClientMACs(raw string) map[string]string {
+	result := make(map[string]string)
+	inDownstream := false
+	for _, rawLine := range strings.Split(raw, "\n") {
+		line := strings.TrimSpace(rawLine)
+		switch {
+		case strings.HasPrefix(line, "IPv4 Downstream:"):
+			inDownstream = true
+			continue
+		case strings.HasPrefix(line, "IPv4 Upstream:"), strings.HasSuffix(line, ":") && !strings.Contains(line, " "):
+			inDownstream = false
+			continue
+		}
+		if !inDownstream {
+			continue
+		}
+		matches := ipv4DownstreamClientMACPattern.FindAllStringSubmatch(line, -1)
+		if len(matches) == 0 {
+			continue
+		}
+		last := matches[len(matches)-1]
+		ip, mac := last[1], strings.ToLower(last[2])
+		if isSharedTunnelAddress(ip) || mac == "00:00:00:00:00:00" {
+			continue
+		}
+		result[ip] = mac
+	}
+	return result
+}
+
+// resolve maps a translated flow to its physical client, or "" when that
+// cannot be done without guessing. waitForRule bounds a wait for Android to
+// publish the NAT rule of a brand-new flow.
 func (r *flowAttributionResolver) resolve(key flowAttributionKey, waitForRule bool) string {
 	if r == nil {
 		return ""
@@ -208,88 +278,119 @@ func (r *flowAttributionResolver) resolve(key flowAttributionKey, waitForRule bo
 	deadline := startedAt
 	if waitForRule {
 		deadline = deadline.Add(attributionWait)
+		r.mu.Lock()
+		missedAt, recentlyMissed := r.recentMisses[key]
+		r.mu.Unlock()
+		if recentlyMissed && time.Since(missedAt) < attributionMissMemory {
+			// Same unresolved tuple retried (typically UDP): answer at once
+			// instead of stacking another multi-second wait.
+			deadline = startedAt
+		}
 	}
 
-	for {
+	for attempt := 0; ; attempt++ {
 		r.mu.Lock()
-		if client, fallback := r.lookupLocked(key); client != "" &&
-			time.Since(r.lastRefresh) < attributionRefreshInterval {
-			r.resolvedFlows++
-			if fallback {
-				r.fallbackResolvedFlows++
-			}
-			r.lastMiss = ""
+		client, fallback := r.lookupLocked(key)
+		fresh := time.Since(r.lastRefresh) < attributionCacheTTL
+		r.mu.Unlock()
+		if client != "" && (fresh || attempt > 0) {
+			return r.recordResolved(client, fallback, startedAt)
+		}
+
+		r.refreshIfOlderThan(attributionRefreshInterval)
+
+		r.mu.Lock()
+		client, fallback = r.lookupLocked(key)
+		if client != "" {
 			r.mu.Unlock()
-			return client
+			return r.recordResolved(client, fallback, startedAt)
 		}
-
-		if time.Since(r.lastRefresh) >= attributionRefreshInterval {
-			r.refreshLocked()
-		}
-
-		if waitForRule && r.lastError == "" && len(r.clientSetLocked()) > 1 {
+		if waitForRule && r.lastError == "" && len(r.connectedClients) > 1 {
 			extended := startedAt.Add(attributionMultiClientWait)
-			if deadline.Before(extended) {
+			if deadline.Before(extended) && deadline.After(startedAt) {
 				deadline = extended
 			}
 		}
-
-		client, fallback := r.lookupLocked(key)
-		if client != "" {
-			r.resolvedFlows++
-			if fallback {
-				r.fallbackResolvedFlows++
-			}
-			r.lastMiss = ""
-			r.mu.Unlock()
-			return client
-		}
 		r.mu.Unlock()
 
-		if !waitForRule || time.Now().After(deadline) {
-			r.mu.Lock()
-			if waitForRule {
-				// A single physical hotspot client is unambiguous even before
-				// Android publishes its NAT rule. With 2+ clients we fail closed.
-				r.refreshLocked()
-				if r.lastError == "" {
-					clients := r.clientSetLocked()
-					if len(clients) == 1 {
-						for clientIP := range clients {
-							r.resolvedFlows++
-							r.fallbackResolvedFlows++
-							r.lastMiss = ""
-							r.mu.Unlock()
-							return clientIP
-						}
-					}
-				}
-			}
-			r.unresolvedFlows++
-			r.lastMiss = formatFlowAttributionKey(key)
-			r.mu.Unlock()
-			return ""
+		if !time.Now().Before(deadline) {
+			break
 		}
 		time.Sleep(attributionRetryDelay)
 	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// With exactly one client on Android's own connected-client list, the flow
+	// can only be that client's. The list of IPs seen in NAT rules is never
+	// used for this: a phone that just joined has no rule yet and would be
+	// billed to the only phone that has one.
+	if r.lastError == "" && len(r.connectedClients) == 1 &&
+		time.Since(r.lastSuccess) < presenceMaxAge {
+		for clientIP := range r.connectedClients {
+			if r.onlyClientInRulesLocked(clientIP) {
+				r.resolvedFlows++
+				r.fallbackResolvedFlows++
+				r.lastMiss = ""
+				r.noteLatencyLocked(startedAt)
+				return clientIP
+			}
+		}
+	}
+
+	if r.looseCandidateLocked(key) {
+		r.looseCandidateFlows++
+	}
+	r.unresolvedFlows++
+	r.lastMiss = formatFlowAttributionKey(key)
+	if waitForRule {
+		r.recentMisses[key] = time.Now()
+		for missed, at := range r.recentMisses {
+			if time.Since(at) > attributionMissMemory {
+				delete(r.recentMisses, missed)
+			}
+		}
+	}
+	return ""
 }
 
+func (r *flowAttributionResolver) recordResolved(client string, fallback bool, startedAt time.Time) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resolvedFlows++
+	if fallback {
+		r.fallbackResolvedFlows++
+	}
+	r.lastMiss = ""
+	r.noteLatencyLocked(startedAt)
+	return client
+}
+
+func (r *flowAttributionResolver) noteLatencyLocked(startedAt time.Time) {
+	if elapsed := time.Since(startedAt); elapsed > r.slowestResolve {
+		r.slowestResolve = elapsed
+	}
+}
+
+func (r *flowAttributionResolver) onlyClientInRulesLocked(clientIP string) bool {
+	for _, candidate := range r.flows {
+		if candidate != "" && candidate != clientIP {
+			return false
+		}
+	}
+	return true
+}
+
+// lookupLocked accepts an exact rule, or a rule that differs only by protocol
+// label (some OEM dumps print it differently). Matching on the translated
+// port alone is NOT accepted: two phones may share a translated port towards
+// different destinations, and the second one's rule may not be published yet.
 func (r *flowAttributionResolver) lookupLocked(
 	key flowAttributionKey,
 ) (clientIP string, fallback bool) {
 	if client := r.flows[key]; client != "" {
 		return client, false
-	}
-
-	// Some OEMs expose a destination detail differently from gVisor. A
-	// translated source port is still usable only if every matching rule maps
-	// to one physical client. Ambiguity never chooses a client.
-	if client := r.uniqueClientLocked(func(candidate flowAttributionKey) bool {
-		return candidate.Protocol == key.Protocol &&
-			candidate.PublicIP == key.PublicIP &&
-			candidate.PublicPort == key.PublicPort
-	}); client != "" {
-		return client, true
 	}
 
 	if client := r.uniqueClientLocked(func(candidate flowAttributionKey) bool {
@@ -301,14 +402,19 @@ func (r *flowAttributionResolver) lookupLocked(
 		return client, true
 	}
 
-	if client := r.uniqueClientLocked(func(candidate flowAttributionKey) bool {
-		return candidate.PublicIP == key.PublicIP &&
-			candidate.PublicPort == key.PublicPort
-	}); client != "" {
-		return client, true
-	}
-
 	return "", false
+}
+
+// looseCandidateLocked is diagnostics only: a rule shares the translated port
+// but not the destination. A high count on a device means its dump reports
+// destinations differently and the parser needs adapting, not guessing.
+func (r *flowAttributionResolver) looseCandidateLocked(key flowAttributionKey) bool {
+	for candidate := range r.flows {
+		if candidate.PublicIP == key.PublicIP && candidate.PublicPort == key.PublicPort {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *flowAttributionResolver) uniqueClientLocked(
@@ -341,35 +447,81 @@ func formatFlowAttributionKey(key flowAttributionKey) string {
 	)
 }
 
-func (r *flowAttributionResolver) refreshLocked() {
+// refreshIfOlderThan runs dumpsys at most once concurrently, without holding
+// mu while the process runs.
+func (r *flowAttributionResolver) refreshIfOlderThan(maxAge time.Duration) {
+	if r == nil {
+		return
+	}
+	r.refreshMu.Lock()
+	defer r.refreshMu.Unlock()
+
+	r.mu.Lock()
+	stale := time.Since(r.lastRefresh) >= maxAge
+	r.mu.Unlock()
+	if !stale {
+		return
+	}
+
+	started := time.Now()
 	raw, err := r.dumpFn()
-	r.lastRefresh = time.Now()
+	finished := time.Now()
+
+	var (
+		flows   map[flowAttributionKey]string
+		clients map[string]struct{}
+		macs    map[string]string
+	)
+	if err == nil {
+		flows = parseIPv4UpstreamAttributions(raw)
+		clients = parseTetheringConnectedClients(raw)
+		macs = parseIPv4DownstreamClientMACs(raw)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lastRefresh = finished
+	r.dumpCount++
+	r.lastDumpDuration = finished.Sub(started)
 	if err != nil {
 		r.lastError = err.Error()
 		return
 	}
-
-	r.flows = parseIPv4UpstreamAttributions(raw)
-	r.connectedClients = parseTetheringConnectedClients(raw)
+	r.flows = flows
+	r.connectedClients = clients
+	for ip, mac := range macs {
+		r.clientMACs[ip] = mac
+	}
+	if len(clients) > 0 {
+		for ip := range r.clientMACs {
+			if _, ok := clients[ip]; !ok {
+				delete(r.clientMACs, ip)
+			}
+		}
+	}
+	r.lastSuccess = finished
 	r.lastError = ""
 }
 
-func (r *flowAttributionResolver) clientSetLocked() map[string]struct{} {
-	if len(r.connectedClients) > 0 {
-		clients := make(map[string]struct{}, len(r.connectedClients))
-		for clientIP := range r.connectedClients {
-			clients[clientIP] = struct{}{}
-		}
-		return clients
+func (r *flowAttributionResolver) presence() clientPresence {
+	if r == nil {
+		return clientPresence{}
 	}
-
-	clients := make(map[string]struct{})
-	for _, clientIP := range r.flows {
-		if clientIP != "" && !isSharedTunnelAddress(clientIP) {
-			clients[clientIP] = struct{}{}
-		}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	result := clientPresence{
+		clients: make(map[string]struct{}, len(r.connectedClients)),
+		macs:    make(map[string]string, len(r.clientMACs)),
+		authoritative: r.lastError == "" && len(r.connectedClients) > 0 &&
+			time.Since(r.lastSuccess) < presenceMaxAge,
 	}
-	return clients
+	for ip := range r.connectedClients {
+		result.clients[ip] = struct{}{}
+	}
+	for ip, mac := range r.clientMACs {
+		result.macs[ip] = mac
+	}
+	return result
 }
 
 func (r *flowAttributionResolver) snapshot() flowAttributionSnapshot {
@@ -380,12 +532,16 @@ func (r *flowAttributionResolver) snapshot() flowAttributionSnapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	clients := r.clientSetLocked()
 	return flowAttributionSnapshot{
 		ResolvedFlows:         r.resolvedFlows,
 		FallbackResolvedFlows: r.fallbackResolvedFlows,
 		UnresolvedFlows:       r.unresolvedFlows,
-		ClientCount:           len(clients),
+		LooseCandidateFlows:   r.looseCandidateFlows,
+		ClientCount:           len(r.connectedClients),
+		ClientListKnown:       len(r.connectedClients) > 0,
+		SlowestResolveMillis:  r.slowestResolve.Milliseconds(),
+		DumpCount:             r.dumpCount,
+		LastDumpMillis:        r.lastDumpDuration.Milliseconds(),
 		LastError:             r.lastError,
 		LastMiss:              r.lastMiss,
 	}
