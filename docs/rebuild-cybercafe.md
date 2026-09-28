@@ -15,7 +15,7 @@ The first layer owns durable commercial state independently from the TUN:
 - Data rule: bytes accumulate and validity resets from the latest recharge;
 - Unlimited rule: duration accumulates;
 - Data remains untouched while Unlimited is active;
-- an account is never bound to an IP or MAC: devices are live portal sessions only;
+- an account is never permanently bound to an IP or MAC, but only one device session may use a given account at a time;
 - upload/download accounting per account;
 - schema-versioned JSON persistence.
 
@@ -56,8 +56,13 @@ Chain: physical device → identification (pre-NAT tethering state) → portal s
 - **Sessions** are keyed by the resolved client IP. Released on `/logout`, on admin
   "Déconnecter", or when Android stops listing the client (45 s grace), so a reused
   DHCP address never inherits a login.
-- **Shared quota**: `accountUsage[account]` counts up/down/Data bytes across all
-  sessions. The live balance is `dataBalanceBytes - (dataBytes - consumedMarkerBytes)`.
+- **One account = one active device**: a second phone cannot open an account while
+  that account already has an active session. After logout, admin disconnect, or
+  departed-client cleanup, the account can immediately move to another device.
+- **Account quota**: `accountUsage[account]` counts up/down/Data bytes for the active
+  session. The live balance is `dataBalanceBytes - (dataBytes - consumedMarkerBytes)`.
+- **Vouchers**: generated codes are exactly 10 uppercase alphanumeric characters
+  (`A-Z`, `0-9`).
 
 ### Android sync loop (`SessionService.followCybercafe`)
 
