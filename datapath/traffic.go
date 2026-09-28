@@ -164,17 +164,22 @@ type TrafficManager struct {
 
 func newTrafficManager() *TrafficManager {
 	return &TrafficManager{
-		epoch:                 time.Now().UnixNano(),
-		flowAttribution:       newFlowAttributionResolver(),
-		globalDownloadLimiter: newBandwidthLimiter(0),
-		globalUploadLimiter:   newBandwidthLimiter(0),
-		clients:               make(map[string]*clientTraffic),
-		portalTitle:           "Shizzi Hotspot",
-		portalMessage:         "Connectez-vous à votre compte Shizzi.",
-		portalAccounts:        make(map[string]PortalAccount),
-		portalAuthorized:      make(map[string]*PortalAuthorization),
-		accountUsage:          make(map[string]*accountUsage),
-		portalClaimResults:    make(map[string]PortalClaimResult),
+		// Fail closed until Android pushes its first policy: a hotspot
+		// client must never get free Internet in the gap between datapath
+		// start and the first configuration.
+		portalRequired:           true,
+		requireClientAttribution: true,
+		epoch:                    time.Now().UnixNano(),
+		flowAttribution:          newFlowAttributionResolver(),
+		globalDownloadLimiter:    newBandwidthLimiter(0),
+		globalUploadLimiter:      newBandwidthLimiter(0),
+		clients:                  make(map[string]*clientTraffic),
+		portalTitle:              "Shizzi Hotspot",
+		portalMessage:            "Connectez-vous à votre compte Shizzi.",
+		portalAccounts:           make(map[string]PortalAccount),
+		portalAuthorized:         make(map[string]*PortalAuthorization),
+		accountUsage:             make(map[string]*accountUsage),
+		portalClaimResults:       make(map[string]PortalClaimResult),
 	}
 }
 

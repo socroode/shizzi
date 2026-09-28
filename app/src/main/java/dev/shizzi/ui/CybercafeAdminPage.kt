@@ -27,9 +27,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import dev.shizzi.App
 import dev.shizzi.CybercafeState
-import dev.shizzi.DeviceBinding
 import dev.shizzi.Offer
 import dev.shizzi.PrepaidAccount
+import dev.shizzi.SessionService
 import dev.shizzi.Voucher
 import dev.shizzi.VoucherKind
 import dev.shizzi.ui.theme.ScreenPadding
@@ -157,8 +157,31 @@ private fun AccountEditor(
         Text("Aucun compte utilisateur.")
     }
 
+    val sessions by SessionService.liveSessions.collectAsState()
+
     state.accounts.values.sortedBy(PrepaidAccount::number).forEach { account ->
         AccountRow(account)
+        val accountSessions = sessions.filter { it.accountNumber == account.number }
+        Text(
+            if (accountSessions.isEmpty()) "Aucun appareil connecté"
+            else "${accountSessions.size} appareil(s) connecté(s)",
+            color = ShizziTheme.colors.onSurfaceMuted,
+        )
+        accountSessions.forEach { session ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    session.ip + (if (session.mac.isNotBlank()) " · " + session.mac else "") +
+                        " · " + formatBytes(session.sessionUpBytes + session.sessionDownBytes),
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = {
+                    SessionService.disconnectSession(session.ip)
+                    onMessage("Session ${session.ip} fermée. Le compte est conservé.")
+                }) {
+                    Text("Déconnecter")
+                }
+            }
+        }
 
         Row(
             horizontalArrangement = Arrangement.spacedBy(ShizziTheme.spacing.xs),
@@ -184,13 +207,10 @@ private fun AccountEditor(
                 Text("Changer code")
             }
             TextButton(onClick = {
-                val keys = state.devices.values
-                    .filter { it.accountNumber == account.number }
-                    .map(DeviceBinding::deviceKey)
-                keys.forEach(store::unbindDevice)
-                onMessage("Appareil dissocié.")
+                SessionService.disconnectAccount(account.number)
+                onMessage("Toutes les sessions de ce compte sont fermées.")
             }) {
-                Text("Dissocier")
+                Text("Déconnecter tout")
             }
             TextButton(onClick = {
                 onMessage(store.deleteAccount(account.number).message)
@@ -537,45 +557,80 @@ private fun VoucherEditor(
         }
 }
 
+/**
+ * Live view: Appareil → IP/MAC → compte → offre → débit → consommation.
+ * One row per device (session); two devices on the same account are two
+ * rows pointing to the same account, which makes a mis-attribution visible.
+ */
 @Composable
 private fun ConnectedDevices(
     state: CybercafeState,
     onMessage: (String) -> Unit,
 ) {
-    val store = App.instance.cybercafeStore
+    val sessions by SessionService.liveSessions.collectAsState()
+    val diagnostics by SessionService.attributionDiagnostics.collectAsState()
     SectionTitle("Connected Devices")
 
-    if (state.devices.isEmpty()) {
+    if (sessions.isEmpty()) {
         Text(
-            "Aucun appareil associé. Les liaisons seront créées par le portail captif " +
-                "après identification fiable de l'appareil.",
+            "Aucun appareil connecté. Chaque appareil apparaît ici après " +
+                "authentification sur le portail.",
         )
-        return
     }
 
-    state.devices.values
-        .sortedByDescending(DeviceBinding::lastSeenMillis)
-        .forEach { device ->
-            val account = state.accounts[device.accountNumber]
-            Text(
-                account?.name?.ifBlank { "Compte " + device.accountNumber }
-                    ?: "Compte " + device.accountNumber,
-                style = ShizziTheme.typography.heading,
-            )
-            Text("Appareil : " + device.deviceKey)
-            if (device.ip.isNotBlank()) Text("IP : " + device.ip)
-            if (device.mac.isNotBlank()) Text("MAC : " + device.mac)
-            if (device.lastSeenMillis > 0L) {
-                Text("Vu : " + formatDate(device.lastSeenMillis))
-            }
-            TextButton(onClick = {
-                store.unbindDevice(device.deviceKey)
-                onMessage("Appareil dissocié.")
-            }) {
-                Text("Dissocier")
-            }
-            HorizontalDivider(modifier = Modifier.padding(vertical = ShizziTheme.spacing.md))
+    sessions.sortedWith(compareBy({ it.accountNumber }, { it.ip })).forEach { session ->
+        val account = state.accounts[session.accountNumber]
+        Text(
+            "Appareil " + session.ip,
+            style = ShizziTheme.typography.heading,
+        )
+        Text("MAC : " + session.mac.ifBlank { "—" })
+        Text(
+            "Compte : " + (account?.name?.takeIf { it.isNotBlank() } ?: "Compte") +
+                " (N° " + session.accountNumber + ")",
+        )
+        Text("Offre : " + session.plan + if (session.authorized) "" else " — Internet bloqué")
+        Text(
+            "Débit : " + formatMbps(session.measuredDownloadBps) + " ↓ / " +
+                formatMbps(session.measuredUploadBps) + " ↑  (limite " +
+                formatMbps(session.limitDownloadBps) + " / " +
+                formatMbps(session.limitUploadBps) + ")",
+        )
+        Text(
+            "Consommation session : " +
+                formatBytes(session.sessionUpBytes + session.sessionDownBytes),
+        )
+        Text("Connecté depuis : " + formatDate(session.startedAtMillis))
+        TextButton(onClick = {
+            SessionService.disconnectSession(session.ip)
+            onMessage("Session ${session.ip} fermée. Le compte est conservé.")
+        }) {
+            Text("Déconnecter cet appareil")
         }
+        HorizontalDivider(modifier = Modifier.padding(vertical = ShizziTheme.spacing.md))
+    }
+
+    SectionTitle("Identification des appareils")
+    Text("Clients listés par Android : " + diagnostics.mappedClients)
+    Text(
+        "Flux identifiés : " + diagnostics.resolvedFlows +
+            " (dont repli client unique : " + diagnostics.fallbackResolvedFlows + ")",
+    )
+    Text("Flux refusés (non identifiés) : " + diagnostics.unresolvedFlows)
+    if (diagnostics.looseCandidateFlows > 0L) {
+        Text(
+            "Refus avec port traduit connu : " + diagnostics.looseCandidateFlows +
+                " — à signaler, le format dumpsys de cet appareil diffère.",
+        )
+    }
+    Text(
+        "dumpsys : " + diagnostics.dumpCount + " appels, dernier " +
+            diagnostics.lastDumpMillis + " ms · attente max " +
+            diagnostics.slowestResolveMillis + " ms",
+    )
+    Text("DNS non attribué (non facturé) : " + formatBytes(diagnostics.unattributedDnsBytes))
+    if (diagnostics.lastError.isNotBlank()) Text("Erreur : " + diagnostics.lastError)
+    if (diagnostics.lastMiss.isNotBlank()) Text("Dernier refus : " + diagnostics.lastMiss)
 }
 
 @Composable

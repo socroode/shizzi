@@ -21,10 +21,10 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class SessionService : Service() {
 
@@ -42,10 +42,6 @@ class SessionService : Service() {
     private var startJob: Job? = null
 
     private var cybercafeJob: Job? = null
-
-    private var cybercafePortalJob: Job? = null
-
-    private val lastPortalTraffic = mutableMapOf<String, Traffic>()
 
     private var generation = 0
 
@@ -109,114 +105,157 @@ class SessionService : Service() {
             publishState()
             announceOutcome()
             followStatus()
-            followCybercafePolicies()
-            followCybercafePortal()
+            followCybercafe()
         }
     }
 
-    private fun followCybercafePortal() {
-        cybercafePortalJob?.cancel()
-        cybercafePortalJob = scope.launch {
-            while (internalState.value.status == UiStatus.CONNECTED) {
-                val snapshot = runCatching {
-                    parseLiveTrafficSnapshot(controller.trafficStats())
-                }.getOrElse { failure ->
-                    SessionLog.warn(
-                        "cybercafe traffic poll failed: " +
-                            "${failure.javaClass.simpleName}: ${failure.message}",
-                    )
-                    LiveTrafficSnapshot()
-                }
-
-                val store = (application as App).cybercafeStore
-                val clientsByIp = snapshot.clients.associateBy(LiveClientTraffic::ip)
-                val activeKeys = mutableSetOf<String>()
-
-                snapshot.portalAuthorizations.forEach { authorization ->
-                    val now = System.currentTimeMillis()
-                    val binding = store.bindAuthenticatedDevice(
-                        authorization.accountNumber,
-                        authorization.ip,
-                        now,
-                    )
-                    if (!binding.success) {
-                        SessionLog.warn(
-                            "portal account ${authorization.accountNumber} rejected for " +
-                                "${authorization.ip}: ${binding.message}",
-                        )
-                        runCatching { controller.revokePortalClient(authorization.ip) }
-                        return@forEach
-                    }
-
-                    val live = clientsByIp[authorization.ip] ?: return@forEach
-                    val key = authorization.ip + "|" +
-                        authorization.accountNumber + "|" +
-                        authorization.startedAtMillis
-                    activeKeys += key
-                    val previous = lastPortalTraffic[key]
-                    if (previous == null) {
-                        lastPortalTraffic[key] = Traffic(up = live.upBytes, down = live.downBytes)
-                    } else {
-                        val upDelta = (live.upBytes - previous.up).coerceAtLeast(0L)
-                        val downDelta = (live.downBytes - previous.down).coerceAtLeast(0L)
-                        if (upDelta > 0L || downDelta > 0L) {
-                            store.recordAccountTraffic(
-                                authorization.accountNumber,
-                                upDelta,
-                                downDelta,
-                                now,
-                            )
-                            lastPortalTraffic[key] = Traffic(up = live.upBytes, down = live.downBytes)
-                        }
-                    }
-                }
-                lastPortalTraffic.keys.retainAll(activeKeys)
-
-                if (snapshot.portalRechargeClaims.isNotEmpty()) {
-                    snapshot.portalRechargeClaims.forEach { claim ->
-                        val outcome = store.redeemVoucherForAccount(
-                            claim.accountNumber,
-                            claim.code,
-                            System.currentTimeMillis(),
-                        )
-                        if (!outcome.success) {
-                            SessionLog.warn(
-                                "voucher ${claim.code} rejected for " +
-                                    "${claim.accountNumber}: ${outcome.message}",
-                            )
-                        }
-                    }
-                    runCatching { controller.clearPortalClaims() }
-                        .onFailure {
-                            SessionLog.warn("could not clear portal claims: ${it.message}")
-                        }
-                }
-
-                delay(CYBERCAFE_POLL_MS)
-            }
-        }
-    }
-
-    private fun followCybercafePolicies() {
+    /**
+     * The one loop that connects the durable accounts to the datapath:
+     *
+     * 1. read live counters and pending voucher claims;
+     * 2. apply usage deltas to the shared account balances (exactly once);
+     * 3. redeem claimed vouchers;
+     * 4. push the policy only when something policy-relevant changed.
+     *
+     * Consumption no longer triggers a push: the datapath enforces the shared
+     * balance live from the markers it receives. A policy push therefore runs
+     * to completion (it is never cancelled by the next consumption update, the
+     * old collectLatest ChildCancelledException) and the datapath is not
+     * reconfigured every second.
+     */
+    private fun followCybercafe() {
         cybercafeJob?.cancel()
         cybercafeJob = scope.launch {
-            (application as App).cybercafeStore.state.collect { cybercafe ->
-                if (internalState.value.status != UiStatus.CONNECTED) return@collect
-                try {
-                    controller.applyCybercafePolicies(
-                        cybercafe,
-                        System.currentTimeMillis(),
-                    )
+            val store = (application as App).cybercafeStore
+            val ledger = UsageLedger()
+            val rates = SessionRateMeter()
+            var pushedRevision = Long.MIN_VALUE
+            var pushedEpoch = Long.MIN_VALUE
+            var lastPushMillis = 0L
+            var pendingResults = emptyList<PortalClaimResult>()
+
+            while (internalState.value.status == UiStatus.CONNECTED) {
+                val now = System.currentTimeMillis()
+                val snapshot = try {
+                    parseLiveTrafficSnapshot(controller.trafficStats())
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: Throwable) {
                     SessionLog.warn(
-                        "cybercafe policy sync failed: " +
+                        "cybercafe traffic poll failed: " +
                             "${failure.javaClass.simpleName}: ${failure.message}",
                     )
+                    null
+                }
+
+                if (snapshot != null && snapshot.epoch != 0L) {
+                    val (restarted, deltas) = ledger.absorb(snapshot.epoch, snapshot.accountUsage)
+                    if (restarted) SessionLog.info("cybercafe: datapath epoch ${snapshot.epoch}")
+                    deltas.forEach(store::recordAccountUsage)
+
+                    if (snapshot.portalRechargeClaims.isNotEmpty()) {
+                        pendingResults = pendingResults + snapshot.portalRechargeClaims.map { claim ->
+                            val outcome = store.redeemVoucherForAccount(
+                                claim.accountNumber,
+                                claim.code,
+                                now,
+                            )
+                            if (!outcome.success) {
+                                SessionLog.warn(
+                                    "voucher ${claim.code} rejected for " +
+                                        "${claim.accountNumber}: ${outcome.message}",
+                                )
+                            }
+                            PortalClaimResult(
+                                ip = claim.ip,
+                                code = claim.code,
+                                success = outcome.success,
+                                message = outcome.message,
+                            )
+                        }
+                        runCatching { controller.clearPortalClaims() }
+                            .onFailure {
+                                SessionLog.warn("could not clear portal claims: ${it.message}")
+                            }
+                    }
+
+                    publishLiveSessions(snapshot, store.state.value, rates, now)
+                }
+
+                val revision = store.policyRevision.value
+                val due = revision != pushedRevision ||
+                    ledger.epoch != pushedEpoch ||
+                    pendingResults.isNotEmpty() ||
+                    now - lastPushMillis >= CYBERCAFE_RESYNC_MS
+                var pushFailed = false
+                if (due) {
+                    try {
+                        controller.applyCybercafePolicies(
+                            store.state.value,
+                            ledger.epoch,
+                            ledger.markers(),
+                            pendingResults,
+                        )
+                        pushedRevision = revision
+                        pushedEpoch = ledger.epoch
+                        lastPushMillis = now
+                        pendingResults = emptyList()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Throwable) {
+                        pushFailed = true
+                        SessionLog.warn(
+                            "cybercafe policy sync failed: " +
+                                "${failure.javaClass.simpleName}: ${failure.message}",
+                        )
+                    }
+                }
+
+                store.flushUsage(now)
+
+                if (pushFailed) {
+                    delay(CYBERCAFE_POLL_MS)
+                } else {
+                    // Wake early when an admin edit or recharge changes the policy.
+                    withTimeoutOrNull(CYBERCAFE_POLL_MS) {
+                        store.policyRevision.first { it != pushedRevision }
+                    }
                 }
             }
         }
+    }
+
+    private fun publishLiveSessions(
+        snapshot: LiveTrafficSnapshot,
+        state: CybercafeState,
+        rates: SessionRateMeter,
+        nowMillis: Long,
+    ) {
+        val keys = mutableSetOf<String>()
+        val sessions = snapshot.portalAuthorizations.map { session ->
+            val key = session.ip + "|" + session.startedAtMillis
+            keys += key
+            val (upBps, downBps) = rates.measure(key, session.upBytes, session.downBytes, nowMillis)
+            val account = state.accounts[session.accountNumber]
+            LiveSession(
+                ip = session.ip,
+                mac = session.mac,
+                accountNumber = session.accountNumber,
+                accountName = account?.name.orEmpty(),
+                plan = account?.planLabel(nowMillis) ?: "Compte supprimé",
+                authorized = session.authorized,
+                limitDownloadBps = session.downloadBps,
+                limitUploadBps = session.uploadBps,
+                measuredDownloadBps = downBps,
+                measuredUploadBps = upBps,
+                sessionUpBytes = session.upBytes,
+                sessionDownBytes = session.downBytes,
+                startedAtMillis = session.startedAtMillis,
+            )
+        }
+        rates.retain(keys)
+        mutableLiveSessions.value = sessions
+        mutableAttribution.value = snapshot.attribution
     }
 
     private fun followStatus() = statusPoller.follow(
@@ -239,9 +278,7 @@ class SessionService : Service() {
         statusPoller.stop()
         cybercafeJob?.cancel()
         cybercafeJob = null
-        cybercafePortalJob?.cancel()
-        cybercafePortalJob = null
-        lastPortalTraffic.clear()
+        clearLiveSessions()
 
         internalState.update {
             it.asStopped()
@@ -317,9 +354,8 @@ class SessionService : Service() {
         controller.onSessionLost = null
         cybercafeJob?.cancel()
         cybercafeJob = null
-        cybercafePortalJob?.cancel()
-        cybercafePortalJob = null
-        lastPortalTraffic.clear()
+        clearLiveSessions()
+        (application as App).cybercafeStore.flushUsage(System.currentTimeMillis(), force = true)
         controller.unbind()
         scope.cancel()
         liveService = null
@@ -329,6 +365,7 @@ class SessionService : Service() {
     companion object {
         private const val NOTIFICATION_ID = 1
         private const val CYBERCAFE_POLL_MS = 1_000L
+        private const val CYBERCAFE_RESYNC_MS = 60_000L
         const val ACTION_STOP = "dev.shizzi.STOP_SESSION"
         const val EXTRA_REPORT_AS = "reportAs"
 
@@ -343,6 +380,39 @@ class SessionService : Service() {
         val isSessionUp: Boolean get() = liveState.value.status == UiStatus.CONNECTED
 
         val isSessionBusy: Boolean get() = liveState.value.status == UiStatus.LOADING
+
+        private val mutableLiveSessions = MutableStateFlow<List<LiveSession>>(emptyList())
+
+        /** Devices currently logged in through the portal (one entry per device). */
+        val liveSessions: StateFlow<List<LiveSession>> = mutableLiveSessions.asStateFlow()
+
+        private val mutableAttribution = MutableStateFlow(AttributionDiagnostics())
+
+        val attributionDiagnostics: StateFlow<AttributionDiagnostics> =
+            mutableAttribution.asStateFlow()
+
+        private fun clearLiveSessions() {
+            mutableLiveSessions.value = emptyList()
+            mutableAttribution.value = AttributionDiagnostics()
+        }
+
+        /**
+         * Ends one device's session. The account, its balance and its other
+         * devices are untouched; the device goes back to the portal.
+         */
+        fun disconnectSession(ip: String) {
+            val service = liveService ?: return
+            service.scope.launch {
+                runCatching { service.controller.revokePortalClient(ip) }
+                    .onFailure { SessionLog.warn("disconnect $ip failed: ${it.message}") }
+            }
+        }
+
+        fun disconnectAccount(accountNumber: String) {
+            liveSessions.value
+                .filter { it.accountNumber == accountNumber }
+                .forEach { disconnectSession(it.ip) }
+        }
 
         fun start(context: Context, reportAs: AutomationCommand? = null) {
             context.startForegroundService(

@@ -19,6 +19,19 @@ class CybercafeStore(context: Context) {
 
     val state: StateFlow<CybercafeState> = mutableState.asStateFlow()
 
+    private val mutablePolicyRevision = MutableStateFlow(0L)
+
+    /**
+     * Bumped by every change that affects what the datapath must enforce
+     * (accounts, PINs, recharges, suspensions, offers...). Consumption alone
+     * does NOT bump it: the datapath already counts consumption live, so the
+     * policy is not re-pushed on every traffic tick.
+     */
+    val policyRevision: StateFlow<Long> = mutablePolicyRevision.asStateFlow()
+
+    private var usageDirty = false
+    private var lastUsageFlushMillis = 0L
+
     @Synchronized
     fun createAccount(numberRaw: String, pin: String, name: String, nowMillis: Long): RuleOutcome {
         val number = CybercafeRules.normalizeAccountNumber(numberRaw)
@@ -298,61 +311,36 @@ class CybercafeStore(context: Context) {
     }
 
 
+    /**
+     * Applies consumption measured by the datapath to the shared account
+     * balance. [dataBytes] is what the datapath counted in Data mode; it is
+     * deducted as-is (the datapath decides Data vs Unlimited, not Android).
+     *
+     * Updates memory at once and disk at most every [USAGE_FLUSH_MILLIS]:
+     * writing the whole state to SharedPreferences every second is wasteful.
+     */
     @Synchronized
-    fun bindAuthenticatedDevice(
-        numberRaw: String,
-        ip: String,
-        nowMillis: Long,
-    ): RuleOutcome {
-        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
-        val key = "ip:" + ip.trim().lowercase()
-        return commit(
-            CybercafeRules.bindDevice(
-                state.value,
-                number,
-                key,
-                ip.trim(),
-                "",
-                nowMillis,
-            ),
+    fun recordAccountUsage(delta: UsageDelta) {
+        val number = CybercafeRules.normalizeAccountNumber(delta.accountNumber)
+        val account = state.value.accounts[number] ?: return
+        val updated = account.copy(
+            totalUpBytes = account.totalUpBytes + delta.upBytes.coerceAtLeast(0L),
+            totalDownBytes = account.totalDownBytes + delta.downBytes.coerceAtLeast(0L),
+            dataBalanceBytes = (account.dataBalanceBytes - delta.dataBytes.coerceAtLeast(0L))
+                .coerceAtLeast(0L),
         )
+        mutableState.value = state.value.copy(
+            accounts = state.value.accounts + (number to updated),
+        )
+        usageDirty = true
     }
 
     @Synchronized
-    fun recordAccountTraffic(
-        numberRaw: String,
-        uploadBytes: Long,
-        downloadBytes: Long,
-        nowMillis: Long,
-    ): RuleOutcome {
-        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
-        val account = state.value.accounts[number]
-            ?: return RuleOutcome(state.value, false, "Compte introuvable.")
-
-        val up = uploadBytes.coerceAtLeast(0L)
-        val down = downloadBytes.coerceAtLeast(0L)
-        val used = up + down
-        if (used == 0L) {
-            return RuleOutcome(state.value, true, "Aucun trafic.")
-        }
-
-        val consumeData = !account.hasUnlimited(nowMillis) && account.hasData(nowMillis)
-        val updated = account.copy(
-            totalUpBytes = account.totalUpBytes + up,
-            totalDownBytes = account.totalDownBytes + down,
-            dataBalanceBytes = if (consumeData) {
-                (account.dataBalanceBytes - used).coerceAtLeast(0L)
-            } else {
-                account.dataBalanceBytes
-            },
-        )
-        return commit(
-            RuleOutcome(
-                state = state.value.copy(accounts = state.value.accounts + (number to updated)),
-                success = true,
-                message = "Consommation enregistrée.",
-            ),
-        )
+    fun flushUsage(nowMillis: Long, force: Boolean = false) {
+        if (!usageDirty) return
+        if (!force && nowMillis - lastUsageFlushMillis < USAGE_FLUSH_MILLIS) return
+        writeToDisk(state.value)
+        lastUsageFlushMillis = nowMillis
     }
 
     private fun commit(outcome: RuleOutcome): RuleOutcome {
@@ -362,7 +350,13 @@ class CybercafeStore(context: Context) {
 
     private fun persist(value: CybercafeState) {
         mutableState.value = value
+        mutablePolicyRevision.value = mutablePolicyRevision.value + 1
+        writeToDisk(value)
+    }
+
+    private fun writeToDisk(value: CybercafeState) {
         preferences.edit().putString(KEY_STATE, encodeState(value)).apply()
+        usageDirty = false
     }
 
     private fun newVoucherCode(): String {
@@ -373,6 +367,7 @@ class CybercafeStore(context: Context) {
 
     private companion object {
         const val KEY_STATE = "state"
+        const val USAGE_FLUSH_MILLIS = 15_000L
         val random = SecureRandom()
     }
 }
