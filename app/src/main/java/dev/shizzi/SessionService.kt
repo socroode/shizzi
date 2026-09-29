@@ -94,8 +94,7 @@ class SessionService : Service() {
                 // portal sessions are keyed by the client's IPv4 identity, and a
                 // client with routed IPv6 would log in on one family and be
                 // refused on the other.
-                val cybercafe = (application as App).cybercafeStore.state.value
-                val ipv4Only = cybercafe.accounts.isNotEmpty() || cybercafe.remoteAdmin.enabled
+                val ipv4Only = (application as App).cybercafeStore.state.value.accounts.isNotEmpty()
                 if (ipv4Only) SessionLog.info("cybercafe mode: hotspot IPv4-only")
                 runCatching { controller.start(settings.isLogging, settings.vpnMode, ipv4Only) }
             }
@@ -140,8 +139,6 @@ class SessionService : Service() {
             var pushedEpoch = Long.MIN_VALUE
             var lastPushMillis = 0L
             var pendingResults = emptyList<PortalClaimResult>()
-            var pendingAdminResults = emptyList<AdminCommandResult>()
-            val handledAdminCommandIds = mutableSetOf<String>()
 
             while (internalState.value.status == UiStatus.CONNECTED) {
                 val now = System.currentTimeMillis()
@@ -188,15 +185,6 @@ class SessionService : Service() {
                             }
                     }
 
-                    val freshAdminCommands = snapshot.adminCommands.filter {
-                        handledAdminCommandIds.add(it.id)
-                    }
-                    if (freshAdminCommands.isNotEmpty()) {
-                        pendingAdminResults = pendingAdminResults + freshAdminCommands.map {
-                            processRemoteAdminCommand(it, store, now)
-                        }
-                    }
-
                     publishLiveSessions(snapshot, store.state.value, rates, now)
                 }
 
@@ -204,7 +192,6 @@ class SessionService : Service() {
                 val due = revision != pushedRevision ||
                     ledger.epoch != pushedEpoch ||
                     pendingResults.isNotEmpty() ||
-                    pendingAdminResults.isNotEmpty() ||
                     now - lastPushMillis >= CYBERCAFE_RESYNC_MS
                 var pushFailed = false
                 if (due) {
@@ -214,13 +201,11 @@ class SessionService : Service() {
                             ledger.epoch,
                             ledger.markers(),
                             pendingResults,
-                            pendingAdminResults,
                         )
                         pushedRevision = revision
                         pushedEpoch = ledger.epoch
                         lastPushMillis = now
                         pendingResults = emptyList()
-                        pendingAdminResults = emptyList()
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (failure: Throwable) {

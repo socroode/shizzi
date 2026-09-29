@@ -115,6 +115,68 @@ class CybercafeModelTest {
     }
 
     @Test
+    fun rollbackReadsSchema4WithoutLosingHotspotOrAdminData() {
+        val raw = """
+            {
+              "schemaVersion":4,
+              "portal":{
+                "title":"TEKOMOPAO WIFI1",
+                "message":"Bienvenue",
+                "html":"<html><body>{{CONTENT}}</body></html>"
+              },
+              "remoteAdmin":{
+                "enabled":true,
+                "username":"admin-test",
+                "passwordSalt":"salt-admin",
+                "passwordHash":"hash-admin",
+                "downloadBps":1000000,
+                "uploadBps":1000000
+              },
+              "offers":[{
+                "id":"eco-20","name":"Eco+ 20 Go","kind":"DATA",
+                "downloadBps":4000000,"uploadBps":2000000,
+                "quotaBytes":20000000000,"durationDays":30,"priceXpf":1500
+              }],
+              "accounts":[{
+                "number":"22113344","name":"TAIANA","pinSalt":"salt","pinHash":"hash",
+                "enabled":true,"dataBalanceBytes":12345678901,
+                "dataValidUntilMillis":9999999999999,"dataDownloadBps":4000000,
+                "dataUploadBps":2000000,"unlimitedUntilMillis":0,
+                "unlimitedDownloadBps":0,"unlimitedUploadBps":0,
+                "unlimitedPlanName":"","totalUpBytes":12345,"totalDownBytes":67890,
+                "createdAtMillis":1
+              }],
+              "vouchers":[{
+                "code":"ABCDEFGH23","offerId":"eco-20","createdAtMillis":2,
+                "enabled":true,"redeemedByAccount":"","redeemedAtMillis":0,
+                "snapshotVersion":1,"snapshotName":"Eco+ 20 Go","snapshotKind":"DATA",
+                "snapshotDownloadBps":4000000,"snapshotUploadBps":2000000,
+                "snapshotQuotaBytes":20000000000,"snapshotDurationDays":30,
+                "snapshotPriceXpf":1500
+              }],
+              "devices":[{
+                "deviceKey":"aa:bb","accountNumber":"22113344",
+                "ip":"192.168.243.20","mac":"aa:bb","lastSeenMillis":5
+              }]
+            }
+        """.trimIndent()
+
+        val first = decodeCybercafeState(raw)
+        val second = decodeCybercafeState(encodeCybercafeState(first))
+
+        assertEquals(4, second.schemaVersion)
+        assertEquals("TEKOMOPAO WIFI1", second.portal.title)
+        assertEquals("<html><body>{{CONTENT}}</body></html>", second.portal.html)
+        assertEquals(12_345_678_901L, second.accounts.getValue("22113344").dataBalanceBytes)
+        assertEquals(80_235L, second.accounts.getValue("22113344").totalUpBytes + second.accounts.getValue("22113344").totalDownBytes)
+        assertTrue(second.vouchers.containsKey("ABCDEFGH23"))
+        assertTrue(second.devices.containsKey("aa:bb"))
+        assertTrue(second.remoteAdmin.enabled)
+        assertEquals("admin-test", second.remoteAdmin.username)
+        assertEquals("hash-admin", second.remoteAdmin.passwordHash)
+    }
+
+    @Test
     fun remoteAdminRoundTripsWithoutChangingAccounts() {
         val salt = "admin-salt"
         val state = CybercafeState(
