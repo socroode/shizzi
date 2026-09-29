@@ -139,6 +139,8 @@ class SessionService : Service() {
             var pushedEpoch = Long.MIN_VALUE
             var lastPushMillis = 0L
             var pendingResults = emptyList<PortalClaimResult>()
+            var pendingAdminResults = emptyList<AdminCommandResult>()
+            val handledAdminCommandIds = mutableSetOf<String>()
 
             while (internalState.value.status == UiStatus.CONNECTED) {
                 val now = System.currentTimeMillis()
@@ -185,6 +187,15 @@ class SessionService : Service() {
                             }
                     }
 
+                    val freshAdminCommands = snapshot.adminCommands.filter {
+                        handledAdminCommandIds.add(it.id)
+                    }
+                    if (freshAdminCommands.isNotEmpty()) {
+                        pendingAdminResults = pendingAdminResults + freshAdminCommands.map {
+                            processRemoteAdminCommand(it, store, now)
+                        }
+                    }
+
                     publishLiveSessions(snapshot, store.state.value, rates, now)
                 }
 
@@ -192,6 +203,7 @@ class SessionService : Service() {
                 val due = revision != pushedRevision ||
                     ledger.epoch != pushedEpoch ||
                     pendingResults.isNotEmpty() ||
+                    pendingAdminResults.isNotEmpty() ||
                     now - lastPushMillis >= CYBERCAFE_RESYNC_MS
                 var pushFailed = false
                 if (due) {
@@ -201,11 +213,13 @@ class SessionService : Service() {
                             ledger.epoch,
                             ledger.markers(),
                             pendingResults,
+                            pendingAdminResults,
                         )
                         pushedRevision = revision
                         pushedEpoch = ledger.epoch
                         lastPushMillis = now
                         pendingResults = emptyList()
+                        pendingAdminResults = emptyList()
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (failure: Throwable) {

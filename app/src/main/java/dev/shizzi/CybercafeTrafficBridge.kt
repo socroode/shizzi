@@ -62,6 +62,21 @@ data class LivePortalRechargeClaim(
     val claimedAtMillis: Long,
 )
 
+data class LiveAdminCommand(
+    val id: String,
+    val ip: String,
+    val action: String,
+    val paramsJson: String,
+    val createdAtMillis: Long,
+)
+
+data class AdminCommandResult(
+    val id: String,
+    val success: Boolean,
+    val message: String,
+    val payloadJson: String = "",
+)
+
 data class LiveTrafficSnapshot(
     val epoch: Long = 0L,
     val accountUsage: List<LiveAccountUsage> = emptyList(),
@@ -69,6 +84,7 @@ data class LiveTrafficSnapshot(
     val attribution: AttributionDiagnostics = AttributionDiagnostics(),
     val portalAuthorizations: List<LivePortalAuthorization> = emptyList(),
     val portalRechargeClaims: List<LivePortalRechargeClaim> = emptyList(),
+    val adminCommands: List<LiveAdminCommand> = emptyList(),
 )
 
 fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
@@ -141,6 +157,26 @@ fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
         }
     }.orEmpty()
 
+    val adminCommands = root.optJSONArray("adminCommands")?.let { array ->
+        buildList {
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                val id = item.optString("id")
+                val action = item.optString("action")
+                if (id.isBlank() || action.isBlank()) continue
+                add(
+                    LiveAdminCommand(
+                        id = id,
+                        ip = item.optString("ip"),
+                        action = action,
+                        paramsJson = item.optJSONObject("params")?.toString() ?: "{}",
+                        createdAtMillis = item.optLong("createdAtMillis"),
+                    ),
+                )
+            }
+        }
+    }.orEmpty()
+
     val usage = root.optJSONArray("accountUsage")?.let { array ->
         buildList {
             for (index in 0 until array.length()) {
@@ -185,6 +221,7 @@ fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
         ),
         portalAuthorizations = authorizations,
         portalRechargeClaims = claims,
+        adminCommands = adminCommands,
     )
 }
 
@@ -192,8 +229,79 @@ fun CybercafeState.toPortalConfigJson(
     epoch: Long = 0L,
     markers: Map<String, AccountMarker> = emptyMap(),
     claimResults: List<PortalClaimResult> = emptyList(),
+    adminResults: List<AdminCommandResult> = emptyList(),
 ): String =
     JSONObject().apply {
+        put("admin", JSONObject().apply {
+            put("enabled", remoteAdmin.enabled)
+            put("username", remoteAdmin.username)
+            put("passwordSalt", remoteAdmin.passwordSalt)
+            put("passwordHash", remoteAdmin.passwordHash)
+            put("downloadBps", remoteAdmin.downloadBps.coerceAtLeast(1_000_000L))
+            put("uploadBps", remoteAdmin.uploadBps.coerceAtLeast(1_000_000L))
+        })
+        put("adminState", JSONObject().apply {
+            put("schemaVersion", schemaVersion)
+            put("routerName", portal.title)
+            put("portal", JSONObject().apply {
+                put("title", this@toPortalConfigJson.portal.title)
+                put("message", this@toPortalConfigJson.portal.message)
+                put("html", this@toPortalConfigJson.portal.html)
+            })
+            put("accounts", JSONArray().apply {
+                accounts.values.sortedBy(PrepaidAccount::number).forEach { account ->
+                    put(JSONObject().apply {
+                        put("number", account.number)
+                        put("name", account.name)
+                        put("enabled", account.enabled)
+                        put("dataBalanceBytes", account.dataBalanceBytes)
+                        put("dataValidUntilMillis", account.dataValidUntilMillis)
+                        put("dataDownloadBps", account.dataDownloadBps)
+                        put("dataUploadBps", account.dataUploadBps)
+                        put("unlimitedUntilMillis", account.unlimitedUntilMillis)
+                        put("unlimitedDownloadBps", account.unlimitedDownloadBps)
+                        put("unlimitedUploadBps", account.unlimitedUploadBps)
+                        put("unlimitedPlanName", account.unlimitedPlanName)
+                        put("totalUpBytes", account.totalUpBytes)
+                        put("totalDownBytes", account.totalDownBytes)
+                    })
+                }
+            })
+            put("offers", JSONArray().apply {
+                offers.values.sortedBy(Offer::name).forEach { offer ->
+                    put(JSONObject().apply {
+                        put("id", offer.id)
+                        put("name", offer.name)
+                        put("kind", offer.kind.name)
+                        put("downloadBps", offer.downloadBps)
+                        put("uploadBps", offer.uploadBps)
+                        put("quotaBytes", offer.quotaBytes)
+                        put("durationDays", offer.durationDays)
+                        put("priceXpf", offer.priceXpf)
+                    })
+                }
+            })
+            put("vouchers", JSONArray().apply {
+                vouchers.values.sortedByDescending(Voucher::createdAtMillis).forEach { voucher ->
+                    put(JSONObject().apply {
+                        put("code", voucher.code)
+                        put("offerId", voucher.offerId)
+                        put("createdAtMillis", voucher.createdAtMillis)
+                        put("enabled", voucher.enabled)
+                        put("redeemedByAccount", voucher.redeemedByAccount)
+                        put("redeemedAtMillis", voucher.redeemedAtMillis)
+                        put("snapshotVersion", voucher.snapshotVersion)
+                        put("snapshotName", voucher.snapshotName)
+                        put("snapshotKind", voucher.snapshotKind.name)
+                        put("snapshotDownloadBps", voucher.snapshotDownloadBps)
+                        put("snapshotUploadBps", voucher.snapshotUploadBps)
+                        put("snapshotQuotaBytes", voucher.snapshotQuotaBytes)
+                        put("snapshotDurationDays", voucher.snapshotDurationDays)
+                        put("snapshotPriceXpf", voucher.snapshotPriceXpf)
+                    })
+                }
+            })
+        })
         put("title", portal.title)
         put("message", portal.message)
         put("html", portal.html)
@@ -242,6 +350,23 @@ fun CybercafeState.toPortalConfigJson(
                 }
             },
         )
+        put(
+            "adminResults",
+            JSONArray().apply {
+                adminResults.forEach { result ->
+                    put(JSONObject().apply {
+                        put("id", result.id)
+                        put("success", result.success)
+                        put("message", result.message)
+                        if (result.payloadJson.isNotBlank()) {
+                            put("payload", runCatching { JSONObject(result.payloadJson) }.getOrElse {
+                                runCatching { JSONArray(result.payloadJson) }.getOrElse { result.payloadJson }
+                            })
+                        }
+                    })
+                }
+            },
+        )
     }.toString()
 
 /**
@@ -261,6 +386,7 @@ suspend fun TetherClient.applyCybercafePolicies(
     epoch: Long,
     markers: Map<String, AccountMarker>,
     claimResults: List<PortalClaimResult>,
+    adminResults: List<AdminCommandResult> = emptyList(),
 ) {
     val portalRequired = state.accounts.isNotEmpty()
 
@@ -268,6 +394,9 @@ suspend fun TetherClient.applyCybercafePolicies(
     setDefaultClientTrafficPolicy(0L, 0L, 0L, false)
     // Fail closed on identity before the portal switches on, never after.
     if (portalRequired) setRequireClientAttribution(true)
-    setPortalConfig(portalRequired, state.toPortalConfigJson(epoch, markers, claimResults))
+    setPortalConfig(
+        portalRequired,
+        state.toPortalConfigJson(epoch, markers, claimResults, adminResults),
+    )
     if (!portalRequired) setRequireClientAttribution(false)
 }

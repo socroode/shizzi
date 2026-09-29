@@ -165,6 +165,13 @@ type TrafficManager struct {
 	portalRechargeClaims []PortalRechargeClaim
 	portalClaimResults   map[string]PortalClaimResult
 	accountUsage         map[string]*accountUsage
+
+	adminConfig     remoteAdminConfig
+	adminState      json.RawMessage
+	adminSessions   map[string]*adminSession
+	adminChallenges map[string]adminChallenge
+	adminCommands   []AdminCommand
+	adminResults    map[string]AdminCommandResult
 }
 
 func newTrafficManager() *TrafficManager {
@@ -185,6 +192,9 @@ func newTrafficManager() *TrafficManager {
 		portalAuthorized:         make(map[string]*PortalAuthorization),
 		accountUsage:             make(map[string]*accountUsage),
 		portalClaimResults:       make(map[string]PortalClaimResult),
+		adminSessions:            make(map[string]*adminSession),
+		adminChallenges:          make(map[string]adminChallenge),
+		adminResults:             make(map[string]AdminCommandResult),
 	}
 }
 
@@ -327,7 +337,9 @@ func (m *TrafficManager) flowAllowed(ip string) bool {
 }
 
 func (m *TrafficManager) allowedLocked(ip string, nowMillis int64) bool {
-	if m.portalRequired && !m.portalAuthorizedLocked(ip, nowMillis) {
+	if m.portalRequired &&
+		!m.portalAuthorizedLocked(ip, nowMillis) &&
+		!m.adminAuthorizedLocked(ip) {
 		return false
 	}
 	globalUsed := m.totalUpBytes + m.totalDownBytes
@@ -387,7 +399,9 @@ func (m *TrafficManager) waitAllowedWithPortalBypass(
 	client := m.clientLocked(ip)
 	client.LastSeen = now
 	if m.portalRequired {
-		if authorization := m.portalAuthorized[ip]; authorization != nil {
+		if m.adminAuthorizedLocked(ip) {
+			client.setRates(m.adminConfig.DownloadBps, m.adminConfig.UploadBps)
+		} else if authorization := m.portalAuthorized[ip]; authorization != nil {
 			account := m.portalAccounts[authorization.AccountNumber]
 			client.setRates(account.downloadBps(nowMillis), account.uploadBps(nowMillis))
 		}
@@ -514,6 +528,7 @@ type trafficStatsSnapshot struct {
 	PortalAuthorizations     []PortalAuthorizationStatus `json:"portalAuthorizations,omitempty"`
 	PortalRechargeClaims     []PortalRechargeClaim       `json:"portalRechargeClaims,omitempty"`
 	AccountUsage             []accountUsageSnapshot      `json:"accountUsage,omitempty"`
+	AdminCommands            []AdminCommand              `json:"adminCommands,omitempty"`
 }
 
 func (m *TrafficManager) statsJSON() string {
@@ -541,6 +556,7 @@ func (m *TrafficManager) statsJSON() string {
 		PortalAuthorizations:     make([]PortalAuthorizationStatus, 0, len(m.portalAuthorized)),
 		PortalRechargeClaims:     append([]PortalRechargeClaim(nil), m.portalRechargeClaims...),
 		AccountUsage:             make([]accountUsageSnapshot, 0, len(m.accountUsage)),
+		AdminCommands:            append([]AdminCommand(nil), m.adminCommands...),
 	}
 
 	nowMillis := time.Now().UnixMilli()
@@ -617,6 +633,9 @@ func (m *TrafficManager) pruneDepartedLocked(presence clientPresence, now time.T
 		for _, authorization := range m.portalAuthorized {
 			authorization.missingSince = time.Time{}
 		}
+		for _, session := range m.adminSessions {
+			session.missingSince = time.Time{}
+		}
 		return
 	}
 	for ip, authorization := range m.portalAuthorized {
@@ -630,6 +649,19 @@ func (m *TrafficManager) pruneDepartedLocked(presence clientPresence, now time.T
 		}
 		if now.Sub(authorization.missingSince) >= departedClientGrace {
 			delete(m.portalAuthorized, ip)
+		}
+	}
+	for token, session := range m.adminSessions {
+		if _, present := presence.clients[session.IP]; present {
+			session.missingSince = time.Time{}
+			continue
+		}
+		if session.missingSince.IsZero() {
+			session.missingSince = now
+			continue
+		}
+		if now.Sub(session.missingSince) >= departedClientGrace {
+			delete(m.adminSessions, token)
 		}
 	}
 }

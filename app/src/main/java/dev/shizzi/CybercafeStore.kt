@@ -320,6 +320,52 @@ class CybercafeStore(context: Context) {
     }
 
     @Synchronized
+    fun setRemoteAdmin(
+        enabled: Boolean,
+        usernameRaw: String,
+        passwordRaw: String,
+    ): RuleOutcome {
+        val current = state.value.remoteAdmin
+        val username = usernameRaw.trim().take(64)
+        if (username.length < 3) {
+            return RuleOutcome(state.value, false, "Identifiant admin trop court.")
+        }
+        if (enabled && current.passwordHash.isBlank() && passwordRaw.isBlank()) {
+            return RuleOutcome(state.value, false, "Définissez d'abord un mot de passe admin.")
+        }
+        if (passwordRaw.isNotBlank() && passwordRaw.length < 8) {
+            return RuleOutcome(state.value, false, "Le mot de passe admin doit contenir au moins 8 caractères.")
+        }
+
+        val updated = if (passwordRaw.isBlank()) {
+            current.copy(
+                enabled = enabled,
+                username = username,
+                downloadBps = 1_000_000L,
+                uploadBps = 1_000_000L,
+            )
+        } else {
+            val salt = CybercafeSecurity.newSalt()
+            current.copy(
+                enabled = enabled,
+                username = username,
+                passwordSalt = salt,
+                passwordHash = CybercafeSecurity.hashSecret(salt, passwordRaw),
+                downloadBps = 1_000_000L,
+                uploadBps = 1_000_000L,
+            )
+        }
+
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(remoteAdmin = updated),
+                success = true,
+                message = if (enabled) "Administration distante activée." else "Administration distante désactivée.",
+            ),
+        )
+    }
+
+    @Synchronized
     fun setPortalCustomization(
         titleRaw: String,
         messageRaw: String,
@@ -405,6 +451,14 @@ internal fun encodeCybercafeState(state: CybercafeState): String =
             put("title", state.portal.title)
             put("message", state.portal.message)
             put("html", state.portal.html)
+        })
+        put("remoteAdmin", JSONObject().apply {
+            put("enabled", state.remoteAdmin.enabled)
+            put("username", state.remoteAdmin.username)
+            put("passwordSalt", state.remoteAdmin.passwordSalt)
+            put("passwordHash", state.remoteAdmin.passwordHash)
+            put("downloadBps", state.remoteAdmin.downloadBps)
+            put("uploadBps", state.remoteAdmin.uploadBps)
         })
         put("offers", JSONArray().apply {
             state.offers.values.sortedBy(Offer::id).forEach { offer ->
@@ -563,6 +617,20 @@ internal fun decodeCybercafeState(raw: String?): CybercafeState {
         },
     )
 
+    val remoteAdminObject = root.optJSONObject("remoteAdmin")
+    val remoteAdmin = if (remoteAdminObject == null) {
+        RemoteAdminConfig()
+    } else {
+        RemoteAdminConfig(
+            enabled = remoteAdminObject.optBoolean("enabled", false),
+            username = remoteAdminObject.optString("username", "admin").trim().ifBlank { "admin" }.take(64),
+            passwordSalt = remoteAdminObject.optString("passwordSalt"),
+            passwordHash = remoteAdminObject.optString("passwordHash"),
+            downloadBps = remoteAdminObject.optLong("downloadBps", 1_000_000L).coerceAtLeast(1_000_000L),
+            uploadBps = remoteAdminObject.optLong("uploadBps", 1_000_000L).coerceAtLeast(1_000_000L),
+        )
+    }
+
     val devices = linkedMapOf<String, DeviceBinding>()
     root.optJSONArray("devices")?.forEachObject { item ->
         val key = item.optString("deviceKey").trim().lowercase()
@@ -577,12 +645,13 @@ internal fun decodeCybercafeState(raw: String?): CybercafeState {
     }
 
     return CybercafeState(
-        schemaVersion = 3,
+        schemaVersion = 4,
         offers = if (offers.isEmpty()) defaultOffers() else offers,
         accounts = accounts,
         vouchers = vouchers,
         devices = devices,
         portal = portal,
+        remoteAdmin = remoteAdmin,
     )
 }
 

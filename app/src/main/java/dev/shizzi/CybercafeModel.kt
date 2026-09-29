@@ -96,13 +96,23 @@ data class PortalCustomization(
     val html: String = "",
 )
 
+data class RemoteAdminConfig(
+    val enabled: Boolean = false,
+    val username: String = "admin",
+    val passwordSalt: String = "",
+    val passwordHash: String = "",
+    val downloadBps: Long = 1_000_000L,
+    val uploadBps: Long = 1_000_000L,
+)
+
 data class CybercafeState(
-    val schemaVersion: Int = 3,
+    val schemaVersion: Int = 4,
     val offers: Map<String, Offer> = defaultOffers(),
     val accounts: Map<String, PrepaidAccount> = emptyMap(),
     val vouchers: Map<String, Voucher> = emptyMap(),
     val devices: Map<String, DeviceBinding> = emptyMap(),
     val portal: PortalCustomization = PortalCustomization(),
+    val remoteAdmin: RemoteAdminConfig = RemoteAdminConfig(),
 )
 
 data class RuleOutcome(
@@ -341,11 +351,13 @@ object CybercafeSecurity {
         return bytes.joinToString("") { "%02x".format(it) }
     }
 
-    fun hashPin(salt: String, pin: String): String {
+    fun hashSecret(salt: String, secret: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
-        val bytes = digest.digest((salt + ":" + pin).toByteArray(Charsets.UTF_8))
+        val bytes = digest.digest((salt + ":" + secret).toByteArray(Charsets.UTF_8))
         return bytes.joinToString("") { "%02x".format(it) }
     }
+
+    fun hashPin(salt: String, pin: String): String = hashSecret(salt, pin)
 
     fun verifyPin(account: PrepaidAccount, pin: String): Boolean =
         hashPin(account.pinSalt, pin) == account.pinHash

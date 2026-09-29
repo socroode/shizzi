@@ -2,11 +2,14 @@ package datapath
 
 import (
 	"bufio"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -76,14 +79,54 @@ func (a PortalAccount) uploadBps(nowMillis int64) int64 {
 	return 0
 }
 
+type remoteAdminConfig struct {
+	Enabled      bool   `json:"enabled"`
+	Username     string `json:"username"`
+	PasswordSalt string `json:"passwordSalt"`
+	PasswordHash string `json:"passwordHash"`
+	DownloadBps  int64  `json:"downloadBps"`
+	UploadBps    int64  `json:"uploadBps"`
+}
+
+type AdminCommand struct {
+	ID              string          `json:"id"`
+	IP              string          `json:"ip"`
+	Action          string          `json:"action"`
+	Params          json.RawMessage `json:"params"`
+	CreatedAtMillis int64           `json:"createdAtMillis"`
+}
+
+type AdminCommandResult struct {
+	ID      string          `json:"id"`
+	Success bool            `json:"success"`
+	Message string          `json:"message"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+type adminSession struct {
+	Token          string
+	IP             string
+	LastSeenMillis int64
+	missingSince   time.Time
+}
+
+type adminChallenge struct {
+	Nonce           string
+	Username        string
+	ExpiresAtMillis int64
+}
+
 type portalConfig struct {
-	Title    string          `json:"title"`
-	Message  string          `json:"message"`
-	HTML     string          `json:"html"`
-	Accounts []PortalAccount `json:"accounts"`
+	Title        string               `json:"title"`
+	Message      string               `json:"message"`
+	HTML         string               `json:"html"`
+	Accounts     []PortalAccount      `json:"accounts"`
+	Admin        remoteAdminConfig    `json:"admin"`
+	AdminState   json.RawMessage      `json:"adminState"`
 	// ClaimResults lets Android tell the portal how a voucher claim ended so
 	// the client sees "accepted"/"rejected" instead of a silent drop.
-	ClaimResults []PortalClaimResult `json:"claimResults"`
+	ClaimResults []PortalClaimResult   `json:"claimResults"`
+	AdminResults []AdminCommandResult  `json:"adminResults"`
 }
 
 type PortalClaimResult struct {
@@ -167,6 +210,36 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 		m.portalMessage = "Connectez-vous à votre compte Shizzi."
 	}
 	m.portalHTML = config.HTML
+	credentialsChanged := m.adminConfig.Username != config.Admin.Username ||
+		m.adminConfig.PasswordHash != config.Admin.PasswordHash ||
+		m.adminConfig.Enabled != config.Admin.Enabled
+	m.adminConfig = config.Admin
+	if m.adminConfig.DownloadBps < 1_000_000 {
+		m.adminConfig.DownloadBps = 1_000_000
+	}
+	if m.adminConfig.UploadBps < 1_000_000 {
+		m.adminConfig.UploadBps = 1_000_000
+	}
+	if len(config.AdminState) > 0 {
+		m.adminState = append(json.RawMessage(nil), config.AdminState...)
+	}
+	if credentialsChanged || !m.adminConfig.Enabled {
+		m.adminSessions = make(map[string]*adminSession)
+		m.adminChallenges = make(map[string]adminChallenge)
+	}
+	if m.adminResults == nil {
+		m.adminResults = make(map[string]AdminCommandResult)
+	}
+	for _, result := range config.AdminResults {
+		m.adminResults[result.ID] = result
+		for i := 0; i < len(m.adminCommands); {
+			if m.adminCommands[i].ID == result.ID {
+				m.adminCommands = append(m.adminCommands[:i], m.adminCommands[i+1:]...)
+				continue
+			}
+			i++
+		}
+	}
 	m.portalAccounts = accounts
 	if m.portalClaimResults == nil {
 		m.portalClaimResults = make(map[string]PortalClaimResult)
@@ -207,7 +280,9 @@ func hashPortalPin(salt, pin string) string {
 func (m *TrafficManager) portalRequiredFor(ip string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.portalRequired && !m.portalAuthorizedLocked(ip, time.Now().UnixMilli())
+	return m.portalRequired &&
+		!m.portalAuthorizedLocked(ip, time.Now().UnixMilli()) &&
+		!m.adminAuthorizedLocked(ip)
 }
 
 // remainingDataLocked is the account's live Data balance, shared by all of
@@ -342,6 +417,259 @@ func (m *TrafficManager) revokePortalClient(ip string) {
 	delete(m.portalAuthorized, ip)
 }
 
+
+func randomHex(byteCount int) string {
+	bytes := make([]byte, byteCount)
+	if _, err := rand.Read(bytes); err != nil {
+		sum := sha256.Sum256([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))
+		return hex.EncodeToString(sum[:])
+	}
+	return hex.EncodeToString(bytes)
+}
+
+func (m *TrafficManager) adminAuthorizedLocked(ip string) bool {
+	if !m.adminConfig.Enabled || ip == "" {
+		return false
+	}
+	for _, session := range m.adminSessions {
+		if session.IP == ip {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *TrafficManager) requireAdminTokenLocked(request *http.Request, ip string) (*adminSession, bool) {
+	token := strings.TrimSpace(request.Header.Get("X-Shizzi-Admin-Token"))
+	if token == "" || !m.adminConfig.Enabled {
+		return nil, false
+	}
+	session := m.adminSessions[token]
+	if session == nil || session.IP != ip {
+		return nil, false
+	}
+	session.LastSeenMillis = time.Now().UnixMilli()
+	return session, true
+}
+
+func adminProof(passwordHash, nonce string) string {
+	mac := hmac.New(sha256.New, []byte(passwordHash))
+	_, _ = mac.Write([]byte(nonce))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func writeJSONStatus(conn net.Conn, status string, payload any) {
+	body, _ := json.Marshal(payload)
+	header := fmt.Sprintf(
+		"HTTP/1.1 %s\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
+		status,
+		len(body),
+	)
+	_, _ = conn.Write([]byte(header))
+	_, _ = conn.Write(body)
+}
+
+func (m *TrafficManager) serveAdminAPI(conn net.Conn, request *http.Request, clientIP string) bool {
+	path := request.URL.Path
+	if !strings.HasPrefix(path, "/api/v1/admin/") {
+		return false
+	}
+
+	switch {
+	case request.Method == http.MethodGet && path == "/api/v1/admin/challenge":
+		username := strings.TrimSpace(request.URL.Query().Get("username"))
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if !m.adminConfig.Enabled || m.adminConfig.PasswordHash == "" {
+			writeJSONStatus(conn, "503 Service Unavailable", map[string]any{
+				"ok": false, "message": "Administration distante indisponible.",
+			})
+			return true
+		}
+		nonce := randomHex(24)
+		m.adminChallenges[nonce] = adminChallenge{
+			Nonce: nonce,
+			Username: username,
+			ExpiresAtMillis: time.Now().Add(60 * time.Second).UnixMilli(),
+		}
+		writeJSONStatus(conn, "200 OK", map[string]any{
+			"ok": true,
+			"nonce": nonce,
+			"salt": m.adminConfig.PasswordSalt,
+			"routerName": m.portalTitle,
+		})
+		return true
+
+	case request.Method == http.MethodPost && path == "/api/v1/admin/login":
+		_ = request.ParseForm()
+		username := strings.TrimSpace(request.Form.Get("username"))
+		nonce := strings.TrimSpace(request.Form.Get("nonce"))
+		proof := strings.ToLower(strings.TrimSpace(request.Form.Get("proof")))
+
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		challenge, ok := m.adminChallenges[nonce]
+		delete(m.adminChallenges, nonce)
+		valid := ok &&
+			challenge.ExpiresAtMillis >= time.Now().UnixMilli() &&
+			m.adminConfig.Enabled &&
+			username == m.adminConfig.Username &&
+			challenge.Username == username &&
+			hmac.Equal([]byte(proof), []byte(adminProof(m.adminConfig.PasswordHash, nonce)))
+		if !valid {
+			writeJSONStatus(conn, "401 Unauthorized", map[string]any{
+				"ok": false, "message": "Identifiant ou mot de passe admin incorrect.",
+			})
+			return true
+		}
+		token := randomHex(32)
+		m.adminSessions[token] = &adminSession{
+			Token: token,
+			IP: clientIP,
+			LastSeenMillis: time.Now().UnixMilli(),
+		}
+		writeJSONStatus(conn, "200 OK", map[string]any{
+			"ok": true,
+			"token": token,
+			"routerName": m.portalTitle,
+			"downloadBps": m.adminConfig.DownloadBps,
+			"uploadBps": m.adminConfig.UploadBps,
+		})
+		return true
+
+	case request.Method == http.MethodPost && path == "/api/v1/admin/logout":
+		m.mu.Lock()
+		token := strings.TrimSpace(request.Header.Get("X-Shizzi-Admin-Token"))
+		session, ok := m.requireAdminTokenLocked(request, clientIP)
+		if ok {
+			delete(m.adminSessions, token)
+		}
+		m.mu.Unlock()
+		if session == nil {
+			writeJSONStatus(conn, "401 Unauthorized", map[string]any{"ok": false})
+		} else {
+			writeJSONStatus(conn, "200 OK", map[string]any{"ok": true})
+		}
+		return true
+
+	case request.Method == http.MethodGet && path == "/api/v1/admin/state":
+		m.mu.Lock()
+		_, ok := m.requireAdminTokenLocked(request, clientIP)
+		state := append(json.RawMessage(nil), m.adminState...)
+		routerName := m.portalTitle
+		m.mu.Unlock()
+		if !ok {
+			writeJSONStatus(conn, "401 Unauthorized", map[string]any{"ok": false})
+			return true
+		}
+		if len(state) == 0 {
+			state = json.RawMessage("{}")
+		}
+		var stateValue any
+		_ = json.Unmarshal(state, &stateValue)
+		var trafficValue any
+		_ = json.Unmarshal([]byte(m.statsJSON()), &trafficValue)
+		writeJSONStatus(conn, "200 OK", map[string]any{
+			"ok": true,
+			"routerName": routerName,
+			"state": stateValue,
+			"traffic": trafficValue,
+		})
+		return true
+
+	case request.Method == http.MethodPost && path == "/api/v1/admin/command":
+		m.mu.Lock()
+		_, ok := m.requireAdminTokenLocked(request, clientIP)
+		m.mu.Unlock()
+		if !ok {
+			writeJSONStatus(conn, "401 Unauthorized", map[string]any{"ok": false})
+			return true
+		}
+		body, err := io.ReadAll(io.LimitReader(request.Body, 128*1024))
+		if err != nil {
+			writeJSONStatus(conn, "400 Bad Request", map[string]any{"ok": false})
+			return true
+		}
+		var payload struct {
+			Action string          `json:"action"`
+			Params json.RawMessage `json:"params"`
+		}
+		if json.Unmarshal(body, &payload) != nil {
+			writeJSONStatus(conn, "400 Bad Request", map[string]any{"ok": false, "message": "JSON invalide."})
+			return true
+		}
+		allowed := map[string]bool{
+			"account.create": true,
+			"account.rename": true,
+			"account.pin": true,
+			"account.enable": true,
+			"account.delete": true,
+			"account.disconnect": true,
+			"session.disconnect": true,
+			"offer.upsert": true,
+			"offer.delete": true,
+			"voucher.generate": true,
+			"voucher.enable": true,
+			"portal.set": true,
+			"admin.credentials": true,
+		}
+		if !allowed[payload.Action] {
+			writeJSONStatus(conn, "403 Forbidden", map[string]any{
+				"ok": false, "message": "Commande interdite.",
+			})
+			return true
+		}
+		if len(payload.Params) == 0 {
+			payload.Params = json.RawMessage("{}")
+		}
+		id := randomHex(16)
+		m.mu.Lock()
+		m.adminCommands = append(m.adminCommands, AdminCommand{
+			ID: id,
+			IP: clientIP,
+			Action: payload.Action,
+			Params: payload.Params,
+			CreatedAtMillis: time.Now().UnixMilli(),
+		})
+		m.mu.Unlock()
+		writeJSONStatus(conn, "202 Accepted", map[string]any{"ok": true, "id": id, "pending": true})
+		return true
+
+	case request.Method == http.MethodGet && path == "/api/v1/admin/result":
+		m.mu.Lock()
+		_, ok := m.requireAdminTokenLocked(request, clientIP)
+		id := strings.TrimSpace(request.URL.Query().Get("id"))
+		result, found := m.adminResults[id]
+		if found {
+			delete(m.adminResults, id)
+		}
+		m.mu.Unlock()
+		if !ok {
+			writeJSONStatus(conn, "401 Unauthorized", map[string]any{"ok": false})
+			return true
+		}
+		if !found {
+			writeJSONStatus(conn, "200 OK", map[string]any{"ok": true, "pending": true})
+			return true
+		}
+		var responsePayload any
+		if len(result.Payload) > 0 {
+			_ = json.Unmarshal(result.Payload, &responsePayload)
+		}
+		writeJSONStatus(conn, "200 OK", map[string]any{
+			"ok": true,
+			"pending": false,
+			"success": result.Success,
+			"message": result.Message,
+			"payload": responsePayload,
+		})
+		return true
+	}
+
+	writeJSONStatus(conn, "404 Not Found", map[string]any{"ok": false})
+	return true
+}
+
 func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
@@ -351,6 +679,10 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 		return
 	}
 	defer request.Body.Close()
+
+	if m.serveAdminAPI(conn, request, clientIP) {
+		return
+	}
 
 	path := request.URL.Path
 	switch {
