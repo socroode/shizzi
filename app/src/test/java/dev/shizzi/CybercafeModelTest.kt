@@ -53,11 +53,36 @@ class CybercafeModelTest {
 
         val migrated = decodeCybercafeState(raw)
 
-        assertEquals(3, migrated.schemaVersion)
+        assertEquals(4, migrated.schemaVersion)
         assertEquals("RONIU", migrated.accounts.getValue("1001").name)
         assertTrue(migrated.vouchers.containsKey("SHZ-ABCD-EFGH"))
         assertEquals("Shizzi Hotspot", migrated.portal.title)
         assertEquals("", migrated.portal.html)
+        assertFalse(migrated.remoteAdmin.enabled)
+        assertEquals("admin", migrated.remoteAdmin.username)
+    }
+
+    @Test
+    fun remoteAdminRoundTripsWithoutChangingAccounts() {
+        val salt = "admin-salt"
+        val state = CybercafeState(
+            accounts = mapOf("1001" to account()),
+            remoteAdmin = RemoteAdminConfig(
+                enabled = true,
+                username = "roniu",
+                passwordSalt = salt,
+                passwordHash = CybercafeSecurity.hashSecret(salt, "password123"),
+            ),
+        )
+
+        val decoded = decodeCybercafeState(encodeCybercafeState(state))
+
+        assertTrue(decoded.remoteAdmin.enabled)
+        assertEquals("roniu", decoded.remoteAdmin.username)
+        assertEquals(state.remoteAdmin.passwordHash, decoded.remoteAdmin.passwordHash)
+        assertEquals(1_000_000L, decoded.remoteAdmin.downloadBps)
+        assertEquals(1_000_000L, decoded.remoteAdmin.uploadBps)
+        assertTrue(decoded.accounts.containsKey("1001"))
     }
 
     @Test

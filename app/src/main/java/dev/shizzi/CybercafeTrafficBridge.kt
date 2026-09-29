@@ -243,6 +243,11 @@ fun CybercafeState.toPortalConfigJson(
         put("adminState", JSONObject().apply {
             put("schemaVersion", schemaVersion)
             put("routerName", portal.title)
+            put("remoteAdmin", JSONObject().apply {
+                put("username", remoteAdmin.username)
+                put("downloadBps", remoteAdmin.downloadBps.coerceAtLeast(1_000_000L))
+                put("uploadBps", remoteAdmin.uploadBps.coerceAtLeast(1_000_000L))
+            })
             put("portal", JSONObject().apply {
                 put("title", this@toPortalConfigJson.portal.title)
                 put("message", this@toPortalConfigJson.portal.message)

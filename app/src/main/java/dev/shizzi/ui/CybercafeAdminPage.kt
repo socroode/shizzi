@@ -45,6 +45,7 @@ private enum class AdminTab {
     VOUCHERS,
     DEVICES,
     PORTAL,
+    REMOTE_ADMIN,
 }
 
 @Composable
@@ -71,6 +72,7 @@ fun CybercafeAdminPage(onBack: () -> Unit) {
             TextButton(onClick = { tab = AdminTab.VOUCHERS }) { Text("Vouchers") }
             TextButton(onClick = { tab = AdminTab.DEVICES }) { Text("Devices") }
             TextButton(onClick = { tab = AdminTab.PORTAL }) { Text("Portal") }
+            TextButton(onClick = { tab = AdminTab.REMOTE_ADMIN }) { Text("Admin") }
         }
 
         if (message.isNotBlank()) {
@@ -105,9 +107,78 @@ fun CybercafeAdminPage(onBack: () -> Unit) {
                     state = state,
                     onMessage = { message = it },
                 )
+                AdminTab.REMOTE_ADMIN -> RemoteAdminEditor(
+                    state = state,
+                    onMessage = { message = it },
+                )
             }
             Spacer(Modifier.height(ShizziTheme.spacing.xxxl))
         }
+    }
+}
+
+
+@Composable
+private fun RemoteAdminEditor(
+    state: CybercafeState,
+    onMessage: (String) -> Unit,
+) {
+    val store = App.instance.cybercafeStore
+    val current = state.remoteAdmin
+    var enabled by remember(current.enabled) { mutableStateOf(current.enabled) }
+    var username by remember(current.username) { mutableStateOf(current.username) }
+    var password by remember { mutableStateOf("") }
+
+    SectionTitle("Shizzi Admin à distance")
+    Text(
+        "Permet d'administrer ce routeur depuis n'importe quel téléphone connecté au Wi-Fi. " +
+            "Le démarrage et l'arrêt de Shizzi restent uniquement disponibles sur le téléphone routeur.",
+        color = ShizziTheme.colors.onSurfaceMuted,
+    )
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text("Activer l'accès Admin", modifier = Modifier.weight(1f))
+        Switch(checked = enabled, onCheckedChange = { enabled = it })
+    }
+    OutlinedTextField(
+        value = username,
+        onValueChange = { username = it.take(64) },
+        label = { Text("Identifiant admin") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = password,
+        onValueChange = { password = it },
+        label = {
+            Text(
+                if (current.passwordHash.isBlank()) {
+                    "Mot de passe admin (8 caractères minimum)"
+                } else {
+                    "Nouveau mot de passe (laisser vide pour conserver)"
+                },
+            )
+        },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Text(
+        "Le compte Admin est portable : il n'est lié ni à une IP, ni à une MAC, ni à un téléphone. " +
+            "Une session Admin obtient un accès Internet dédié à 1 Mbps ↓ / 1 Mbps ↑.",
+        color = ShizziTheme.colors.onSurfaceMuted,
+        modifier = Modifier.padding(vertical = ShizziTheme.spacing.sm),
+    )
+    Button(
+        onClick = {
+            val result = store.setRemoteAdmin(enabled, username, password)
+            onMessage(result.message)
+            if (result.success) password = ""
+        },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text("Enregistrer l'accès Admin")
     }
 }
 
