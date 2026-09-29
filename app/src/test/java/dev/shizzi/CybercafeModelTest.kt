@@ -63,6 +63,58 @@ class CybercafeModelTest {
     }
 
     @Test
+    fun version3StateMigratesToRemoteAdminWithoutLosingCurrent041Data() {
+        val raw = """
+            {
+              "schemaVersion":3,
+              "portal":{
+                "title":"TEKOMOPAO WIFI1",
+                "message":"Bienvenue",
+                "html":"<html><body>{{CONTENT}}</body></html>"
+              },
+              "offers":[{
+                "id":"eco-12","name":"Eco 12 Go","kind":"DATA",
+                "downloadBps":2000000,"uploadBps":1000000,
+                "quotaBytes":12000000000,"durationDays":30,"priceXpf":1000
+              }],
+              "accounts":[{
+                "number":"1001","name":"RONIU","pinSalt":"salt","pinHash":"hash",
+                "enabled":true,"dataBalanceBytes":7000000000,
+                "dataValidUntilMillis":987654321,"dataDownloadBps":2000000,
+                "dataUploadBps":1000000,"unlimitedUntilMillis":0,
+                "unlimitedDownloadBps":0,"unlimitedUploadBps":0,
+                "unlimitedPlanName":"","totalUpBytes":123,"totalDownBytes":456,
+                "createdAtMillis":1
+              }],
+              "vouchers":[{
+                "code":"ABCDEFGH23","offerId":"eco-12","createdAtMillis":2,
+                "enabled":true,"redeemedByAccount":"","redeemedAtMillis":0,
+                "snapshotVersion":1,"snapshotName":"Eco 12 Go","snapshotKind":"DATA",
+                "snapshotDownloadBps":2000000,"snapshotUploadBps":1000000,
+                "snapshotQuotaBytes":12000000000,"snapshotDurationDays":30,
+                "snapshotPriceXpf":1000
+              }],
+              "devices":[{
+                "deviceKey":"aa:bb","accountNumber":"1001",
+                "ip":"192.168.243.2","mac":"aa:bb","lastSeenMillis":5
+              }]
+            }
+        """.trimIndent()
+
+        val migrated = decodeCybercafeState(raw)
+
+        assertEquals(4, migrated.schemaVersion)
+        assertEquals("TEKOMOPAO WIFI1", migrated.portal.title)
+        assertEquals("<html><body>{{CONTENT}}</body></html>", migrated.portal.html)
+        assertEquals(7_000_000_000L, migrated.accounts.getValue("1001").dataBalanceBytes)
+        assertEquals(579L, migrated.accounts.getValue("1001").totalUpBytes + migrated.accounts.getValue("1001").totalDownBytes)
+        assertTrue(migrated.vouchers.containsKey("ABCDEFGH23"))
+        assertTrue(migrated.devices.containsKey("aa:bb"))
+        assertFalse(migrated.remoteAdmin.enabled)
+        assertEquals("admin", migrated.remoteAdmin.username)
+    }
+
+    @Test
     fun remoteAdminRoundTripsWithoutChangingAccounts() {
         val salt = "admin-salt"
         val state = CybercafeState(
