@@ -94,7 +94,8 @@ class SessionService : Service() {
                 // portal sessions are keyed by the client's IPv4 identity, and a
                 // client with routed IPv6 would log in on one family and be
                 // refused on the other.
-                val ipv4Only = (application as App).cybercafeStore.state.value.accounts.isNotEmpty()
+                val cybercafe = (application as App).cybercafeStore.state.value
+                val ipv4Only = cybercafe.accounts.isNotEmpty() || cybercafe.remoteAdmin.enabled
                 if (ipv4Only) SessionLog.info("cybercafe mode: hotspot IPv4-only")
                 runCatching { controller.start(settings.isLogging, settings.vpnMode, ipv4Only) }
             }

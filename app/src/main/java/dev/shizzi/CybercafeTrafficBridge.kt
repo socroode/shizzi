@@ -393,7 +393,7 @@ suspend fun TetherClient.applyCybercafePolicies(
     claimResults: List<PortalClaimResult>,
     adminResults: List<AdminCommandResult> = emptyList(),
 ) {
-    val portalRequired = state.accounts.isNotEmpty()
+    val portalRequired = state.accounts.isNotEmpty() || state.remoteAdmin.enabled
 
     setGlobalTrafficPolicy(0L, 0L, 0L)
     setDefaultClientTrafficPolicy(0L, 0L, 0L, false)
