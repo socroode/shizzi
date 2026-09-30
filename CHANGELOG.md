@@ -5,6 +5,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.3.3] - 2026-09-29
+
+### Fixed
+
+- Shizzi+ now hides the previous account portal while a Media page is loading, preventing stale TEKOMOPAO/account content from remaining visible.
+- Shizzi+ tracks the requested portal origin so stale WebView callbacks cannot replace the current Media navigation state.
+- Main-frame network and HTTP failures now show the actual Shizzi+/Media error instead of leaving an old page visible.
+- Shizzi Media landing page no longer scans every configured library before rendering; category scanning happens only when opened.
+
+
 ## [0.4.3.2] - 2026-09-29
 
 ### Fixed
