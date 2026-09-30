@@ -57,14 +57,18 @@ object MediaIndex {
      * folder from forcing an unnecessary rescan of Series and Music.
      */
     @Synchronized
-    fun rebuild(context: Context, kind: MediaKind? = null): MediaIndexSummary {
+    fun rebuild(
+        context: Context,
+        kind: MediaKind? = null,
+        onProgress: ((MediaCatalog.ScanProgress) -> Unit)? = null,
+    ): MediaIndexSummary {
         val preserved = if (kind == null) {
             emptyList()
         } else {
             load(context).entries.filterNot { it.kind == kind }
         }
 
-        val scanned = MediaCatalog.scan(context, kind)
+        val scanned = MediaCatalog.scan(context, kind, onProgress)
         val merged = (preserved + scanned)
             .sortedWith(compareBy<MediaEntry>({ it.kind.ordinal }, { it.relativePath.lowercase() }))
 
