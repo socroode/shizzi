@@ -77,7 +77,7 @@ private fun MediaScreen(onBack: () -> Unit) {
     }
 
     val urls = remember(revision, enabled) {
-        if (enabled) MediaNetwork.portalUrls() else emptyList()
+        if (enabled) MediaNetwork.portalUrls(context) else emptyList()
     }
 
     Scaffold(
