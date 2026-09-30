@@ -169,7 +169,7 @@ class MediaHttpServer(private val context: Context) {
             entries.joinToString("") { entry ->
                 val size = if (entry.size > 0) humanBytes(entry.size) else "taille inconnue"
                 """
-                <a class="item" href="/play?id=${entry.id}">
+                <a class="item" href="play?id=${entry.id}">
                   <strong>${escape(entry.name)}</strong>
                   <span>${escape(entry.relativePath)} · $size</span>
                 </a>
@@ -179,7 +179,7 @@ class MediaHttpServer(private val context: Context) {
         val html = page(
             kind.label,
             """
-            <a class="back" href="/">← Shizzi Media</a>
+            <a class="back" href="./">← Shizzi Media</a>
             <h1>${escape(kind.label)}</h1>
             <div class="list">$rows</div>
             """.trimIndent(),
@@ -201,7 +201,7 @@ class MediaHttpServer(private val context: Context) {
         val html = page(
             entry.name,
             """
-            <a class="back" href="/library?kind=${entry.kind.key}">← ${escape(entry.kind.label)}</a>
+            <a class="back" href="library?kind=${entry.kind.key}">← ${escape(entry.kind.label)}</a>
             <h1>${escape(entry.name)}</h1>
             <p>${escape(entry.relativePath)}</p>
             <div class="player">$mediaTag</div>
