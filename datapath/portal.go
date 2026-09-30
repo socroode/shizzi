@@ -336,6 +336,18 @@ func (m *TrafficManager) portalAuthorizedLocked(ip string, nowMillis int64) bool
 	return m.accountHasInternetLocked(account, nowMillis)
 }
 
+func (m *TrafficManager) mediaAccountAuthenticated(ip string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	authorization := m.portalAuthorized[ip]
+	if authorization == nil {
+		return false
+	}
+	account, ok := m.portalAccounts[authorization.AccountNumber]
+	return ok && account.Enabled
+}
+
 func (m *TrafficManager) submitPortalAccountLogin(
 	ip, rawNumber, pin string,
 ) (bool, string) {
@@ -699,6 +711,10 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	path := request.URL.Path
 	switch {
 	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		(path == "/media" || strings.HasPrefix(path, "/media/")) &&
+		!m.mediaAccountAuthenticated(clientIP):
+		m.writeMediaLoginRequired(conn, request.Method)
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
 		path == "/speedtest":
 		_, _ = io.WriteString(
 			conn,
@@ -950,6 +966,38 @@ button:disabled{opacity:.5;cursor:wait}
 	body := []byte(page)
 	header := fmt.Sprintf(
 		"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+		len(body),
+	)
+	_, _ = conn.Write([]byte(header))
+	if method != http.MethodHead {
+		_, _ = conn.Write(body)
+	}
+}
+
+func (m *TrafficManager) writeMediaLoginRequired(conn net.Conn, method string) {
+	body := []byte(`<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Compte Shizzi requis</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,system-ui,-apple-system,sans-serif}
+body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#07111f;color:#f8fafc}
+main{width:min(100%,460px);padding:24px;border:1px solid #ffffff18;border-radius:24px;background:#0f172a}
+h1{margin:0 0 10px}.note{color:#94a3b8;line-height:1.5}
+a{display:block;margin-top:18px;padding:14px 16px;border-radius:14px;text-align:center;text-decoration:none;background:linear-gradient(90deg,#38bdf8,#34d399);color:#06202a;font-weight:900}
+</style></head><body><main>
+<h1>Compte Shizzi requis</h1>
+<p class="note">Shizzi Media est réservé aux utilisateurs connectés à un compte Shizzi sur cet appareil.</p>
+<a href="/">Ouvrir ma connexion compte</a>
+</main></body></html>`)
+	header := fmt.Sprintf(
+		"HTTP/1.1 401 Unauthorized
+Content-Type: text/html; charset=utf-8
+Content-Length: %d
+Cache-Control: no-store
+Connection: close
+
+",
 		len(body),
 	)
 	_, _ = conn.Write([]byte(header))
@@ -1274,11 +1322,13 @@ func (m *TrafficManager) writePortalHTML(
 		)
 	}
 
+	if status.Authenticated {
 	content += `<section class="media-link"><div class="eyebrow">MEDIA LOCAL</div>
 <strong>Shizzi Media</strong>
 <p>Films, séries et musique disponibles dans le navigateur sur ce Wi-Fi, sans utiliser Internet ni le quota Data.</p>
 <a class="media-button" href="/media/">Ouvrir Shizzi Media</a>
 <div class="media-note">Compatible PC, téléphone et tablette · lecture locale</div></section>`
+	}
 
 	content += `<section class="speedtest-link"><div class="eyebrow">RÉSEAU LOCAL</div>
 <strong>Test de débit Shizzi</strong>
