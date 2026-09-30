@@ -32,6 +32,8 @@ class MainActivity : Activity() {
     private lateinit var connectivityManager: ConnectivityManager
     private var boundWifiNetwork: Network? = null
     private var mediaBaseUrl: String? = null
+    private var requestedBaseUrl: String? = null
+    private var requestedLabel: String = "Shizzi"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -122,13 +124,18 @@ class MainActivity : Activity() {
                     url: String?,
                     favicon: android.graphics.Bitmap?,
                 ) {
+                    if (!belongsToRequestedTarget(url)) return
+                    this@MainActivity.webView.visibility = View.INVISIBLE
                     this@MainActivity.progress.visibility = View.VISIBLE
-                    this@MainActivity.status.visibility = View.GONE
+                    this@MainActivity.status.visibility = View.VISIBLE
+                    this@MainActivity.status.text = "Ouverture de $requestedLabel…"
                 }
 
                 override fun onPageFinished(view: WebView?, url: String?) {
+                    if (!belongsToRequestedTarget(url)) return
                     this@MainActivity.progress.visibility = View.GONE
                     this@MainActivity.status.visibility = View.GONE
+                    this@MainActivity.webView.visibility = View.VISIBLE
                 }
 
                 override fun onReceivedError(
@@ -136,14 +143,26 @@ class MainActivity : Activity() {
                     request: WebResourceRequest?,
                     error: WebResourceError?,
                 ) {
-                    if (request?.isForMainFrame == true) {
-                        this@MainActivity.progress.visibility = View.GONE
-                        this@MainActivity.status.visibility = View.VISIBLE
-                        val detail = error?.description?.toString()?.trim().orEmpty()
-                        this@MainActivity.status.text =
-                            "Shizzi n'est pas joignable sur ce Wi-Fi." +
-                                if (detail.isBlank()) "" else "\n$detail"
-                    }
+                    if (request?.isForMainFrame != true) return
+                    if (!belongsToRequestedTarget(request.url?.toString())) return
+                    showNavigationFailure(
+                        "Impossible d'ouvrir $requestedLabel",
+                        error?.description?.toString().orEmpty(),
+                    )
+                }
+
+                override fun onReceivedHttpError(
+                    view: WebView?,
+                    request: WebResourceRequest?,
+                    errorResponse: android.webkit.WebResourceResponse?,
+                ) {
+                    if (request?.isForMainFrame != true) return
+                    if (!belongsToRequestedTarget(request.url?.toString())) return
+                    val code = errorResponse?.statusCode ?: 0
+                    showNavigationFailure(
+                        "Erreur HTTP pour $requestedLabel",
+                        if (code > 0) "Code HTTP $code" else "",
+                    )
                 }
             }
         }
@@ -273,7 +292,7 @@ class MainActivity : Activity() {
     private fun openMedia() {
         val known = mediaBaseUrl
         if (known != null) {
-            openPortal(known)
+            openPortal(known, "Shizzi Media")
             return
         }
         status.visibility = View.VISIBLE
@@ -298,27 +317,47 @@ class MainActivity : Activity() {
                     status.visibility = View.VISIBLE
                     status.text = "Serveur Media indisponible. Vérifie qu'il est activé sur le téléphone Shizzi."
                 } else {
-                    openPortal(found)
+                    openPortal(found, "Shizzi Media")
                 }
             }
         }
     }
 
-    private fun openPortal(url: String) {
+    private fun openPortal(url: String, label: String = "Shizzi") {
+        requestedBaseUrl = url.substringBeforeLast('/', url) + "/"
+        requestedLabel = label
+
         menu.visibility = View.GONE
-        webView.visibility = View.VISIBLE
+        webView.stopLoading()
+        webView.visibility = View.INVISIBLE
         progress.visibility = View.VISIBLE
         status.visibility = View.VISIBLE
-        status.text = "Connexion au Wi-Fi Shizzi…"
+        status.text = "Ouverture de $label…"
 
         if (!bindPortalToWifi()) {
-            progress.visibility = View.GONE
-            status.text = "Aucun réseau Wi-Fi Shizzi utilisable n'a été trouvé."
+            showNavigationFailure(
+                "Aucun réseau Wi-Fi Shizzi utilisable n'a été trouvé.",
+                "",
+            )
             return
         }
 
-        webView.stopLoading()
+        webView.clearHistory()
         webView.loadUrl(url)
+    }
+
+    private fun belongsToRequestedTarget(url: String?): Boolean {
+        val target = requestedBaseUrl ?: return false
+        val candidate = url ?: return false
+        return candidate == target.removeSuffix("/") ||
+            candidate.startsWith(target)
+    }
+
+    private fun showNavigationFailure(title: String, detail: String) {
+        progress.visibility = View.GONE
+        webView.visibility = View.INVISIBLE
+        status.visibility = View.VISIBLE
+        status.text = title + detail.trim().takeIf { it.isNotBlank() }?.let { "\n$it" }.orEmpty()
     }
 
     override fun onResume() {
@@ -338,6 +377,8 @@ class MainActivity : Activity() {
                 webView.visibility = View.GONE
                 progress.visibility = View.GONE
                 status.visibility = View.GONE
+                requestedBaseUrl = null
+                requestedLabel = "Shizzi"
                 menu.visibility = View.VISIBLE
                 releaseWifiBinding()
                 detectMedia()
