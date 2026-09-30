@@ -7,6 +7,7 @@ import java.io.BufferedOutputStream
 import java.io.FileInputStream
 import java.io.IOException
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
@@ -28,7 +29,10 @@ class MediaHttpServer(private val context: Context) {
         if (!running.compareAndSet(false, true)) return true
 
         val socket = try {
-            ServerSocket(MediaNetwork.PORT).apply { reuseAddress = true }
+            ServerSocket().apply {
+                reuseAddress = true
+                bind(InetSocketAddress(InetAddress.getLoopbackAddress(), MediaNetwork.PORT))
+            }
         } catch (failure: IOException) {
             running.set(false)
             Log.e(TAG, "media server failed to bind port ${MediaNetwork.PORT}", failure)
@@ -37,7 +41,7 @@ class MediaHttpServer(private val context: Context) {
 
         serverSocket = socket
         acceptExecutor.execute { acceptLoop(socket) }
-        Log.i(TAG, "media server listening on port ${MediaNetwork.PORT}")
+        Log.i(TAG, "media server listening on loopback port ${MediaNetwork.PORT}")
         return true
     }
 
@@ -142,7 +146,7 @@ class MediaHttpServer(private val context: Context) {
         // Keep the landing page instant. Large libraries are scanned only when
         // the user opens a category, never just to render three counters.
         val cards = MediaKind.entries.joinToString("") { kind ->
-            "<a class=\"card\" href=\"/library?kind=${kind.key}\"><strong>${escape(kind.label)}</strong><span>Ouvrir</span></a>"
+            "<a class=\"card\" href=\"library?kind=${kind.key}\"><strong>${escape(kind.label)}</strong><span>Ouvrir</span></a>"
         }
         val html = page(
             "Shizzi Media",
@@ -194,7 +198,7 @@ class MediaHttpServer(private val context: Context) {
             return
         }
         val mediaTag = if (entry.kind == MediaKind.MUSIC) {
-            "<audio controls autoplay preload=\"metadata\" src=\"/stream?id=${entry.id}\"></audio>"
+            "<audio controls autoplay preload=\"metadata\" src=\"stream?id=${entry.id}\"></audio>"
         } else {
             "<video controls autoplay playsinline preload=\"metadata\" src=\"/stream?id=${entry.id}\"></video>"
         }
@@ -310,9 +314,7 @@ class MediaHttpServer(private val context: Context) {
     }
 
     private fun isAllowedRemote(address: InetAddress): Boolean =
-        address.isLoopbackAddress || address.isSiteLocalAddress || address.isLinkLocalAddress ||
-            address.hostAddress.orEmpty().lowercase(Locale.US).startsWith("fd") ||
-            address.hostAddress.orEmpty().lowercase(Locale.US).startsWith("fc")
+        address.isLoopbackAddress
 
     private fun parseQuery(query: String): Map<String, String> =
         query.split('&')
