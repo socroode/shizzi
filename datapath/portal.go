@@ -18,6 +18,7 @@ import (
 
 const portalIP = "192.0.2.1"
 const clientAppBridgeAddress = "127.0.0.1:8091"
+const mediaBridgeAddress = "127.0.0.1:8088"
 
 type PortalAccount struct {
 	Number                         string `json:"number"`
@@ -698,6 +699,15 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	path := request.URL.Path
 	switch {
 	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		path == "/media":
+		_, _ = io.WriteString(
+			conn,
+			"HTTP/1.1 302 Found\r\nLocation: /media/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+		)
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		strings.HasPrefix(path, "/media/"):
+		m.serveMediaProxy(conn, request)
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
 		path == "/download/shizzi-plus.apk":
 		m.serveClientAppDownload(conn, request.Method)
 	case request.Method == http.MethodPost && path == "/login":
@@ -720,6 +730,82 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	default:
 		m.writePortalHTML(conn, clientIP, "", false)
 	}
+}
+
+func mediaProxyTarget(path, rawQuery string) string {
+	target := strings.TrimPrefix(path, "/media")
+	if target == "" {
+		target = "/"
+	}
+	if !strings.HasPrefix(target, "/") {
+		target = "/" + target
+	}
+	if rawQuery != "" {
+		target += "?" + rawQuery
+	}
+	return target
+}
+
+func (m *TrafficManager) serveMediaProxy(conn net.Conn, request *http.Request) {
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		body := []byte("GET/HEAD uniquement")
+		header := fmt.Sprintf(
+			"HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
+			len(body),
+		)
+		_, _ = conn.Write([]byte(header))
+		_, _ = conn.Write(body)
+		return
+	}
+
+	// Films can remain open for hours. Override the captive portal's short
+	// request deadline while this connection is carrying local media bytes.
+	deadline := time.Now().Add(6 * time.Hour)
+	_ = conn.SetDeadline(deadline)
+
+	local, err := net.DialTimeout("tcp", mediaBridgeAddress, 3*time.Second)
+	if err != nil {
+		body := []byte("Shizzi Media indisponible. Active le serveur Media sur le routeur.")
+		header := fmt.Sprintf(
+			"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+			len(body),
+		)
+		_, _ = conn.Write([]byte(header))
+		if request.Method != http.MethodHead {
+			_, _ = conn.Write(body)
+		}
+		return
+	}
+	defer local.Close()
+	_ = local.SetDeadline(deadline)
+
+	target := mediaProxyTarget(request.URL.Path, request.URL.RawQuery)
+	if _, err := fmt.Fprintf(
+		local,
+		"%s %s HTTP/1.1\r\nHost: localhost\r\n",
+		request.Method,
+		target,
+	); err != nil {
+		return
+	}
+
+	// Range is essential for seeking in large films. Forward the small set of
+	// browser headers useful to the local media server and close each upstream
+	// response explicitly.
+	for _, name := range []string{"Range", "If-Range", "Accept", "User-Agent"} {
+		if value := request.Header.Get(name); value != "" {
+			if _, err := fmt.Fprintf(local, "%s: %s\r\n", name, value); err != nil {
+				return
+			}
+		}
+	}
+	if _, err := io.WriteString(local, "Connection: close\r\n\r\n"); err != nil {
+		return
+	}
+
+	// Copy the raw upstream response so 206/Content-Range/Content-Length and
+	// MIME headers reach Chrome, Edge, Firefox, Safari and Android unchanged.
+	_, _ = io.Copy(conn, local)
 }
 
 func (m *TrafficManager) serveClientAppDownload(conn net.Conn, method string) {
@@ -962,6 +1048,12 @@ func (m *TrafficManager) writePortalHTML(
 		)
 	}
 
+	content += `<section class="media-link"><div class="eyebrow">MEDIA LOCAL</div>
+<strong>Shizzi Media</strong>
+<p>Films, séries et musique disponibles dans le navigateur sur ce Wi-Fi, sans utiliser Internet ni le quota Data.</p>
+<a class="media-button" href="/media/">Ouvrir Shizzi Media</a>
+<div class="media-note">Compatible PC, téléphone et tablette · lecture locale</div></section>`
+
 	if clientApp.Available {
 		shortSHA := clientApp.SHA256
 		if len(shortSHA) > 12 {
@@ -1002,10 +1094,10 @@ input{border:1px solid #334155;background:#0b1220;color:#fff;outline:none}button
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.grid>div{padding:12px;border-radius:14px;background:#ffffff08}.grid strong{display:block;margin-top:4px;font-size:13px}
 .status-link{display:block;text-align:center;margin-top:16px;color:#7dd3fc;text-decoration:none;font-weight:700;font-size:13px}
 button.secondary{background:#1e293b;color:#e2e8f0}
-.app-download{margin-top:20px;padding:16px;border:1px solid #22d3ee55;border-radius:18px;background:#071b2a}
-.app-download>strong{display:block;margin:5px 0 6px;font-size:18px}.app-download p{margin:0 0 12px;color:#cbd5e1;font-size:13px;line-height:1.45}
-.download-button{display:block;width:100%%;border-radius:14px;padding:14px 16px;text-align:center;text-decoration:none;background:linear-gradient(90deg,#38bdf8,#34d399);color:#06202a;font-weight:900}
-.app-meta,.app-note{margin-top:9px;color:#94a3b8;font-size:11px;word-break:break-word}
+.media-link,.app-download{margin-top:20px;padding:16px;border:1px solid #22d3ee55;border-radius:18px;background:#071b2a}
+.media-link>strong,.app-download>strong{display:block;margin:5px 0 6px;font-size:18px}.media-link p,.app-download p{margin:0 0 12px;color:#cbd5e1;font-size:13px;line-height:1.45}
+.media-button,.download-button{display:block;width:100%%;border-radius:14px;padding:14px 16px;text-align:center;text-decoration:none;background:linear-gradient(90deg,#38bdf8,#34d399);color:#06202a;font-weight:900}
+.media-note,.app-meta,.app-note{margin-top:9px;color:#94a3b8;font-size:11px;word-break:break-word}
 </style></head><body><main class="card"><h1>%s</h1><p class="sub">%s</p>%s%s</main></body></html>`,
 		refresh,
 		html.EscapeString(title),
