@@ -77,8 +77,8 @@ jobs:
           VERSION_NAME=$(echo "$BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
           VERSION_CODE=$(echo "$BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
           test "$PACKAGE" = "dev.shizzi"
-          test "$VERSION_NAME" = "0.4.3.3"
-          test "$VERSION_CODE" = "13"
+          test "$VERSION_NAME" = "0.4.3.4"
+          test "$VERSION_CODE" = "14"
           EXPECTED_NORM=$(echo "$EXPECTED_CERT_SHA256" | tr -d ': ')
           ACTUAL=$("$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]')
           ACTUAL_NORM=$(echo "$ACTUAL" | tr -d ': ')
@@ -87,16 +87,16 @@ jobs:
       - name: Prepare artifact
         run: |
           mkdir -p release-output
-          cp app/build/outputs/apk/release/app-release.apk release-output/Shizzi-Hotspot-0.4.3.3-Media-Test.apk
+          cp app/build/outputs/apk/release/app-release.apk release-output/Shizzi-Hotspot-0.4.3.4-Media-Test.apk
           cd release-output
-          sha256sum Shizzi-Hotspot-0.4.3.3-Media-Test.apk > SHA256SUMS.txt
+          sha256sum Shizzi-Hotspot-0.4.3.4-Media-Test.apk > SHA256SUMS.txt
 
       - name: Upload signed Media test APK
         uses: actions/upload-artifact@v5
         with:
           name: Shizzi-0.4.3-media-test
           path: |
-            release-output/Shizzi-Hotspot-0.4.3.3-Media-Test.apk
+            release-output/Shizzi-Hotspot-0.4.3.4-Media-Test.apk
             release-output/SHA256SUMS.txt
           if-no-files-found: error
 
