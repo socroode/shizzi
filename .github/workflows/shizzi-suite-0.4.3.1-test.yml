@@ -122,7 +122,7 @@ jobs:
         with:
           name: Shizzi-0.4.3.8-suite-test
           path: |
-            suite-output/Shizzi-Hotspot-0.4.3.8-Media-Test.apk
+            suite-output/Shizzi-Hotspot-0.4.3.8-Portal-Test.apk
             suite-output/Shizzi-Plus-0.2.3-Test.apk
             suite-output/Shizzi-Admin-0.2.3-Test.apk
             suite-output/SHA256SUMS.txt
