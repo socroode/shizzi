@@ -162,7 +162,7 @@ class MediaHttpServer(private val context: Context) {
             writeText(output, 400, "Bad Request", "text/plain; charset=utf-8", "Catégorie invalide", headOnly)
             return
         }
-        val entries = MediaCatalog.scan(context, kind)
+        val entries = MediaIndex.entries(context, kind)
         val rows = if (entries.isEmpty()) {
             "<p>Aucun fichier trouvé. Choisis le dossier ${escape(kind.label)} dans Shizzi.</p>"
         } else {
@@ -188,7 +188,7 @@ class MediaHttpServer(private val context: Context) {
     }
 
     private fun servePlayer(output: BufferedOutputStream, id: String?, headOnly: Boolean) {
-        val entry = MediaCatalog.scan(context).firstOrNull { it.id == id }
+        val entry = MediaIndex.find(context, id)
         if (entry == null) {
             writeText(output, 404, "Not Found", "text/plain; charset=utf-8", "Fichier introuvable", headOnly)
             return
@@ -217,7 +217,7 @@ class MediaHttpServer(private val context: Context) {
         rangeHeader: String?,
         headOnly: Boolean,
     ) {
-        val entry = MediaCatalog.scan(context).firstOrNull { it.id == id }
+        val entry = MediaIndex.find(context, id)
         if (entry == null || entry.size <= 0L) {
             writeText(output, 404, "Not Found", "text/plain; charset=utf-8", "Fichier introuvable", headOnly)
             return
