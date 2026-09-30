@@ -132,7 +132,7 @@ class MainActivity : Activity() {
                     view: View?,
                     callback: CustomViewCallback?,
                 ) {
-                    if (view == null || fullscreenView != null) {
+                    if (view == null || this@MainActivity.fullscreenView != null) {
                         callback?.onCustomViewHidden()
                         return
                     }
