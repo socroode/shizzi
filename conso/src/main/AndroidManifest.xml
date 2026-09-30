@@ -7,7 +7,7 @@
 
     <application
         android:allowBackup="false"
-        android:label="Shizzi Conso"
+        android:label="Shizzi+"
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
