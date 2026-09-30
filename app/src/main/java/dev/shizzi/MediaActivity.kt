@@ -224,7 +224,7 @@ private fun MediaScreen(onBack: () -> Unit) {
 
             Spacer(Modifier.height(8.dp))
             Text(
-                "Test v0.4.3 : Films, Séries et Musique, lecture HTTP locale avec avance/retour. Les codecs réellement lisibles dépendent aussi du navigateur de l’appareil client.",
+                "Media indexé : scanne la médiathèque après avoir choisi ou modifié un dossier. La lecture reste locale avec avance/retour.",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
