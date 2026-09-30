@@ -154,9 +154,13 @@ object MediaNetwork {
      */
     fun portalUrls(context: Context): List<String> {
         val manager = context.getSystemService(ConnectivityManager::class.java)
-        val upstreamInterfaces = runCatching {
+        val upstreamAddresses = runCatching {
             manager.allNetworks
-                .mapNotNull { network -> manager.getLinkProperties(network)?.interfaceName }
+                .flatMap { network ->
+                    manager.getLinkProperties(network)?.linkAddresses.orEmpty()
+                }
+                .mapNotNull { link -> link.address as? Inet4Address }
+                .mapNotNull { address -> address.hostAddress }
                 .toSet()
         }.getOrDefault(emptySet())
 
@@ -168,7 +172,6 @@ object MediaNetwork {
             .filter { iface -> runCatching { iface.isUp }.getOrDefault(false) }
             .filterNot { iface ->
                 iface.isLoopback ||
-                    iface.name in upstreamInterfaces ||
                     iface.name.startsWith("testtun") ||
                     iface.name.startsWith("tun")
             }
@@ -178,7 +181,8 @@ object MediaNetwork {
                     .filter { address ->
                         address.isSiteLocalAddress &&
                             !address.isLoopbackAddress &&
-                            !address.isLinkLocalAddress
+                            !address.isLinkLocalAddress &&
+                            address.hostAddress !in upstreamAddresses
                     }
                     .forEach(addresses::add)
             }
