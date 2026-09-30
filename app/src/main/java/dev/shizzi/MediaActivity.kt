@@ -3,6 +3,8 @@ package dev.shizzi
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -38,6 +40,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.shizzi.ui.theme.ShizziTheme
+import kotlin.concurrent.thread
 
 class MediaActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -57,6 +60,37 @@ private fun MediaScreen(onBack: () -> Unit) {
     var revision by remember { mutableIntStateOf(0) }
     var pendingKind by remember { mutableStateOf<MediaKind?>(null) }
     var enabled by remember(revision) { mutableStateOf(MediaPrefs.isEnabled(context)) }
+    var scanning by remember { mutableStateOf(false) }
+    var scanMessage by remember { mutableStateOf<String?>(null) }
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
+
+    fun startScan(kind: MediaKind? = null) {
+        if (scanning) return
+        scanning = true
+        scanMessage = if (kind == null) {
+            "Scan de la médiathèque en cours…"
+        } else {
+            "Scan ${kind.label} en cours…"
+        }
+
+        thread(name = "shizzi-media-index") {
+            val result = runCatching {
+                MediaIndex.rebuild(context.applicationContext, kind)
+            }
+            mainHandler.post {
+                scanning = false
+                result.onSuccess { summary ->
+                    scanMessage =
+                        "Index Media : ${summary.total} fichier(s) " +
+                            "(${summary.films} films, ${summary.series} séries, ${summary.music} musique)"
+                    revision++
+                    if (enabled) MediaServerService.restart(context)
+                }.onFailure { failure ->
+                    scanMessage = "Échec du scan Media : ${failure.message ?: failure.javaClass.simpleName}"
+                }
+            }
+        }
+    }
 
     val treeLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
@@ -72,7 +106,7 @@ private fun MediaScreen(onBack: () -> Unit) {
             }
             MediaPrefs.setTreeUri(context, kind, uri)
             revision++
-            if (enabled) MediaServerService.restart(context)
+            startScan(kind)
         }
     }
 
@@ -144,11 +178,27 @@ private fun MediaScreen(onBack: () -> Unit) {
                     },
                     onClear = {
                         MediaPrefs.setTreeUri(context, kind, null)
+                        MediaIndex.remove(context.applicationContext, kind)
+                        scanMessage = "${kind.label} retiré de l’index Media."
                         revision++
                         if (enabled) MediaServerService.restart(context)
                     },
                 )
             }
+
+            Button(
+                enabled = !scanning && MediaPrefs.hasAnyLibrary(context),
+                onClick = { startScan(null) },
+            ) {
+                Text(if (scanning) "Scan en cours…" else "Scanner la médiathèque")
+            }
+
+            val summary = remember(revision) { MediaIndex.summary(context.applicationContext) }
+            Text(
+                scanMessage ?: "Index : ${summary.total} fichier(s) — " +
+                    "${summary.films} films, ${summary.series} séries, ${summary.music} musique",
+                style = MaterialTheme.typography.bodySmall,
+            )
 
             HorizontalDivider()
 
