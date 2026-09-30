@@ -3,11 +3,13 @@ package dev.shizzi
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Uri
+import android.provider.DocumentsContract
 import android.webkit.MimeTypeMap
 import androidx.documentfile.provider.DocumentFile
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.security.MessageDigest
+import java.util.ArrayDeque
 import java.util.Collections
 
 enum class MediaKind(val key: String, val label: String) {
@@ -76,51 +78,196 @@ object MediaPrefs {
 }
 
 object MediaCatalog {
-    fun scan(context: Context, kind: MediaKind? = null): List<MediaEntry> {
+    data class ScanProgress(
+        val kind: MediaKind,
+        val filesFound: Int,
+        val directoriesVisited: Int,
+        val currentPath: String,
+    )
+
+    fun scan(
+        context: Context,
+        kind: MediaKind? = null,
+        onProgress: ((ScanProgress) -> Unit)? = null,
+    ): List<MediaEntry> {
         val kinds = kind?.let(::listOf) ?: MediaKind.entries
-        return kinds.flatMap { scanKind(context, it) }
+        return kinds.flatMap { scanKind(context, it, onProgress) }
             .sortedWith(compareBy<MediaEntry>({ it.kind.ordinal }, { it.relativePath.lowercase() }))
     }
 
-    private fun scanKind(context: Context, kind: MediaKind): List<MediaEntry> {
+    private fun scanKind(
+        context: Context,
+        kind: MediaKind,
+        onProgress: ((ScanProgress) -> Unit)?,
+    ): List<MediaEntry> {
         val tree = MediaPrefs.treeUri(context, kind) ?: return emptyList()
-        val root = runCatching { DocumentFile.fromTreeUri(context, tree) }.getOrNull() ?: return emptyList()
-        if (!root.exists() || !root.isDirectory) return emptyList()
 
-        val out = mutableListOf<MediaEntry>()
-        walk(kind, root, "", out)
-        return out
+        // Fast path: query children in batches through Android's DocumentsProvider.
+        // This avoids DocumentFile performing several binder calls for every file.
+        val fast = runCatching {
+            scanWithDocumentsContract(context, kind, tree, onProgress)
+        }.getOrNull()
+        if (fast != null) return fast
+
+        // Compatibility fallback for unusual OEM/cloud providers.
+        return scanWithDocumentFile(context, kind, tree, onProgress)
     }
 
-    private fun walk(
-        kind: MediaKind,
-        directory: DocumentFile,
-        prefix: String,
-        out: MutableList<MediaEntry>,
-    ) {
-        val children = runCatching { directory.listFiles().toList() }.getOrDefault(emptyList())
-            .sortedBy { it.name.orEmpty().lowercase() }
+    private data class PendingDirectory(
+        val documentId: String,
+        val relativePath: String,
+    )
 
-        children.forEach { child ->
-            val name = child.name.orEmpty().ifBlank { "Sans titre" }
-            val relative = if (prefix.isBlank()) name else "$prefix/$name"
-            when {
-                child.isDirectory -> walk(kind, child, relative, out)
-                child.isFile -> {
-                    val mime = child.type ?: inferMime(name)
-                    if (!kind.accepts(name, mime)) return@forEach
+    private fun scanWithDocumentsContract(
+        context: Context,
+        kind: MediaKind,
+        treeUri: Uri,
+        onProgress: ((ScanProgress) -> Unit)?,
+    ): List<MediaEntry> {
+        val resolver = context.contentResolver
+        val rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
+        val pending = ArrayDeque<PendingDirectory>()
+        pending.add(PendingDirectory(rootDocumentId, ""))
+
+        val out = mutableListOf<MediaEntry>()
+        var directoriesVisited = 0
+        var lastProgressFiles = -1
+
+        val projection = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_SIZE,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+        )
+
+        while (pending.isNotEmpty()) {
+            val directory = pending.removeFirst()
+            directoriesVisited++
+
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+                treeUri,
+                directory.documentId,
+            )
+
+            resolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+                val idIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val mimeIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                val sizeIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+
+                while (cursor.moveToNext()) {
+                    val documentId = cursor.getString(idIndex) ?: continue
+                    val name = cursor.getString(nameIndex)?.ifBlank { "Sans titre" } ?: "Sans titre"
+                    val mime = cursor.getString(mimeIndex)
+                    val relative = if (directory.relativePath.isBlank()) {
+                        name
+                    } else {
+                        "${directory.relativePath}/$name"
+                    }
+
+                    if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                        pending.add(PendingDirectory(documentId, relative))
+                        continue
+                    }
+
+                    if (!kind.accepts(name, mime)) continue
+
+                    val documentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
+                    val size = if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) cursor.getLong(sizeIndex) else 0L
                     out += MediaEntry(
-                        id = stableId(child.uri),
+                        id = stableId(documentUri),
                         kind = kind,
                         name = name,
                         relativePath = relative,
-                        uri = child.uri,
-                        mimeType = mime ?: "application/octet-stream",
-                        size = child.length(),
+                        uri = documentUri,
+                        mimeType = mime ?: inferMime(name) ?: "application/octet-stream",
+                        size = size,
                     )
+
+                    if (out.size == 1 || out.size - lastProgressFiles >= PROGRESS_STEP) {
+                        lastProgressFiles = out.size
+                        onProgress?.invoke(
+                            ScanProgress(
+                                kind = kind,
+                                filesFound = out.size,
+                                directoriesVisited = directoriesVisited,
+                                currentPath = directory.relativePath,
+                            ),
+                        )
+                    }
+                }
+            } ?: throw IllegalStateException("DocumentsProvider query returned null")
+        }
+
+        onProgress?.invoke(
+            ScanProgress(
+                kind = kind,
+                filesFound = out.size,
+                directoriesVisited = directoriesVisited,
+                currentPath = "",
+            ),
+        )
+        return out
+    }
+
+    private fun scanWithDocumentFile(
+        context: Context,
+        kind: MediaKind,
+        treeUri: Uri,
+        onProgress: ((ScanProgress) -> Unit)?,
+    ): List<MediaEntry> {
+        val root = DocumentFile.fromTreeUri(context, treeUri) ?: return emptyList()
+        if (!root.exists() || !root.isDirectory) return emptyList()
+
+        val out = mutableListOf<MediaEntry>()
+        var directoriesVisited = 0
+
+        fun walk(directory: DocumentFile, prefix: String) {
+            directoriesVisited++
+            val children = runCatching { directory.listFiles().toList() }.getOrDefault(emptyList())
+            children.forEach { child ->
+                val name = child.name.orEmpty().ifBlank { "Sans titre" }
+                val relative = if (prefix.isBlank()) name else "$prefix/$name"
+                when {
+                    child.isDirectory -> walk(child, relative)
+                    child.isFile -> {
+                        val mime = child.type ?: inferMime(name)
+                        if (!kind.accepts(name, mime)) return@forEach
+                        out += MediaEntry(
+                            id = stableId(child.uri),
+                            kind = kind,
+                            name = name,
+                            relativePath = relative,
+                            uri = child.uri,
+                            mimeType = mime ?: "application/octet-stream",
+                            size = child.length(),
+                        )
+                        if (out.size == 1 || out.size % PROGRESS_STEP == 0) {
+                            onProgress?.invoke(
+                                ScanProgress(
+                                    kind = kind,
+                                    filesFound = out.size,
+                                    directoriesVisited = directoriesVisited,
+                                    currentPath = prefix,
+                                ),
+                            )
+                        }
+                    }
                 }
             }
         }
+
+        walk(root, "")
+        onProgress?.invoke(
+            ScanProgress(
+                kind = kind,
+                filesFound = out.size,
+                directoriesVisited = directoriesVisited,
+                currentPath = "",
+            ),
+        )
+        return out
     }
 
     private fun stableId(uri: Uri): String {
@@ -140,6 +287,8 @@ object MediaCatalog {
                 else -> null
             }
     }
+
+    private const val PROGRESS_STEP = 10
 }
 
 object MediaNetwork {
