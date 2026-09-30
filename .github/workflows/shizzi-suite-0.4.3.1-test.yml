@@ -103,13 +103,9 @@ jobs:
           verify_apk conso/build/outputs/apk/release/conso-release.apk dev.shizzi.conso 0.2.3 7
           verify_apk admin/build/outputs/apk/release/admin-release.apk dev.shizzi.admin 0.2.3 5
 
-          EMBEDDED=app/src/main/assets/shizzi/Shizzi-Plus-0.2.3.apk
-          test -f "$EMBEDDED"
-          echo "ed2efcb660ff6379958958a2361f65b2a29d2feacd8ba0e5f0373a1894eff605  $EMBEDDED" | sha256sum -c -
-          verify_apk "$EMBEDDED" dev.shizzi.conso 0.2.3 7
-
-          unzip -p app/build/outputs/apk/release/app-release.apk             assets/shizzi/Shizzi-Plus-0.2.3.apk > /tmp/shizzi-plus-embedded.apk
-          cmp "$EMBEDDED" /tmp/shizzi-plus-embedded.apk
+          unzip -p app/build/outputs/apk/release/app-release.apk             assets/shizzi/Shizzi-Plus.apk > /tmp/shizzi-plus-embedded.apk
+          test -s /tmp/shizzi-plus-embedded.apk
+          cmp conso/build/outputs/apk/release/conso-release.apk /tmp/shizzi-plus-embedded.apk
           verify_apk /tmp/shizzi-plus-embedded.apk dev.shizzi.conso 0.2.3 7
 
       - name: Prepare suite artifacts
