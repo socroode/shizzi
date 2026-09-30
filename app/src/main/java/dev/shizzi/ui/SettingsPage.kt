@@ -158,6 +158,19 @@ private fun settingsSections(
         )
     },
 
+    SettingsSectionSpec("Media") {
+        val context = LocalContext.current
+        SettingsAction(
+            label = SettingsText(
+                title = "Shizzi Media",
+                subtitle = "Films, séries et musique sur le réseau local",
+            ),
+            onClick = {
+                context.startActivity(Intent(context, MediaActivity::class.java))
+            },
+        )
+    },
+
     SettingsSectionSpec("Developer") {
         DeveloperSection(isLogging = state.isLogging, actions = actions)
     },
