@@ -75,7 +75,13 @@ private fun MediaScreen(onBack: () -> Unit) {
 
         thread(name = "shizzi-media-index") {
             val result = runCatching {
-                MediaIndex.rebuild(context.applicationContext, kind)
+                MediaIndex.rebuild(context.applicationContext, kind) { progress ->
+                    mainHandler.post {
+                        scanMessage =
+                            "Scan ${progress.kind.label} : ${progress.filesFound} fichier(s), " +
+                                "${progress.directoriesVisited} dossier(s)"
+                    }
+                }
             }
             mainHandler.post {
                 scanning = false
