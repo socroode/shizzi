@@ -145,7 +145,7 @@ object MediaIndex {
         }
 
         val destination = indexFile(context)
-        val temporary = File(destination.parentFile, "$FILE_NAME.tmp")
+        val temporary = File(context.filesDir, "$FILE_NAME.tmp")
         FileOutputStream(temporary).use { output ->
             output.write(root.toString().toByteArray(Charsets.UTF_8))
             output.fd.sync()
