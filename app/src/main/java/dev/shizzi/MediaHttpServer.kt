@@ -139,9 +139,10 @@ class MediaHttpServer(private val context: Context) {
     }
 
     private fun serveHome(output: BufferedOutputStream, headOnly: Boolean) {
+        // Keep the landing page instant. Large libraries are scanned only when
+        // the user opens a category, never just to render three counters.
         val cards = MediaKind.entries.joinToString("") { kind ->
-            val count = MediaCatalog.scan(context, kind).size
-            "<a class=\"card\" href=\"/library?kind=${kind.key}\"><strong>${escape(kind.label)}</strong><span>$count fichier(s)</span></a>"
+            "<a class=\"card\" href=\"/library?kind=${kind.key}\"><strong>${escape(kind.label)}</strong><span>Ouvrir</span></a>"
         }
         val html = page(
             "Shizzi Media",
