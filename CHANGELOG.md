@@ -5,6 +5,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.3.4] - 2026-09-29
+
+### Added
+
+- Persistent local Media index stored on the router phone.
+- Background indexing when a Films, Séries or Musique folder is selected or changed.
+- Manual **Scanner la médiathèque** control with indexed item counts.
+
+### Fixed
+
+- Opening Films, Séries, a player page or a stream no longer recursively scans SAF storage on the client request path.
+- Media pages now read the persistent index, so category opening is immediate after indexing.
+- Updating one Media folder rebuilds only that category and preserves the other indexed categories.
+
+
 ## [0.4.3.3] - 2026-09-29
 
 ### Fixed
