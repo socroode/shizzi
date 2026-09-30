@@ -17,6 +17,7 @@ import (
 )
 
 const portalIP = "192.0.2.1"
+const clientAppBridgeAddress = "127.0.0.1:8091"
 
 type PortalAccount struct {
 	Number                         string `json:"number"`
@@ -721,6 +722,51 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	}
 }
 
+func (m *TrafficManager) serveClientAppDownload(conn net.Conn, method string) {
+	m.mu.Lock()
+	app := m.portalClientApp
+	m.mu.Unlock()
+
+	if !app.Available {
+		body := []byte("Shizzi+ indisponible")
+		header := fmt.Sprintf(
+			"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
+			len(body),
+		)
+		_, _ = conn.Write([]byte(header))
+		if method != http.MethodHead {
+			_, _ = conn.Write(body)
+		}
+		return
+	}
+
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Minute))
+	local, err := net.DialTimeout("tcp", clientAppBridgeAddress, 3*time.Second)
+	if err != nil {
+		body := []byte("Téléchargement Shizzi+ momentanément indisponible.")
+		header := fmt.Sprintf(
+			"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+			len(body),
+		)
+		_, _ = conn.Write([]byte(header))
+		if method != http.MethodHead {
+			_, _ = conn.Write(body)
+		}
+		return
+	}
+	defer local.Close()
+	_ = local.SetDeadline(time.Now().Add(2 * time.Minute))
+
+	request := fmt.Sprintf(
+		"%s /shizzi-plus.apk HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+		method,
+	)
+	if _, err := io.WriteString(local, request); err != nil {
+		return
+	}
+	_, _ = io.Copy(conn, local)
+}
+
 func (m *TrafficManager) writePortalStatusJSON(conn net.Conn, ip string) {
 	payload := m.portalStatus(ip)
 	body, _ := json.Marshal(payload)
@@ -832,6 +878,7 @@ func (m *TrafficManager) writePortalHTML(
 	title := m.portalTitle
 	subtitle := m.portalMessage
 	custom := m.portalHTML
+	clientApp := m.portalClientApp
 	m.mu.Unlock()
 
 	alert := ""
@@ -915,6 +962,25 @@ func (m *TrafficManager) writePortalHTML(
 		)
 	}
 
+	if clientApp.Available {
+		shortSHA := clientApp.SHA256
+		if len(shortSHA) > 12 {
+			shortSHA = shortSHA[:12]
+		}
+		content += fmt.Sprintf(
+			`<section class="app-download"><div class="eyebrow">APPLICATION CLIENT</div>
+<strong>Shizzi+ %s</strong>
+<p>Installez Shizzi+ directement depuis ce Wi-Fi. Aucun Internet ni quota Data n'est utilisé.</p>
+<a class="download-button" href="/download/shizzi-plus.apk" download="%s">Télécharger Shizzi+</a>
+<div class="app-meta">%s · SHA-256 %s…</div>
+<div class="app-note">Android peut demander d'autoriser l'installation depuis cette source.</div></section>`,
+			html.EscapeString(clientApp.Version),
+			html.EscapeString(clientApp.FileName),
+			html.EscapeString(formatPortalFileSize(clientApp.SizeBytes)),
+			html.EscapeString(shortSHA),
+		)
+	}
+
 	refresh := ""
 	if status.ClaimPending {
 		refresh = `<meta http-equiv="refresh" content="3;url=/">`
@@ -936,6 +1002,10 @@ input{border:1px solid #334155;background:#0b1220;color:#fff;outline:none}button
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.grid>div{padding:12px;border-radius:14px;background:#ffffff08}.grid strong{display:block;margin-top:4px;font-size:13px}
 .status-link{display:block;text-align:center;margin-top:16px;color:#7dd3fc;text-decoration:none;font-weight:700;font-size:13px}
 button.secondary{background:#1e293b;color:#e2e8f0}
+.app-download{margin-top:20px;padding:16px;border:1px solid #22d3ee55;border-radius:18px;background:#071b2a}
+.app-download>strong{display:block;margin:5px 0 6px;font-size:18px}.app-download p{margin:0 0 12px;color:#cbd5e1;font-size:13px;line-height:1.45}
+.download-button{display:block;width:100%%;border-radius:14px;padding:14px 16px;text-align:center;text-decoration:none;background:linear-gradient(90deg,#38bdf8,#34d399);color:#06202a;font-weight:900}
+.app-meta,.app-note{margin-top:9px;color:#94a3b8;font-size:11px;word-break:break-word}
 </style></head><body><main class="card"><h1>%s</h1><p class="sub">%s</p>%s%s</main></body></html>`,
 		refresh,
 		html.EscapeString(title),
@@ -1083,6 +1153,16 @@ func writeHTTP(conn net.Conn, contentType string, body []byte) {
 	)
 	_, _ = conn.Write([]byte(header))
 	_, _ = conn.Write(body)
+}
+
+func formatPortalFileSize(value int64) string {
+	if value <= 0 {
+		return "taille inconnue"
+	}
+	if value < 1_000_000 {
+		return fmt.Sprintf("%.0f Ko", float64(value)/1_000.0)
+	}
+	return fmt.Sprintf("%.1f Mo", float64(value)/1_000_000.0)
 }
 
 func formatPortalBytes(value int64) string {
