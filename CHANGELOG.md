@@ -5,6 +5,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.3.7] - 2026-09-30
+
+### Added
+
+- Local browser access to Shizzi Media at /media/ through the captive portal.
+- Portal Media card available to PCs, phones and tablets connected to the Shizzi Wi-Fi.
+- Local reverse proxy preserves HTTP Range/206 responses so browser seeking works for large videos.
+- Regression test for /media/ route rewriting.
+
+### Changed
+
+- Media catalog links are relative, so the same Films/Séries/Musique interface works both directly in Shizzi+ and behind the captive-portal /media/ path.
+- Shizzi+ remains 0.2.3 and Shizzi Admin remains 0.2.3; only Shizzi Hotspot changes in this test build.
+
+
 ## [0.4.3.6] - 2026-09-30
 
 ### Added
