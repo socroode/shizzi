@@ -5,6 +5,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.3.8] - 2026-09-30
+
+### Added
+
+- Browser-only local Wi-Fi speed test at /speedtest/ with 10, 25, 50 and 100 MiB test sizes.
+- Five-sample local latency measurement and Reno9-to-client throughput measurement with live progress.
+- Conservative estimate of simultaneous 1080p streams at 3 Mbps using a 30% Wi-Fi safety margin.
+- Portal card linking directly to the speed test before or after account login.
+- Bounded server-generated speed-test payloads; no media file, Internet download or persistent storage is required.
+
+### Changed
+
+- The local speed test uses the captive-portal path itself so the measurement reflects the Shizzi router-to-client Wi-Fi path.
+- Shizzi+ remains 0.2.3 and Shizzi Admin remains 0.2.3; only Shizzi Hotspot changes in this test build.
+
+
 ## [0.4.3.7] - 2026-09-30
 
 ### Added
