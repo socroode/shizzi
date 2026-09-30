@@ -5,6 +5,16 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.3.1] - 2026-09-29
+
+### Fixed
+
+- Runs Shizzi Media in a dedicated Android process so a media-client failure cannot terminate the hotspot/TUN process.
+- Contains client socket errors such as connection reset, socket closed and broken pipe.
+- Replaces the unbounded media thread pool with a bounded six-client worker pool.
+- Synchronizes selected SAF media folders when the isolated media process starts or restarts.
+
+
 ## [0.4.0-rc.3] - 2026-09-13
 
 Adds a quick settings tile and an intent API for starting and stopping sessions
