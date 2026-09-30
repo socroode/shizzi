@@ -2,18 +2,23 @@ package dev.shizzi.conso
 
 import android.app.Activity
 import android.graphics.Color
+import android.content.pm.ActivityInfo
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
+import android.view.WindowInsets
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -34,6 +39,10 @@ class MainActivity : Activity() {
     private var mediaBaseUrl: String? = null
     private var requestedBaseUrl: String? = null
     private var requestedLabel: String = "Shizzi"
+    private var fullscreenView: View? = null
+    private var fullscreenContainer: FrameLayout? = null
+    private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
+    private var previousOrientation: Int = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -118,6 +127,22 @@ class MainActivity : Activity() {
             settings.loadsImagesAutomatically = true
             settings.mediaPlaybackRequiresUserGesture = false
             settings.cacheMode = WebSettings.LOAD_NO_CACHE
+            webChromeClient = object : WebChromeClient() {
+                override fun onShowCustomView(
+                    view: View?,
+                    callback: CustomViewCallback?,
+                ) {
+                    if (view == null || fullscreenView != null) {
+                        callback?.onCustomViewHidden()
+                        return
+                    }
+                    enterVideoFullscreen(view, callback)
+                }
+
+                override fun onHideCustomView() {
+                    exitVideoFullscreen()
+                }
+            }
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(
                     view: WebView?,
@@ -360,6 +385,58 @@ class MainActivity : Activity() {
         status.text = title + detail.trim().takeIf { it.isNotBlank() }?.let { "\n$it" }.orEmpty()
     }
 
+    private fun enterVideoFullscreen(
+        view: View,
+        callback: WebChromeClient.CustomViewCallback?,
+    ) {
+        previousOrientation = requestedOrientation
+        fullscreenView = view
+        fullscreenCallback = callback
+
+        val container = FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+            addView(
+                view,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                ),
+            )
+        }
+        fullscreenContainer = container
+
+        webView.visibility = View.GONE
+        addContentView(
+            container,
+            ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        window.insetsController?.hide(WindowInsets.Type.systemBars())
+    }
+
+    private fun exitVideoFullscreen() {
+        val view = fullscreenView ?: return
+        val callback = fullscreenCallback
+        val container = fullscreenContainer
+
+        container?.removeView(view)
+        (container?.parent as? ViewGroup)?.removeView(container)
+
+        fullscreenView = null
+        fullscreenContainer = null
+        fullscreenCallback = null
+
+        requestedOrientation = previousOrientation
+        window.insetsController?.show(WindowInsets.Type.systemBars())
+        webView.visibility = View.VISIBLE
+
+        callback?.onCustomViewHidden()
+    }
+
     override fun onResume() {
         super.onResume()
         if (::webView.isInitialized && webView.visibility == View.VISIBLE) {
@@ -372,6 +449,7 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         when {
+            fullscreenView != null -> exitVideoFullscreen()
             webView.visibility == View.VISIBLE && webView.canGoBack() -> webView.goBack()
             webView.visibility == View.VISIBLE -> {
                 webView.visibility = View.GONE
@@ -388,6 +466,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        if (fullscreenView != null) exitVideoFullscreen()
         releaseWifiBinding()
         webView.stopLoading()
         webView.destroy()
