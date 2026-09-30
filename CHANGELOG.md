@@ -5,6 +5,15 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.3.2] - 2026-09-29
+
+### Fixed
+
+- Media client discovery now uses the actual IPv4 Wi-Fi gateway supplied by Android instead of hard-coded hotspot subnets.
+- Router Media address discovery excludes real upstream network addresses rather than relying on Oppo/Samsung interface names.
+- The same Media discovery path is shared by Shizzi+ and Shizzi Admin for OEM-independent Android compatibility.
+
+
 ## [0.4.3.1] - 2026-09-29
 
 ### Fixed
