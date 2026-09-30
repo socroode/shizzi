@@ -213,3 +213,28 @@ func TestSpeedtestDownloadSizesAreBounded(t *testing.T) {
 		}
 	}
 }
+
+
+func TestMediaAccessFollowsAccountSession(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portalConfigForTest(t))
+	ip := "192.168.7.66"
+
+	if manager.mediaAccountAuthenticated(ip) {
+		t.Fatal("media available before login")
+	}
+	ok, message := manager.submitPortalAccountLogin(ip, "1001", "1234")
+	if !ok {
+		t.Fatalf("login failed: %s", message)
+	}
+	if !manager.mediaAccountAuthenticated(ip) {
+		t.Fatal("media unavailable after login")
+	}
+	ok, _ = manager.submitPortalLogout(ip)
+	if !ok {
+		t.Fatal("logout failed")
+	}
+	if manager.mediaAccountAuthenticated(ip) {
+		t.Fatal("media still available after logout")
+	}
+}
