@@ -5,6 +5,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.3.6] - 2026-09-30
+
+### Added
+
+- Captive portal download card for Shizzi+ before or after account login.
+- Local /download/shizzi-plus.apk route that stays entirely on the hotspot and does not consume Internet quota.
+- Loopback-only Android distribution bridge so the Shizuku datapath can safely proxy the embedded client APK.
+- Shizzi+ 0.2.3 is embedded in the Hotspot build with version, size and SHA-256 metadata shown by the portal.
+- CI verifies the embedded APK package, version, permanent certificate and exact SHA-256.
+
+### Changed
+
+- Clients no longer need the Shizzi+ APK to be sent manually; they can install it from the captive portal.
+- No hotspot subnet is hard-coded for the download path: clients use the same captive-portal address they already reached.
+
+
 ## [0.4.3.5] - 2026-09-29
 
 ### Added
