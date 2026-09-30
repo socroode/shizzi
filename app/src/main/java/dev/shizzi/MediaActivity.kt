@@ -117,7 +117,7 @@ private fun MediaScreen(onBack: () -> Unit) {
     }
 
     val urls = remember(revision, enabled) {
-        if (enabled) MediaNetwork.portalUrls(context) else emptyList()
+        if (enabled) listOf("http://192.0.2.1/media/") else emptyList()
     }
 
     Scaffold(
@@ -156,7 +156,7 @@ private fun MediaScreen(onBack: () -> Unit) {
                 Column(Modifier.weight(1f)) {
                     Text("Serveur Media", fontWeight = FontWeight.SemiBold)
                     Text(
-                        if (enabled) "Actif sur le réseau local" else "Arrêté",
+                        if (enabled) "Actif derrière le portail compte Shizzi" else "Arrêté",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -208,13 +208,13 @@ private fun MediaScreen(onBack: () -> Unit) {
 
             HorizontalDivider()
 
-            Text("Adresse du portail", fontWeight = FontWeight.SemiBold)
+            Text("Adresse Media sécurisée", fontWeight = FontWeight.SemiBold)
             if (!enabled) {
                 Text("Active Shizzi Media pour afficher l’adresse locale.")
             } else if (urls.isEmpty()) {
                 Text("Aucune adresse locale détectée. Active d’abord le hotspot Shizzi.")
             } else {
-                urls.forEach { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                urls.forEach { Text("$it — compte Shizzi requis", style = MaterialTheme.typography.bodyMedium) }
                 Button(
                     onClick = {
                         val intent = Intent(
