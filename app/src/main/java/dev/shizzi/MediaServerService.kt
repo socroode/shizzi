@@ -6,6 +6,8 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.util.Log
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -20,6 +22,7 @@ class MediaServerService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        syncConfig(intent)
         when (intent?.action ?: ACTION_START) {
             ACTION_STOP -> {
                 MediaPrefs.setEnabled(this, false)
@@ -52,9 +55,28 @@ class MediaServerService : Service() {
 
     private fun startServer() {
         if (server != null) return
-        server = MediaHttpServer(applicationContext).also { it.start() }
+        val candidate = MediaHttpServer(applicationContext)
+        if (!candidate.start()) {
+            Log.e(TAG, "media server did not start")
+            return
+        }
+        server = candidate
         val manager = getSystemService(NotificationManager::class.java)
         manager.notify(NOTIFICATION_ID, notification())
+    }
+
+    private fun syncConfig(intent: Intent?) {
+        if (intent == null) return
+        MediaKind.entries.forEach { kind ->
+            val key = extraTree(kind)
+            if (!intent.hasExtra(key)) return@forEach
+            val value = intent.getStringExtra(key).orEmpty()
+            MediaPrefs.setTreeUri(
+                this,
+                kind,
+                value.takeIf { it.isNotBlank() }?.let(Uri::parse),
+            )
+        }
     }
 
     private fun stopServer() {
@@ -98,11 +120,26 @@ class MediaServerService : Service() {
         private const val ACTION_START = "dev.shizzi.media.START"
         private const val ACTION_STOP = "dev.shizzi.media.STOP"
         private const val ACTION_RESTART = "dev.shizzi.media.RESTART"
+        private const val TAG = "ShizziMedia"
+
+        private fun extraTree(kind: MediaKind) = "tree_${kind.key}"
+
+        private fun configuredIntent(context: Context, action: String): Intent =
+            Intent(context, MediaServerService::class.java)
+                .setAction(action)
+                .apply {
+                    MediaKind.entries.forEach { kind ->
+                        putExtra(
+                            extraTree(kind),
+                            MediaPrefs.treeUri(context, kind)?.toString().orEmpty(),
+                        )
+                    }
+                }
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(
                 context,
-                Intent(context, MediaServerService::class.java).setAction(ACTION_START),
+                configuredIntent(context, ACTION_START),
             )
         }
 
@@ -115,7 +152,7 @@ class MediaServerService : Service() {
         fun restart(context: Context) {
             ContextCompat.startForegroundService(
                 context,
-                Intent(context, MediaServerService::class.java).setAction(ACTION_RESTART),
+                configuredIntent(context, ACTION_RESTART),
             )
         }
     }
