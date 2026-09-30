@@ -230,8 +230,16 @@ fun CybercafeState.toPortalConfigJson(
     markers: Map<String, AccountMarker> = emptyMap(),
     claimResults: List<PortalClaimResult> = emptyList(),
     adminResults: List<AdminCommandResult> = emptyList(),
+    clientApp: ClientAppDistributionInfo? = null,
 ): String =
     JSONObject().apply {
+        put("clientApp", JSONObject().apply {
+            put("available", clientApp?.available == true)
+            put("version", clientApp?.version.orEmpty())
+            put("fileName", clientApp?.fileName.orEmpty())
+            put("sizeBytes", clientApp?.sizeBytes ?: 0L)
+            put("sha256", clientApp?.sha256.orEmpty())
+        })
         put("admin", JSONObject().apply {
             put("enabled", remoteAdmin.enabled)
             put("username", remoteAdmin.username)
@@ -392,6 +400,7 @@ suspend fun TetherClient.applyCybercafePolicies(
     markers: Map<String, AccountMarker>,
     claimResults: List<PortalClaimResult>,
     adminResults: List<AdminCommandResult> = emptyList(),
+    clientApp: ClientAppDistributionInfo? = null,
 ) {
     val portalRequired = state.accounts.isNotEmpty() || state.remoteAdmin.enabled
 
@@ -401,7 +410,13 @@ suspend fun TetherClient.applyCybercafePolicies(
     if (portalRequired) setRequireClientAttribution(true)
     setPortalConfig(
         portalRequired,
-        state.toPortalConfigJson(epoch, markers, claimResults, adminResults),
+        state.toPortalConfigJson(
+            epoch,
+            markers,
+            claimResults,
+            adminResults,
+            clientApp,
+        ),
     )
     if (!portalRequired) setRequireClientAttribution(false)
 }
