@@ -1,4 +1,5 @@
 name: Shizzi 0.4.3.9 suite test
+# Account-gated Media release-candidate suite.
 
 on:
   push:
