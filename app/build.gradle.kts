@@ -52,25 +52,25 @@ val gomobileBind by tasks.registering(Exec::class) {
 }
 
 
-val prepareEmbeddedShizziPlusDebug by tasks.registering(Copy::class) {
+val embeddedShizziPlusDebugDir =
+    layout.buildDirectory.dir("generated/shizziPlusAssets/debug")
+val embeddedShizziPlusReleaseDir =
+    layout.buildDirectory.dir("generated/shizziPlusAssets/release")
+
+val prepareEmbeddedShizziPlusDebug by tasks.registering(Sync::class) {
     dependsOn(":conso:assembleDebug")
     from(rootProject.layout.projectDirectory.file("conso/build/outputs/apk/debug/conso-debug.apk"))
-    into(layout.projectDirectory.dir("src/main/assets/shizzi"))
+    into(embeddedShizziPlusDebugDir.map { it.dir("shizzi") })
     rename { "Shizzi-Plus.apk" }
+    outputs.dir(embeddedShizziPlusDebugDir)
 }
 
-val prepareEmbeddedShizziPlusRelease by tasks.registering(Copy::class) {
+val prepareEmbeddedShizziPlusRelease by tasks.registering(Sync::class) {
     dependsOn(":conso:assembleRelease")
     from(rootProject.layout.projectDirectory.file("conso/build/outputs/apk/release/conso-release.apk"))
-    into(layout.projectDirectory.dir("src/main/assets/shizzi"))
+    into(embeddedShizziPlusReleaseDir.map { it.dir("shizzi") })
     rename { "Shizzi-Plus.apk" }
-}
-
-tasks.configureEach {
-    when (name) {
-        "mergeDebugAssets" -> dependsOn(prepareEmbeddedShizziPlusDebug)
-        "mergeReleaseAssets" -> dependsOn(prepareEmbeddedShizziPlusRelease)
-    }
+    outputs.dir(embeddedShizziPlusReleaseDir)
 }
 
 android {
@@ -107,6 +107,11 @@ android {
                 keyPassword = keystoreProperties.getProperty("keyPassword")
             }
         }
+    }
+
+    sourceSets {
+        getByName("debug").assets.srcDir(embeddedShizziPlusDebugDir)
+        getByName("release").assets.srcDir(embeddedShizziPlusReleaseDir)
     }
 
     buildTypes {
@@ -152,6 +157,21 @@ android {
 }
 
 tasks.named("preBuild") { dependsOn(gomobileBind) }
+
+// Every Android task that consumes a variant's source sets must see the
+// generated Shizzi+ asset first. Keeping the generated APK under build/
+// avoids treating src/main/assets as a task output and keeps lint deterministic.
+tasks.configureEach {
+    when {
+        name != "prepareEmbeddedShizziPlusDebug" &&
+            name.contains("Debug", ignoreCase = true) ->
+            dependsOn(prepareEmbeddedShizziPlusDebug)
+
+        name != "prepareEmbeddedShizziPlusRelease" &&
+            name.contains("Release", ignoreCase = true) ->
+            dependsOn(prepareEmbeddedShizziPlusRelease)
+    }
+}
 
 dependencies {
 
