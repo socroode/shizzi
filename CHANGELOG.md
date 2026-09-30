@@ -5,6 +5,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.3.9] - 2026-09-30
+
+### Security
+
+- Shizzi Media now requires an active Shizzi account session on the requesting device.
+- Unauthenticated hotspot clients cannot open /media/, browse the catalog, open player pages or request /media/stream URLs.
+- The Media backend on port 8088 now binds to loopback only, preventing LAN clients from bypassing the captive-portal account check.
+- The Media card is hidden until a Shizzi account is connected.
+
+### Changed
+
+- Shizzi+ 0.2.4 routes Media through the secured captive-portal /media/ path instead of connecting directly to port 8088.
+- Media relative links remain under the /media/ proxy so catalog, player and stream requests all pass through the account gate.
+- Shizzi Admin remains 0.2.3.
+
+
 ## [0.4.3.8] - 2026-09-30
 
 ### Added
