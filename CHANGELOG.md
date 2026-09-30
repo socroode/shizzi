@@ -5,6 +5,21 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.3.5] - 2026-09-29
+
+### Added
+
+- Fast Media scanner using batched Android DocumentsContract queries instead of repeated per-file DocumentFile calls.
+- Live scan progress with file and folder counts on the router phone.
+- Shizzi+ 0.2.3 HTML5 video fullscreen with landscape orientation, system-bar hiding and Back-to-exit-fullscreen behavior.
+
+### Changed
+
+- SAF remains the source of access permission; no broad storage permission is required.
+- The legacy DocumentFile scanner remains as a compatibility fallback for unusual Android document providers.
+- Shizzi Admin 0.2.3 is version-aligned with the 0.4.3.5 test suite.
+
+
 ## [0.4.3.4] - 2026-09-29
 
 ### Added
