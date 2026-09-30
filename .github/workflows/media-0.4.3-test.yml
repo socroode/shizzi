@@ -103,14 +103,14 @@ jobs:
           mkdir -p release-output
           cp app/build/outputs/apk/release/app-release.apk release-output/Shizzi-Hotspot-0.4.3.8-Portal-Test.apk
           cd release-output
-          sha256sum Shizzi-Hotspot-0.4.3.8-Media-Test.apk > SHA256SUMS.txt
+          sha256sum Shizzi-Hotspot-0.4.3.8-Portal-Test.apk > SHA256SUMS.txt
 
       - name: Upload signed Media test APK
         uses: actions/upload-artifact@v5
         with:
           name: Shizzi-0.4.3-media-test
           path: |
-            release-output/Shizzi-Hotspot-0.4.3.8-Media-Test.apk
+            release-output/Shizzi-Hotspot-0.4.3.8-Portal-Test.apk
             release-output/SHA256SUMS.txt
           if-no-files-found: error
 
