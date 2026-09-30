@@ -23,7 +23,6 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import java.net.HttpURLConnection
-import java.net.Inet4Address
 import java.net.URL
 import kotlin.concurrent.thread
 
@@ -95,7 +94,7 @@ class MainActivity : Activity() {
             })
 
             addView(TextView(this@MainActivity).apply {
-                text = "Shizzi+ détecte automatiquement le serveur Media du routeur. Aucun IP à saisir."
+                text = "Shizzi Media passe par le portail sécurisé et nécessite un compte Shizzi connecté."
                 textSize = 13f
                 setTextColor(Color.rgb(148, 163, 184))
                 gravity = Gravity.CENTER
@@ -184,6 +183,9 @@ class MainActivity : Activity() {
                     if (request?.isForMainFrame != true) return
                     if (!belongsToRequestedTarget(request.url?.toString())) return
                     val code = errorResponse?.statusCode ?: 0
+                    if (requestedLabel == "Shizzi Media" && code == 401) {
+                        return
+                    }
                     showNavigationFailure(
                         "Erreur HTTP pour $requestedLabel",
                         if (code > 0) "Code HTTP $code" else "",
@@ -264,13 +266,9 @@ class MainActivity : Activity() {
     }
 
     private fun mediaCandidates(network: Network): List<String> {
-        val routes = connectivityManager.getLinkProperties(network)?.routes.orEmpty()
-        return routes
-            .sortedByDescending { route -> route.isDefaultRoute }
-            .mapNotNull { route -> route.gateway as? Inet4Address }
-            .mapNotNull { gateway -> gateway.hostAddress }
-            .distinct()
-            .map { gateway -> "http://$gateway:8088/" }
+        @Suppress("UNUSED_PARAMETER")
+        val ignored = network
+        return listOf(PORTAL_MEDIA_URL)
     }
 
     private fun detectMedia(showFeedback: Boolean = false) {
@@ -294,7 +292,7 @@ class MainActivity : Activity() {
                     connection.connectTimeout = 1_000
                     connection.readTimeout = 1_000
                     connection.useCaches = false
-                    val ok = connection.responseCode == 200
+                    val ok = connection.responseCode == 200 || connection.responseCode == 401 || connection.responseCode == 401
                     connection.disconnect()
                     ok
                 }.getOrDefault(false)
@@ -478,5 +476,6 @@ class MainActivity : Activity() {
 
     private companion object {
         const val PORTAL_URL = "http://192.0.2.1/"
+        const val PORTAL_MEDIA_URL = "http://192.0.2.1/media/"
     }
 }
