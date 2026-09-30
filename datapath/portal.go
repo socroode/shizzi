@@ -116,6 +116,14 @@ type adminChallenge struct {
 	ExpiresAtMillis int64
 }
 
+type portalClientApp struct {
+	Available bool   `json:"available"`
+	Version   string `json:"version"`
+	FileName  string `json:"fileName"`
+	SizeBytes int64  `json:"sizeBytes"`
+	SHA256    string `json:"sha256"`
+}
+
 type portalConfig struct {
 	Title        string               `json:"title"`
 	Message      string               `json:"message"`
@@ -123,6 +131,7 @@ type portalConfig struct {
 	Accounts     []PortalAccount      `json:"accounts"`
 	Admin        remoteAdminConfig    `json:"admin"`
 	AdminState   json.RawMessage      `json:"adminState"`
+	ClientApp    portalClientApp      `json:"clientApp"`
 	// ClaimResults lets Android tell the portal how a voucher claim ended so
 	// the client sees "accepted"/"rejected" instead of a silent drop.
 	ClaimResults []PortalClaimResult   `json:"claimResults"`
@@ -210,6 +219,7 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 		m.portalMessage = "Connectez-vous à votre compte Shizzi."
 	}
 	m.portalHTML = config.HTML
+	m.portalClientApp = config.ClientApp
 	credentialsChanged := m.adminConfig.Username != config.Admin.Username ||
 		m.adminConfig.PasswordHash != config.Admin.PasswordHash ||
 		m.adminConfig.Enabled != config.Admin.Enabled
@@ -686,6 +696,9 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 
 	path := request.URL.Path
 	switch {
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		path == "/download/shizzi-plus.apk":
+		m.serveClientAppDownload(conn, request.Method)
 	case request.Method == http.MethodPost && path == "/login":
 		_ = request.ParseForm()
 		ok, message := m.submitPortalAccountLogin(
