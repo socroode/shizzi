@@ -1,6 +1,7 @@
 package dev.shizzi
 
 import android.content.Context
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.webkit.MimeTypeMap
 import androidx.documentfile.provider.DocumentFile
@@ -144,28 +145,47 @@ object MediaCatalog {
 object MediaNetwork {
     const val PORT = 8088
 
-    fun portalUrls(): List<String> {
+    /**
+     * Returns addresses that belong to local interfaces which are not exposed
+     * by ConnectivityManager as normal upstream networks. Android tethering
+     * downstream/SoftAP interfaces are local interfaces, but are not ordinary
+     * app-visible Networks. This avoids guessing OEM interface names or
+     * hard-coding subnets, so the same code works across Oppo, Samsung, etc.
+     */
+    fun portalUrls(context: Context): List<String> {
+        val manager = context.getSystemService(ConnectivityManager::class.java)
+        val upstreamInterfaces = runCatching {
+            manager.allNetworks
+                .mapNotNull { network -> manager.getLinkProperties(network)?.interfaceName }
+                .toSet()
+        }.getOrDefault(emptySet())
+
         val addresses = mutableListOf<Inet4Address>()
         val interfaces = runCatching { Collections.list(NetworkInterface.getNetworkInterfaces()) }
             .getOrDefault(emptyList())
 
         interfaces
-            .filter { runCatching { it.isUp }.getOrDefault(false) }
-            .filterNot { it.isLoopback || it.name.startsWith("testtun") || it.name.startsWith("tun") }
+            .filter { iface -> runCatching { iface.isUp }.getOrDefault(false) }
+            .filterNot { iface ->
+                iface.isLoopback ||
+                    iface.name in upstreamInterfaces ||
+                    iface.name.startsWith("testtun") ||
+                    iface.name.startsWith("tun")
+            }
             .forEach { iface ->
                 Collections.list(iface.inetAddresses)
                     .filterIsInstance<Inet4Address>()
-                    .filter { it.isSiteLocalAddress && !it.isLoopbackAddress }
+                    .filter { address ->
+                        address.isSiteLocalAddress &&
+                            !address.isLoopbackAddress &&
+                            !address.isLinkLocalAddress
+                    }
                     .forEach(addresses::add)
             }
 
         return addresses
             .distinctBy { it.hostAddress }
-            .sortedWith(
-                compareByDescending<Inet4Address> {
-                    it.address.lastOrNull()?.toInt()?.and(0xff) == 1
-                }.thenBy { it.hostAddress },
-            )
+            .sortedBy { it.hostAddress }
             .map { "http://${it.hostAddress}:$PORT/" }
     }
 }
