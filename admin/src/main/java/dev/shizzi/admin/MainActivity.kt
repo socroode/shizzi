@@ -2,10 +2,12 @@ package dev.shizzi.admin
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
 import android.graphics.Typeface
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.Uri
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
@@ -19,6 +21,7 @@ import android.widget.Toast
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
+import java.net.Inet4Address
 import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -93,7 +96,7 @@ class MainActivity : Activity() {
         root.removeAllViews()
         title("Shizzi Admin")
         info(
-            "Compatible avec TEKOMOPAO WIFI1 et WIFI2. " +
+            "Admin associé à Shizzi 0.4.3.1 Media. " +
                 "Connectez ce téléphone au Wi-Fi Shizzi à administrer.",
         )
         if (message.isNotBlank()) info(message)
@@ -183,6 +186,7 @@ class MainActivity : Activity() {
             state.optJSONArray("vouchers") ?: JSONArray(),
         )
         renderDevices(traffic.optJSONArray("portalAuthorizations") ?: JSONArray())
+        renderMediaStatus()
         renderPortal(state.optJSONObject("portal") ?: JSONObject())
         renderAdminCredentials(state.optJSONObject("remoteAdmin") ?: JSONObject())
         renderDiagnostics(traffic)
@@ -389,6 +393,62 @@ class MainActivity : Activity() {
                 command("session.disconnect", JSONObject().put("ip", ip))
             }
         }
+    }
+
+    private fun renderMediaStatus() {
+        section("Shizzi Media")
+        val mediaStatus = TextView(this).apply {
+            text = "Détection du serveur Media…"
+            textSize = 14f
+            setPadding(0, dp(4), 0, dp(8))
+        }
+        root.addView(mediaStatus, full())
+
+        fun probe() {
+            mediaStatus.text = "Détection du serveur Media…"
+            runNetwork {
+                val wifi = boundWifi ?: run {
+                    runOnUiThread { mediaStatus.text = "Aucun Wi-Fi Shizzi connecté." }
+                    return@runNetwork
+                }
+                val found = mediaCandidates(wifi).firstOrNull { base ->
+                    runCatching {
+                        val connection = wifi.openConnection(URL(base + "health")) as HttpURLConnection
+                        connection.connectTimeout = 1_000
+                        connection.readTimeout = 1_000
+                        connection.useCaches = false
+                        val ok = connection.responseCode == 200
+                        connection.disconnect()
+                        ok
+                    }.getOrDefault(false)
+                }
+                runOnUiThread {
+                    mediaStatus.text = if (found == null) {
+                        "Serveur Media indisponible ou désactivé sur le routeur."
+                    } else {
+                        "Serveur Media actif : $found"
+                    }
+                    if (found != null) {
+                        button("Ouvrir Shizzi Media") {
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(found)))
+                        }
+                    }
+                }
+            }
+        }
+
+        button("Tester Shizzi Media") { probe() }
+        info("Le choix des dossiers Films / Séries / Musique reste volontairement effectué sur le téléphone routeur.")
+        probe()
+    }
+
+    private fun mediaCandidates(network: Network): List<String> {
+        val gateways = connectivity.getLinkProperties(network)?.routes.orEmpty()
+            .mapNotNull { it.gateway as? Inet4Address }
+            .mapNotNull { it.hostAddress }
+        return (gateways + listOf("192.168.7.1", "192.168.43.1", "192.168.1.1"))
+            .distinct()
+            .map { "http://$it:8088/" }
     }
 
     private fun renderPortal(portal: JSONObject) {
