@@ -175,3 +175,23 @@ func TestPortalAutoRefreshRunsEveryTwoSeconds(t *testing.T) {
 		t.Fatal("portal refresh does not use status.json")
 	}
 }
+
+
+func TestMediaProxyTargetKeepsLocalPrefixOutOfUpstream(t *testing.T) {
+	cases := []struct {
+		path     string
+		query    string
+		expected string
+	}{
+		{path: "/media/", expected: "/"},
+		{path: "/media/library", query: "kind=films", expected: "/library?kind=films"},
+		{path: "/media/play", query: "id=abc123", expected: "/play?id=abc123"},
+		{path: "/media/stream", query: "id=abc123", expected: "/stream?id=abc123"},
+	}
+
+	for _, test := range cases {
+		if actual := mediaProxyTarget(test.path, test.query); actual != test.expected {
+			t.Fatalf("mediaProxyTarget(%q, %q)=%q, want %q", test.path, test.query, actual, test.expected)
+		}
+	}
+}
