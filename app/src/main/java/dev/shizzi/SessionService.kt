@@ -32,6 +32,7 @@ class SessionService : Service() {
     private val controller = TetherClient()
     private val notification by lazy { SessionNotification(this) }
     private val statusPoller = SessionStatusPoller(scope, controller)
+    private val clientAppDistribution by lazy { ClientAppDistributionServer(this) }
 
     private val internalState get() = sessionState
 
@@ -50,6 +51,7 @@ class SessionService : Service() {
     override fun onCreate() {
         super.onCreate()
         controller.onSessionLost = ::handleSessionLost
+        clientAppDistribution.start()
         liveService = this
     }
 
@@ -215,6 +217,7 @@ class SessionService : Service() {
                             ledger.markers(),
                             pendingResults,
                             pendingAdminResults,
+                            clientAppDistribution.info.takeIf { it.available },
                         )
                         pushedRevision = revision
                         pushedEpoch = ledger.epoch
@@ -377,6 +380,7 @@ class SessionService : Service() {
         cybercafeJob = null
         clearLiveSessions()
         (application as App).cybercafeStore.flushUsage(System.currentTimeMillis(), force = true)
+        clientAppDistribution.stop()
         controller.unbind()
         scope.cancel()
         liveService = null
