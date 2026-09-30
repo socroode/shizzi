@@ -443,12 +443,13 @@ class MainActivity : Activity() {
     }
 
     private fun mediaCandidates(network: Network): List<String> {
-        val gateways = connectivity.getLinkProperties(network)?.routes.orEmpty()
-            .mapNotNull { it.gateway as? Inet4Address }
-            .mapNotNull { it.hostAddress }
-        return (gateways + listOf("192.168.7.1", "192.168.43.1", "192.168.1.1"))
+        val routes = connectivity.getLinkProperties(network)?.routes.orEmpty()
+        return routes
+            .sortedByDescending { route -> route.isDefaultRoute }
+            .mapNotNull { route -> route.gateway as? Inet4Address }
+            .mapNotNull { gateway -> gateway.hostAddress }
             .distinct()
-            .map { "http://$it:8088/" }
+            .map { gateway -> "http://$gateway:8088/" }
     }
 
     private fun renderPortal(portal: JSONObject) {
