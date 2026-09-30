@@ -84,6 +84,20 @@ jobs:
           ACTUAL_NORM=$(echo "$ACTUAL" | tr -d ': ')
           test "$ACTUAL_NORM" = "$EXPECTED_NORM"
 
+          EMBEDDED=/tmp/shizzi-plus-embedded.apk
+          unzip -p "$APK" assets/shizzi/Shizzi-Plus.apk > "$EMBEDDED"
+          test -s "$EMBEDDED"
+          EMBEDDED_BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$EMBEDDED")
+          EMBEDDED_PACKAGE=$(echo "$EMBEDDED_BADGING" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
+          EMBEDDED_VERSION=$(echo "$EMBEDDED_BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
+          EMBEDDED_CODE=$(echo "$EMBEDDED_BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
+          test "$EMBEDDED_PACKAGE" = "dev.shizzi.conso"
+          test "$EMBEDDED_VERSION" = "0.2.3"
+          test "$EMBEDDED_CODE" = "7"
+          EMBEDDED_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$EMBEDDED" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]')
+          EMBEDDED_CERT_NORM=$(echo "$EMBEDDED_CERT" | tr -d ': ')
+          test "$EMBEDDED_CERT_NORM" = "$EXPECTED_NORM"
+
       - name: Prepare artifact
         run: |
           mkdir -p release-output
