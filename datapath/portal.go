@@ -699,6 +699,21 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	path := request.URL.Path
 	switch {
 	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		path == "/speedtest":
+		_, _ = io.WriteString(
+			conn,
+			"HTTP/1.1 302 Found\r\nLocation: /speedtest/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+		)
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		path == "/speedtest/":
+		m.serveLocalSpeedtestPage(conn, request.Method)
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		path == "/speedtest/ping":
+		m.serveLocalSpeedtestPing(conn, request.Method)
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		path == "/speedtest/download":
+		m.serveLocalSpeedtestDownload(conn, request)
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
 		path == "/media":
 		_, _ = io.WriteString(
 			conn,
@@ -729,6 +744,217 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 		m.writePortalStatusJSON(conn, clientIP)
 	default:
 		m.writePortalHTML(conn, clientIP, "", false)
+	}
+}
+
+func speedtestDownloadBytes(rawMB string) int64 {
+	switch strings.TrimSpace(rawMB) {
+	case "10":
+		return 10 * 1024 * 1024
+	case "25":
+		return 25 * 1024 * 1024
+	case "100":
+		return 100 * 1024 * 1024
+	default:
+		return 50 * 1024 * 1024
+	}
+}
+
+func (m *TrafficManager) serveLocalSpeedtestPing(conn net.Conn, method string) {
+	body := []byte("ok")
+	header := fmt.Sprintf(
+		"HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nConnection: close\r\n\r\n",
+		len(body),
+	)
+	_, _ = conn.Write([]byte(header))
+	if method != http.MethodHead {
+		_, _ = conn.Write(body)
+	}
+}
+
+func (m *TrafficManager) serveLocalSpeedtestDownload(conn net.Conn, request *http.Request) {
+	size := speedtestDownloadBytes(request.URL.Query().Get("mb"))
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Minute))
+
+	header := fmt.Sprintf(
+		"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nX-Shizzi-Local-Speedtest: 1\r\nConnection: close\r\n\r\n",
+		size,
+	)
+	if _, err := conn.Write([]byte(header)); err != nil || request.Method == http.MethodHead {
+		return
+	}
+
+	// Generate bytes in small chunks. Nothing is read from storage and nothing
+	// is fetched from the WAN: this measures the local portal -> client path.
+	chunk := make([]byte, 64*1024)
+	remaining := size
+	for remaining > 0 {
+		writeSize := int64(len(chunk))
+		if remaining < writeSize {
+			writeSize = remaining
+		}
+		written, err := conn.Write(chunk[:int(writeSize)])
+		if err != nil {
+			return
+		}
+		remaining -= int64(written)
+		if written == 0 {
+			return
+		}
+	}
+}
+
+func (m *TrafficManager) serveLocalSpeedtestPage(conn net.Conn, method string) {
+	page := `<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Test débit local · Shizzi</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,system-ui,-apple-system,sans-serif}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:20px;color:#f8fafc;background:linear-gradient(145deg,#07111f,#111827 55%,#0f172a)}
+main{width:min(100%,620px);margin:0 auto;background:#0f172a;border:1px solid #ffffff18;border-radius:28px;padding:24px;box-shadow:0 26px 80px #0008}
+a{color:#7dd3fc;text-decoration:none}.eyebrow{font-size:11px;letter-spacing:.14em;color:#7dd3fc;font-weight:800}
+h1{margin:6px 0 8px;font-size:28px}.lead,.note{color:#94a3b8;line-height:1.5}
+.controls{display:grid;grid-template-columns:1fr auto;gap:10px;margin:18px 0}
+select,button{font:inherit;border-radius:14px;padding:14px 16px;border:0}
+select{background:#1e293b;color:#fff;border:1px solid #334155}
+button{background:linear-gradient(90deg,#22d3ee,#34d399);color:#06202a;font-weight:900;cursor:pointer}
+button:disabled{opacity:.5;cursor:wait}
+.progress{height:10px;background:#1e293b;border-radius:999px;overflow:hidden;margin:14px 0}.bar{height:100%;width:0;background:linear-gradient(90deg,#38bdf8,#34d399);transition:width .15s}
+.results{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px}.result{padding:16px;border-radius:16px;background:#ffffff08}
+.result span{display:block;color:#94a3b8;font-size:12px}.result strong{display:block;margin-top:5px;font-size:22px}
+.summary{margin-top:14px;padding:16px;border-radius:16px;background:#071b2a;border:1px solid #22d3ee55;line-height:1.5}
+@media(max-width:520px){.controls,.results{grid-template-columns:1fr}}
+</style></head><body><main>
+<a href="/">← Portail Shizzi</a>
+<div class="eyebrow" style="margin-top:18px">RÉSEAU LOCAL</div>
+<h1>Test de débit local</h1>
+<p class="lead">Mesure le débit <strong>Reno9 → cet appareil</strong> sur le Wi-Fi Shizzi. Le test reste local : il ne télécharge rien depuis Starlink ou Internet.</p>
+<div class="controls">
+<select id="size" aria-label="Taille du test">
+<option value="10">Rapide · 10 Mo</option>
+<option value="25">Court · 25 Mo</option>
+<option value="50" selected>Normal · 50 Mo</option>
+<option value="100">Précis · 100 Mo</option>
+</select>
+<button id="start">Tester le débit local</button>
+</div>
+<div id="status" class="note">Prêt.</div>
+<div class="progress"><div id="bar" class="bar"></div></div>
+<div class="results">
+<div class="result"><span>Débit moyen</span><strong id="speed">—</strong></div>
+<div class="result"><span>Latence locale</span><strong id="latency">—</strong></div>
+</div>
+<div id="summary" class="summary">Le résultat estimera aussi la capacité pour des vidéos 1080p à 3 Mbps.</div>
+<p class="note">Le débit peut varier selon la bande Wi-Fi, la distance, les interférences et les autres appareils actifs. Pour comparer plusieurs essais, reste au même endroit.</p>
+</main>
+<script>
+(function(){
+  var startButton=document.getElementById("start");
+  var sizeSelect=document.getElementById("size");
+  var statusEl=document.getElementById("status");
+  var bar=document.getElementById("bar");
+  var speedEl=document.getElementById("speed");
+  var latencyEl=document.getElementById("latency");
+  var summaryEl=document.getElementById("summary");
+
+  function setStatus(text){statusEl.textContent=text;}
+  function sleep(ms){return new Promise(function(resolve){setTimeout(resolve,ms);});}
+
+  async function measureLatency(){
+    var samples=[];
+    for(var i=0;i<5;i++){
+      var started=performance.now();
+      var response=await fetch("/speedtest/ping?ts="+Date.now()+"-"+i,{cache:"no-store"});
+      if(!response.ok) throw new Error("ping");
+      await response.text();
+      samples.push(performance.now()-started);
+      await sleep(80);
+    }
+    samples.sort(function(a,b){return a-b;});
+    return samples[Math.floor(samples.length/2)];
+  }
+
+  async function receive(url,onProgress){
+    var response=await fetch(url,{cache:"no-store"});
+    if(!response.ok) throw new Error("download");
+    var total=Number(response.headers.get("Content-Length")||0);
+    var received=0;
+    var started=performance.now();
+
+    if(response.body && response.body.getReader){
+      var reader=response.body.getReader();
+      while(true){
+        var part=await reader.read();
+        if(part.done) break;
+        received+=part.value.byteLength;
+        if(total>0 && onProgress) onProgress(received/total);
+      }
+    }else{
+      var data=await response.arrayBuffer();
+      received=data.byteLength;
+      if(onProgress) onProgress(1);
+    }
+    var seconds=(performance.now()-started)/1000;
+    return {bytes:received,seconds:seconds};
+  }
+
+  async function run(){
+    startButton.disabled=true;
+    sizeSelect.disabled=true;
+    speedEl.textContent="—";
+    latencyEl.textContent="—";
+    summaryEl.textContent="Test en cours…";
+    bar.style.width="0%";
+
+    try{
+      setStatus("Mesure de la latence locale…");
+      var latency=await measureLatency();
+      latencyEl.textContent=latency.toFixed(1)+" ms";
+
+      setStatus("Préparation du lien Wi-Fi…");
+      await receive("/speedtest/download?mb=10&warmup="+Date.now(),null);
+
+      var mb=sizeSelect.value;
+      setStatus("Mesure du débit Reno9 → appareil…");
+      var result=await receive(
+        "/speedtest/download?mb="+encodeURIComponent(mb)+"&ts="+Date.now(),
+        function(progress){bar.style.width=Math.min(100,progress*100).toFixed(1)+"%";}
+      );
+      var mbps=(result.bytes*8/result.seconds)/1000000;
+      speedEl.textContent=mbps.toFixed(1)+" Mbps";
+      bar.style.width="100%";
+
+      var conservative=Math.max(0,mbps*0.70);
+      var streams=Math.floor(conservative/3);
+      var oneStream=mbps>=4.5;
+      summaryEl.textContent=
+        "1080p à 3 Mbps : "+(oneStream?"OK":"limite")+
+        " · capacité prudente ≈ "+streams+" flux simultané"+(streams===1?"":"s")+
+        " à 3 Mbps (30 % de marge Wi-Fi).";
+      setStatus("Test terminé. "+(result.bytes/1048576).toFixed(0)+" Mo reçus localement en "+result.seconds.toFixed(1)+" s.");
+    }catch(error){
+      setStatus("Le test a échoué. Vérifie que tu es toujours connecté au Wi-Fi Shizzi puis réessaie.");
+      summaryEl.textContent="Aucun résultat valide.";
+      bar.style.width="0%";
+    }finally{
+      startButton.disabled=false;
+      sizeSelect.disabled=false;
+    }
+  }
+
+  startButton.addEventListener("click",run);
+})();
+</script></body></html>`
+
+	body := []byte(page)
+	header := fmt.Sprintf(
+		"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+		len(body),
+	)
+	_, _ = conn.Write([]byte(header))
+	if method != http.MethodHead {
+		_, _ = conn.Write(body)
 	}
 }
 
@@ -1054,6 +1280,12 @@ func (m *TrafficManager) writePortalHTML(
 <a class="media-button" href="/media/">Ouvrir Shizzi Media</a>
 <div class="media-note">Compatible PC, téléphone et tablette · lecture locale</div></section>`
 
+	content += `<section class="speedtest-link"><div class="eyebrow">RÉSEAU LOCAL</div>
+<strong>Test de débit Shizzi</strong>
+<p>Mesurez la vitesse réelle du Reno9 vers cet appareil, sans utiliser Internet.</p>
+<a class="speedtest-button" href="/speedtest/">Tester le débit local</a>
+<div class="speedtest-note">Navigateur uniquement · aucun Termux nécessaire</div></section>`
+
 	if clientApp.Available {
 		shortSHA := clientApp.SHA256
 		if len(shortSHA) > 12 {
@@ -1094,10 +1326,10 @@ input{border:1px solid #334155;background:#0b1220;color:#fff;outline:none}button
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.grid>div{padding:12px;border-radius:14px;background:#ffffff08}.grid strong{display:block;margin-top:4px;font-size:13px}
 .status-link{display:block;text-align:center;margin-top:16px;color:#7dd3fc;text-decoration:none;font-weight:700;font-size:13px}
 button.secondary{background:#1e293b;color:#e2e8f0}
-.media-link,.app-download{margin-top:20px;padding:16px;border:1px solid #22d3ee55;border-radius:18px;background:#071b2a}
-.media-link>strong,.app-download>strong{display:block;margin:5px 0 6px;font-size:18px}.media-link p,.app-download p{margin:0 0 12px;color:#cbd5e1;font-size:13px;line-height:1.45}
-.media-button,.download-button{display:block;width:100%%;border-radius:14px;padding:14px 16px;text-align:center;text-decoration:none;background:linear-gradient(90deg,#38bdf8,#34d399);color:#06202a;font-weight:900}
-.media-note,.app-meta,.app-note{margin-top:9px;color:#94a3b8;font-size:11px;word-break:break-word}
+.media-link,.speedtest-link,.app-download{margin-top:20px;padding:16px;border:1px solid #22d3ee55;border-radius:18px;background:#071b2a}
+.media-link>strong,.speedtest-link>strong,.app-download>strong{display:block;margin:5px 0 6px;font-size:18px}.media-link p,.speedtest-link p,.app-download p{margin:0 0 12px;color:#cbd5e1;font-size:13px;line-height:1.45}
+.media-button,.speedtest-button,.download-button{display:block;width:100%%;border-radius:14px;padding:14px 16px;text-align:center;text-decoration:none;background:linear-gradient(90deg,#38bdf8,#34d399);color:#06202a;font-weight:900}
+.media-note,.speedtest-note,.app-meta,.app-note{margin-top:9px;color:#94a3b8;font-size:11px;word-break:break-word}
 </style></head><body><main class="card"><h1>%s</h1><p class="sub">%s</p>%s%s</main></body></html>`,
 		refresh,
 		html.EscapeString(title),
