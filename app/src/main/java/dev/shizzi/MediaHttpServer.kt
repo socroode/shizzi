@@ -1,6 +1,7 @@
 package dev.shizzi
 
 import android.content.Context
+import android.util.Log
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.FileInputStream
@@ -8,38 +9,88 @@ import java.io.IOException
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketException
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 
 class MediaHttpServer(private val context: Context) {
     private val running = AtomicBoolean(false)
-    private val pool = Executors.newCachedThreadPool()
+    private val acceptExecutor = Executors.newSingleThreadExecutor()
+    private val clientPool = Executors.newFixedThreadPool(MAX_CLIENTS)
     private var serverSocket: ServerSocket? = null
 
-    fun start() {
-        if (!running.compareAndSet(false, true)) return
-        serverSocket = ServerSocket(MediaNetwork.PORT)
-        pool.execute {
-            while (running.get()) {
-                val socket = try {
-                    serverSocket?.accept() ?: break
-                } catch (_: IOException) {
-                    break
-                }
-                pool.execute { handle(socket) }
-            }
+    fun start(): Boolean {
+        if (!running.compareAndSet(false, true)) return true
+
+        val socket = try {
+            ServerSocket(MediaNetwork.PORT).apply { reuseAddress = true }
+        } catch (failure: IOException) {
+            running.set(false)
+            Log.e(TAG, "media server failed to bind port ${MediaNetwork.PORT}", failure)
+            return false
         }
+
+        serverSocket = socket
+        acceptExecutor.execute { acceptLoop(socket) }
+        Log.i(TAG, "media server listening on port ${MediaNetwork.PORT}")
+        return true
     }
 
     fun stop() {
         running.set(false)
         runCatching { serverSocket?.close() }
         serverSocket = null
-        pool.shutdownNow()
+        acceptExecutor.shutdownNow()
+        clientPool.shutdownNow()
+        Log.i(TAG, "media server stopped")
+    }
+
+    private fun acceptLoop(server: ServerSocket) {
+        while (running.get()) {
+            val client = try {
+                server.accept()
+            } catch (failure: IOException) {
+                if (running.get()) Log.w(TAG, "media accept failed", failure)
+                break
+            }
+
+            try {
+                clientPool.execute { handleSafely(client) }
+            } catch (_: RejectedExecutionException) {
+                runCatching { client.close() }
+                if (running.get()) Log.w(TAG, "media client rejected: worker pool unavailable")
+            }
+        }
+    }
+
+    private fun handleSafely(socket: Socket) {
+        val remote = socket.inetAddress?.hostAddress.orEmpty()
+        try {
+            Log.i(TAG, "media client connected: $remote")
+            handle(socket)
+            Log.i(TAG, "media client disconnected: $remote")
+        } catch (failure: Exception) {
+            if (isNormalDisconnect(failure)) {
+                Log.i(TAG, "media client disconnected early: $remote (${failure.javaClass.simpleName})")
+            } else {
+                Log.w(TAG, "media client error from $remote", failure)
+            }
+        } finally {
+            runCatching { socket.close() }
+        }
+    }
+
+    private fun isNormalDisconnect(failure: Exception): Boolean {
+        if (failure is SocketException) return true
+        val message = failure.message.orEmpty().lowercase(Locale.US)
+        return message.contains("broken pipe") ||
+            message.contains("connection reset") ||
+            message.contains("socket closed")
     }
 
     private fun handle(socket: Socket) {
@@ -351,5 +402,10 @@ class MediaHttpServer(private val context: Context) {
             index++
         } while (value >= 1024 && index < units.lastIndex)
         return String.format(Locale.FRANCE, "%.1f %s", value, units[index])
+    }
+
+    companion object {
+        private const val TAG = "ShizziMedia"
+        private const val MAX_CLIENTS = 6
     }
 }
