@@ -195,3 +195,21 @@ func TestMediaProxyTargetKeepsLocalPrefixOutOfUpstream(t *testing.T) {
 		}
 	}
 }
+
+
+func TestSpeedtestDownloadSizesAreBounded(t *testing.T) {
+	cases := map[string]int64{
+		"10":  10 * 1024 * 1024,
+		"25":  25 * 1024 * 1024,
+		"50":  50 * 1024 * 1024,
+		"100": 100 * 1024 * 1024,
+		"999": 50 * 1024 * 1024,
+		"":    50 * 1024 * 1024,
+	}
+
+	for raw, expected := range cases {
+		if actual := speedtestDownloadBytes(raw); actual != expected {
+			t.Fatalf("speedtestDownloadBytes(%q)=%d, want %d", raw, actual, expected)
+		}
+	}
+}
