@@ -51,6 +51,28 @@ val gomobileBind by tasks.registering(Exec::class) {
     )
 }
 
+
+val prepareEmbeddedShizziPlusDebug by tasks.registering(Copy::class) {
+    dependsOn(":conso:assembleDebug")
+    from(rootProject.layout.projectDirectory.file("conso/build/outputs/apk/debug/conso-debug.apk"))
+    into(layout.projectDirectory.dir("src/main/assets/shizzi"))
+    rename { "Shizzi-Plus.apk" }
+}
+
+val prepareEmbeddedShizziPlusRelease by tasks.registering(Copy::class) {
+    dependsOn(":conso:assembleRelease")
+    from(rootProject.layout.projectDirectory.file("conso/build/outputs/apk/release/conso-release.apk"))
+    into(layout.projectDirectory.dir("src/main/assets/shizzi"))
+    rename { "Shizzi-Plus.apk" }
+}
+
+tasks.configureEach {
+    when (name) {
+        "mergeDebugAssets" -> dependsOn(prepareEmbeddedShizziPlusDebug)
+        "mergeReleaseAssets" -> dependsOn(prepareEmbeddedShizziPlusRelease)
+    }
+}
+
 android {
     namespace = "dev.shizzi"
     compileSdk = 35
