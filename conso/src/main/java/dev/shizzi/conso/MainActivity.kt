@@ -3,6 +3,7 @@ package dev.shizzi.conso
 import android.app.Activity
 import android.graphics.Color
 import android.net.ConnectivityManager
+import android.net.InetAddresses
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Bundle
@@ -17,6 +18,10 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import java.net.HttpURLConnection
+import java.net.Inet4Address
+import java.net.URL
+import kotlin.concurrent.thread
 
 class MainActivity : Activity() {
 
@@ -27,11 +32,13 @@ class MainActivity : Activity() {
     private lateinit var menu: View
     private lateinit var connectivityManager: ConnectivityManager
     private var boundWifiNetwork: Network? = null
+    private var mediaBaseUrl: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         connectivityManager = getSystemService(ConnectivityManager::class.java)
         buildUi()
+        detectMedia()
     }
 
     private fun buildUi() {
@@ -46,35 +53,47 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_HORIZONTAL
 
             addView(TextView(this@MainActivity).apply {
-                text = "Shizzi Conso"
-                textSize = 30f
+                text = "Shizzi+"
+                textSize = 34f
                 setTextColor(Color.WHITE)
                 gravity = Gravity.CENTER
-                setPadding(0, 0, 0, dp(8))
+                setPadding(0, 0, 0, dp(6))
             })
 
             addView(TextView(this@MainActivity).apply {
-                text = "Compte, consommation et recharge"
+                text = "Compte · Conso · Recharge · Media"
                 textSize = 15f
                 setTextColor(Color.rgb(148, 163, 184))
                 gravity = Gravity.CENTER
-                setPadding(0, 0, 0, dp(28))
+                setPadding(0, 0, 0, dp(26))
             })
 
-            addView(primaryButton("OUVRIR LA CONNEXION COMPTE") {
+            addView(sectionLabel("MON ACCÈS"))
+            addView(primaryButton("Ouvrir ma connexion compte") {
+                openPortal(PORTAL_URL)
+            })
+            addView(primaryButton("Ma consommation / mon forfait") {
+                openPortal(PORTAL_URL)
+            })
+            addView(primaryButton("Recharger avec un voucher") {
                 openPortal(PORTAL_URL)
             })
 
-            addView(primaryButton("VOIR / RECHARGER MON FORFAIT") {
-                openPortal(PORTAL_URL)
+            addView(sectionLabel("SHIZZI MEDIA"))
+            addView(primaryButton("Films · Séries · Musique") {
+                openMedia()
             })
 
             addView(TextView(this@MainActivity).apply {
-                text = "Connectez d'abord ce téléphone au Wi-Fi Shizzi."
+                text = "Shizzi+ détecte automatiquement le serveur Media du routeur. Aucun IP à saisir."
                 textSize = 13f
                 setTextColor(Color.rgb(148, 163, 184))
                 gravity = Gravity.CENTER
-                setPadding(0, dp(22), 0, 0)
+                setPadding(0, dp(14), 0, 0)
+            })
+
+            addView(primaryButton("Actualiser la détection Shizzi") {
+                detectMedia(showFeedback = true)
             })
         }
 
@@ -93,11 +112,10 @@ class MainActivity : Activity() {
         webView = WebView(this).apply {
             visibility = View.GONE
             setBackgroundColor(Color.rgb(7, 17, 31))
-            // The Shizzi portal owns the two-second live refresh. Conso only
-            // enables JavaScript and keeps this WebView on the Shizzi Wi-Fi.
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.loadsImagesAutomatically = true
+            settings.mediaPlaybackRequiresUserGesture = false
             settings.cacheMode = WebSettings.LOAD_NO_CACHE
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(
@@ -124,11 +142,8 @@ class MainActivity : Activity() {
                         this@MainActivity.status.visibility = View.VISIBLE
                         val detail = error?.description?.toString()?.trim().orEmpty()
                         this@MainActivity.status.text =
-                            if (detail.isEmpty()) {
-                                "Shizzi Hotspot n'est pas joignable. Vérifiez la connexion Wi-Fi."
-                            } else {
-                                "Shizzi Hotspot n'est pas joignable. Vérifiez la connexion Wi-Fi.\n$detail"
-                            }
+                            "Shizzi n'est pas joignable sur ce Wi-Fi." +
+                                if (detail.isBlank()) "" else "\n$detail"
                     }
                 }
             }
@@ -141,20 +156,8 @@ class MainActivity : Activity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ),
         )
-        root.addView(
-            progress,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ),
-        )
-        root.addView(
-            status,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ),
-        )
+        root.addView(progress)
+        root.addView(status)
         root.addView(
             webView,
             LinearLayout.LayoutParams(
@@ -167,6 +170,14 @@ class MainActivity : Activity() {
         setContentView(root)
     }
 
+    private fun sectionLabel(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 12f
+        setTextColor(Color.rgb(96, 165, 250))
+        gravity = Gravity.START
+        setPadding(0, dp(12), 0, dp(8))
+    }
+
     private fun primaryButton(label: String, onClick: () -> Unit): Button =
         Button(this).apply {
             text = label
@@ -177,19 +188,18 @@ class MainActivity : Activity() {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(58),
             ).apply {
-                bottomMargin = dp(12)
+                bottomMargin = dp(10)
             }
         }
 
     private fun findWifiNetwork(): Network? {
         val active = connectivityManager.activeNetwork
         if (active != null) {
-            val activeCapabilities = connectivityManager.getNetworkCapabilities(active)
-            if (activeCapabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
+            val caps = connectivityManager.getNetworkCapabilities(active)
+            if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
                 return active
             }
         }
-
         return connectivityManager.allNetworks.firstOrNull { network ->
             connectivityManager.getNetworkCapabilities(network)
                 ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
@@ -198,9 +208,7 @@ class MainActivity : Activity() {
 
     private fun bindPortalToWifi(): Boolean {
         val wifi = findWifiNetwork() ?: return false
-        if (!connectivityManager.bindProcessToNetwork(wifi)) {
-            return false
-        }
+        if (!connectivityManager.bindProcessToNetwork(wifi)) return false
         boundWifiNetwork = wifi
         return true
     }
@@ -209,6 +217,91 @@ class MainActivity : Activity() {
         if (boundWifiNetwork != null) {
             connectivityManager.bindProcessToNetwork(null)
             boundWifiNetwork = null
+        }
+    }
+
+    private fun mediaCandidates(network: Network): List<String> {
+        val link = connectivityManager.getLinkProperties(network)
+        val gateways = link?.routes.orEmpty()
+            .mapNotNull { it.gateway as? Inet4Address }
+            .mapNotNull { it.hostAddress }
+        return (gateways + listOf("192.168.7.1", "192.168.43.1", "192.168.1.1"))
+            .distinct()
+            .map { "http://$it:8088/" }
+    }
+
+    private fun detectMedia(showFeedback: Boolean = false) {
+        if (showFeedback) {
+            status.visibility = View.VISIBLE
+            status.text = "Recherche du serveur Shizzi Media…"
+        }
+        thread {
+            val wifi = findWifiNetwork()
+            if (wifi == null) {
+                mediaBaseUrl = null
+                runOnUiThread {
+                    if (showFeedback) status.text = "Connecte d'abord cet appareil au Wi-Fi Shizzi."
+                }
+                return@thread
+            }
+
+            val found = mediaCandidates(wifi).firstOrNull { base ->
+                runCatching {
+                    val connection = wifi.openConnection(URL(base + "health")) as HttpURLConnection
+                    connection.connectTimeout = 1_000
+                    connection.readTimeout = 1_000
+                    connection.useCaches = false
+                    val ok = connection.responseCode == 200
+                    connection.disconnect()
+                    ok
+                }.getOrDefault(false)
+            }
+            mediaBaseUrl = found
+
+            runOnUiThread {
+                if (showFeedback) {
+                    status.visibility = View.VISIBLE
+                    status.text = if (found != null) {
+                        "Shizzi Media détecté."
+                    } else {
+                        "Shizzi Media n'est pas actif sur ce routeur."
+                    }
+                }
+            }
+        }
+    }
+
+    private fun openMedia() {
+        val known = mediaBaseUrl
+        if (known != null) {
+            openPortal(known)
+            return
+        }
+        status.visibility = View.VISIBLE
+        status.text = "Recherche de Shizzi Media…"
+        thread {
+            val wifi = findWifiNetwork()
+            val found = wifi?.let { network ->
+                mediaCandidates(network).firstOrNull { base ->
+                    runCatching {
+                        val connection = network.openConnection(URL(base + "health")) as HttpURLConnection
+                        connection.connectTimeout = 1_200
+                        connection.readTimeout = 1_200
+                        val ok = connection.responseCode == 200
+                        connection.disconnect()
+                        ok
+                    }.getOrDefault(false)
+                }
+            }
+            mediaBaseUrl = found
+            runOnUiThread {
+                if (found == null) {
+                    status.visibility = View.VISIBLE
+                    status.text = "Serveur Media indisponible. Vérifie qu'il est activé sur le téléphone Shizzi."
+                } else {
+                    openPortal(found)
+                }
+            }
         }
     }
 
@@ -221,8 +314,7 @@ class MainActivity : Activity() {
 
         if (!bindPortalToWifi()) {
             progress.visibility = View.GONE
-            status.text =
-                "Aucun réseau Wi-Fi Shizzi utilisable n'a été trouvé. Connectez ce téléphone au Wi-Fi Shizzi puis réessayez."
+            status.text = "Aucun réseau Wi-Fi Shizzi utilisable n'a été trouvé."
             return
         }
 
@@ -234,6 +326,8 @@ class MainActivity : Activity() {
         super.onResume()
         if (::webView.isInitialized && webView.visibility == View.VISIBLE) {
             bindPortalToWifi()
+        } else {
+            detectMedia()
         }
     }
 
@@ -247,6 +341,7 @@ class MainActivity : Activity() {
                 status.visibility = View.GONE
                 menu.visibility = View.VISIBLE
                 releaseWifiBinding()
+                detectMedia()
             }
             else -> super.onBackPressed()
         }
