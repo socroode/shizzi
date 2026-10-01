@@ -26,7 +26,7 @@ class MediaHttpServer(private val context: Context) {
     private var serverSocket: ServerSocket? = null
 
     fun start(): Boolean {
-        if (!running.compareAndSet(false, true)) return true
+        if (!running.compareAndSet(false, true)) return isListening()
 
         val socket = try {
             ServerSocket().apply {
@@ -59,21 +59,30 @@ class MediaHttpServer(private val context: Context) {
         Log.i(TAG, "media server stopped")
     }
 
-    private fun acceptLoop(server: ServerSocket) {
-        while (running.get()) {
-            val client = try {
-                server.accept()
-            } catch (failure: IOException) {
-                if (running.get()) Log.w(TAG, "media accept failed", failure)
-                break
-            }
+    fun isListening(): Boolean =
+        running.get() && serverSocket?.let { it.isBound && !it.isClosed } == true
 
-            try {
-                clientPool.execute { handleSafely(client) }
-            } catch (_: RejectedExecutionException) {
-                runCatching { client.close() }
-                if (running.get()) Log.w(TAG, "media client rejected: worker pool unavailable")
+    private fun acceptLoop(server: ServerSocket) {
+        try {
+            while (running.get()) {
+                val client = try {
+                    server.accept()
+                } catch (failure: IOException) {
+                    if (running.get()) Log.w(TAG, "media accept failed", failure)
+                    break
+                }
+
+                try {
+                    clientPool.execute { handleSafely(client) }
+                } catch (_: RejectedExecutionException) {
+                    runCatching { client.close() }
+                    if (running.get()) Log.w(TAG, "media client rejected: worker pool unavailable")
+                }
             }
+        } finally {
+            running.set(false)
+            runCatching { server.close() }
+            if (serverSocket === server) serverSocket = null
         }
     }
 
