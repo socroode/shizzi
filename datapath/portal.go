@@ -991,7 +991,7 @@ a{display:block;margin-top:18px;padding:14px 16px;border-radius:14px;text-align:
 <a href="/">Ouvrir ma connexion compte</a>
 </main></body></html>`)
 	header := fmt.Sprintf(
-		"HTTP/1.1 401 Unauthorized\\r\\nContent-Type: text/html; charset=utf-8\\r\\nContent-Length: %d\\r\\nCache-Control: no-store\\r\\nConnection: close\\r\\n\\r\\n",
+		"HTTP/1.1 401 Unauthorized\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
 		len(body),
 	)
 	_, _ = conn.Write([]byte(header))
