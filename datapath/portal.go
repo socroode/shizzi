@@ -1411,6 +1411,7 @@ func (m *TrafficManager) writePortalHTML(
 <strong>Shizzi+ %s</strong>
 <p>Installez Shizzi+ directement depuis ce Wi-Fi. Aucun Internet ni quota Data n'est utilisé.</p>
 <a class="download-button" href="/download/shizzi-plus.apk" download="%s">Télécharger Shizzi+</a>
+<div id="shizzi-download-status" class="app-note" aria-live="polite"></div>
 <div class="app-meta">%s · SHA-256 %s…</div>
 <div class="app-note">Android peut demander d'autoriser l'installation depuis cette source.</div></section>`,
 			html.EscapeString(clientApp.Version),
@@ -1467,6 +1468,7 @@ button.secondary{background:#1e293b;color:#e2e8f0}
 	}
 
 	page = injectPortalAutoRefresh(page)
+	page = injectClientAppDownload(page)
 	writeHTTP(conn, "text/html; charset=utf-8", []byte(page))
 }
 
@@ -1498,6 +1500,74 @@ func applyPortalCustomization(
 		return rendered[:index] + functional + rendered[index:]
 	}
 	return rendered + functional
+}
+
+func injectClientAppDownload(page string) string {
+	if !strings.Contains(page, "/download/shizzi-plus.apk") {
+		return page
+	}
+
+	script := `<script>
+(function(){
+  var link=document.querySelector('a.download-button[href="/download/shizzi-plus.apk"]');
+  if(!link || link.dataset.shizziLocalFetch==="1") return;
+  link.dataset.shizziLocalFetch="1";
+
+  var status=document.getElementById("shizzi-download-status");
+  var originalText=link.textContent;
+
+  function setStatus(message){ if(status) status.textContent=message; }
+
+  link.addEventListener("click",async function(event){
+    if(!window.fetch || !window.URL || !URL.createObjectURL) return;
+    event.preventDefault();
+    if(link.dataset.shizziBusy==="1") return;
+
+    link.dataset.shizziBusy="1";
+    link.textContent="Téléchargement local…";
+    setStatus("Récupération directe depuis le routeur Shizzi…");
+
+    var href=link.getAttribute("href") || "/download/shizzi-plus.apk";
+    var fileName=link.getAttribute("download") || "Shizzi-Plus.apk";
+
+    try{
+      var response=await fetch(href,{cache:"no-store",credentials:"same-origin"});
+      if(!response.ok) throw new Error("HTTP "+response.status);
+
+      var expected=Number(response.headers.get("Content-Length") || 0);
+      var blob=await response.blob();
+      if(expected>0 && blob.size!==expected){
+        throw new Error("APK incomplet: "+blob.size+"/"+expected);
+      }
+
+      var objectUrl=URL.createObjectURL(blob);
+      var save=document.createElement("a");
+      save.href=objectUrl;
+      save.download=fileName;
+      save.style.display="none";
+      document.body.appendChild(save);
+      save.click();
+      save.remove();
+      setTimeout(function(){ URL.revokeObjectURL(objectUrl); },30000);
+
+      setStatus("Shizzi+ reçu depuis le Wi-Fi local ("+blob.size+" octets).");
+    }catch(error){
+      setStatus("Échec du transfert navigateur. Nouvelle tentative directe…");
+      var separator=href.indexOf("?")>=0 ? "&" : "?";
+      window.location.assign(href+separator+"fallback=1&ts="+Date.now());
+    }finally{
+      link.dataset.shizziBusy="0";
+      link.textContent=originalText;
+    }
+  });
+})();
+</script>`
+
+	lower := strings.ToLower(page)
+	if index := strings.LastIndex(lower, "</body>"); index >= 0 {
+		return page[:index] + script + page[index:]
+	}
+	return page + script
 }
 
 func injectPortalAutoRefresh(page string) string {
