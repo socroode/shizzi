@@ -5,6 +5,34 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.4.0] - 2026-09-30
+
+### Added
+
+- Shizzi Messenger local, réservé aux comptes Shizzi authentifiés.
+- Messages privés compte à compte et présence en ligne.
+- Groupes de discussion avec propriétaire, administrateurs et membres.
+- Historique, groupes et blocages persistés localement sur le téléphone routeur.
+- Appels audio WebRTC 1:1 entièrement locaux au Wi-Fi Shizzi.
+- Appels vidéo 1:1 limités à 854×480, 20 fps et environ 900 kbps max.
+- Appels audio et vidéo de groupe locaux, avec vidéo 640×360 à 15 fps et environ 450 kbps max par flux.
+- Première limite de sécurité à 6 participants simultanés par appel de groupe.
+- Blocage utilisateur et protection anti-spam de base.
+- Shizzi+ 0.3.0 ajoute l'entrée Messenger et le moteur d'appel natif WebRTC.
+
+### Changed
+
+- Le portail affiche Messenger uniquement après authentification d'un compte Shizzi actif.
+- Les libellés du test de débit parlent désormais du « routeur Shizzi » et non d'un modèle de téléphone particulier.
+- Shizzi Hotspot passe à 0.4.4.0 (test) ; Shizzi Admin reste 0.2.3.
+
+### Known limitations
+
+- Les appels entrants nécessitent actuellement que Shizzi Messenger soit ouvert dans Shizzi+ ; les notifications d'appel en arrière-plan restent à ajouter.
+- Les appels de groupe utilisent un maillage WebRTC local dans cette première version de test, pas encore un SFU intégré.
+- Le non-décompte du quota Internet pour les appels/messages locaux doit encore être validé sur appareils réels.
+
+
 ## [0.4.3.9] - 2026-09-30
 
 ### Security
