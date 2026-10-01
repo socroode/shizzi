@@ -730,13 +730,7 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 		path == "/speedtest/download":
 		m.serveLocalSpeedtestDownload(conn, request)
 	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
-		path == "/media":
-		_, _ = io.WriteString(
-			conn,
-			"HTTP/1.1 302 Found\r\nLocation: /media/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-		)
-	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
-		strings.HasPrefix(path, "/media/"):
+		(path == "/media" || strings.HasPrefix(path, "/media/")):
 		m.serveMediaProxy(conn, request)
 	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
 		path == "/download/shizzi-plus.apk":
@@ -991,7 +985,7 @@ a{display:block;margin-top:18px;padding:14px 16px;border-radius:14px;text-align:
 <a href="/">Ouvrir ma connexion compte</a>
 </main></body></html>`)
 	header := fmt.Sprintf(
-		"HTTP/1.1 401 Unauthorized\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+		"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nX-Shizzi-Media-Auth: required\r\nConnection: close\r\n\r\n",
 		len(body),
 	)
 	_, _ = conn.Write([]byte(header))
