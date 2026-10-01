@@ -19,6 +19,7 @@ const (
 	messengerMaxEvents       = 10000
 	messengerMaxGroups       = 100
 	messengerMaxGroupMembers = 20
+	messengerMaxGroupCall    = 6
 	messengerMaxTextLength   = 2000
 )
 
@@ -669,6 +670,11 @@ func (m *TrafficManager) serveMessengerAPI(
 			messengerForbidden(conn, "Ce salon appartient à un autre groupe.")
 			return true
 		}
+		if !room.Members[me.Number] && len(room.Members) >= messengerMaxGroupCall {
+			shizziMessenger.mu.Unlock()
+			messengerBadRequest(conn, "Cet appel de groupe a déjà 6 participants.")
+			return true
+		}
 		existing := make([]string, 0, len(room.Members))
 		for member := range room.Members {
 			if member != me.Number {
@@ -794,7 +800,7 @@ button,input{font:inherit;border-radius:12px;border:0;padding:12px}button{backgr
 <main>
 <div id="incoming" class="panel call hidden"></div>
 <div class="tabs"><button onclick="showTab('contacts')">Messages</button><button class="secondary" onclick="showTab('groups')">Groupes</button></div>
-<section id="contacts" class="panel"><div class="notice">Messages et appels restent sur le Wi-Fi Shizzi. Les appels sont lancés dans Shizzi+.</div><div id="contactList" class="list">Chargement…</div></section>
+<section id="contacts" class="panel"><div class="notice">Messages et appels restent sur le Wi-Fi Shizzi. Appels vidéo 1↔1 en 480p, groupes en 360p (6 participants max en version test).</div><div id="contactList" class="list">Chargement…</div></section>
 <section id="groups" class="panel hidden">
 <div class="actions"><input id="groupName" placeholder="Nom du groupe" style="flex:1;background:#111827;color:white;border:1px solid #334155"><button onclick="createGroup()">Créer</button></div>
 <div id="groupList" class="list" style="margin-top:12px">Chargement…</div></section>
