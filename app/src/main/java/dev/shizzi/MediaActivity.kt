@@ -223,7 +223,7 @@ private fun MediaScreen(onBack: () -> Unit) {
                     onClick = {
                         val intent = Intent(
                             Intent.ACTION_VIEW,
-                            Uri.parse("http://127.0.0.1:${MediaNetwork.PORT}/"),
+                            Uri.parse("http://${MediaNetwork.LOOPBACK_HOST}:${MediaNetwork.PORT}/"),
                         )
                         context.startActivity(intent)
                     },
