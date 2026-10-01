@@ -292,7 +292,7 @@ class MainActivity : Activity() {
                     connection.connectTimeout = 1_000
                     connection.readTimeout = 1_000
                     connection.useCaches = false
-                    val ok = connection.responseCode == 200 || connection.responseCode == 401 || connection.responseCode == 401
+                    val ok = connection.responseCode == 200 || connection.responseCode == 401
                     connection.disconnect()
                     ok
                 }.getOrDefault(false)
@@ -328,7 +328,7 @@ class MainActivity : Activity() {
                         val connection = network.openConnection(URL(base + "health")) as HttpURLConnection
                         connection.connectTimeout = 1_200
                         connection.readTimeout = 1_200
-                        val ok = connection.responseCode == 200
+                        val ok = connection.responseCode == 200 || connection.responseCode == 401
                         connection.disconnect()
                         ok
                     }.getOrDefault(false)
