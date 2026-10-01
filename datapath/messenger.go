@@ -52,6 +52,14 @@ type messengerGroup struct {
 	CreatedAtMillis int64
 }
 
+type messengerRoom struct {
+	CallID          string
+	GroupID         string
+	Media           string
+	Members         map[string]bool
+	CreatedAtMillis int64
+}
+
 type messengerGroupPayload struct {
 	ID              string   `json:"id"`
 	Name            string   `json:"name"`
@@ -82,6 +90,7 @@ type messengerHub struct {
 	nextEventID   int64
 	messages      []messengerMessage
 	groups        map[string]*messengerGroup
+	rooms         map[string]*messengerRoom
 	events        []messengerEvent
 	blocks        map[string]map[string]bool
 	recentSends   map[string][]int64
@@ -92,6 +101,7 @@ var shizziMessenger = newMessengerHub()
 func newMessengerHub() *messengerHub {
 	return &messengerHub{
 		groups:      make(map[string]*messengerGroup),
+		rooms:       make(map[string]*messengerRoom),
 		blocks:      make(map[string]map[string]bool),
 		recentSends: make(map[string][]int64),
 	}
@@ -590,6 +600,95 @@ func (m *TrafficManager) serveMessengerAPI(
 		}
 		shizziMessenger.mu.Unlock()
 		writeJSONStatus(conn, "200 OK", map[string]any{"ok": true, "events": items})
+		return true
+
+	case path == "room" && request.Method == http.MethodPost:
+		var body struct {
+			Action  string `json:"action"`
+			CallID  string `json:"callId"`
+			GroupID string `json:"groupId"`
+			Media   string `json:"media"`
+		}
+		if err := decodeMessengerBody(request, &body); err != nil {
+			messengerBadRequest(conn, "Salon d'appel invalide.")
+			return true
+		}
+		action := strings.ToLower(strings.TrimSpace(body.Action))
+		callID := strings.TrimSpace(body.CallID)
+		groupID := strings.TrimSpace(body.GroupID)
+		media := strings.ToLower(strings.TrimSpace(body.Media))
+		if callID == "" || len(callID) > 96 || groupID == "" {
+			messengerBadRequest(conn, "Identifiant d'appel de groupe invalide.")
+			return true
+		}
+		if media != "video" {
+			media = "audio"
+		}
+		shizziMessenger.mu.Lock()
+		group := shizziMessenger.groups[groupID]
+		if group == nil || !group.Members[me.Number] {
+			shizziMessenger.mu.Unlock()
+			messengerForbidden(conn, "Vous n'êtes pas membre de ce groupe.")
+			return true
+		}
+		if action == "leave" {
+			room := shizziMessenger.rooms[callID]
+			if room != nil {
+				delete(room.Members, me.Number)
+				now := time.Now().UnixMilli()
+				for member := range room.Members {
+					shizziMessenger.appendEventLocked(messengerEvent{
+						Kind: "room-leave", From: me.Number, To: member,
+						CallID: callID, Media: room.Media, GroupID: room.GroupID,
+						CreatedAtMillis: now,
+					})
+				}
+				if len(room.Members) == 0 {
+					delete(shizziMessenger.rooms, callID)
+				}
+			}
+			shizziMessenger.mu.Unlock()
+			writeJSONStatus(conn, "200 OK", map[string]any{"ok": true})
+			return true
+		}
+		if action != "join" {
+			shizziMessenger.mu.Unlock()
+			messengerBadRequest(conn, "Action de salon inconnue.")
+			return true
+		}
+		room := shizziMessenger.rooms[callID]
+		if room == nil {
+			room = &messengerRoom{
+				CallID: callID, GroupID: groupID, Media: media,
+				Members: make(map[string]bool), CreatedAtMillis: time.Now().UnixMilli(),
+			}
+			shizziMessenger.rooms[callID] = room
+		}
+		if room.GroupID != groupID {
+			shizziMessenger.mu.Unlock()
+			messengerForbidden(conn, "Ce salon appartient à un autre groupe.")
+			return true
+		}
+		existing := make([]string, 0, len(room.Members))
+		for member := range room.Members {
+			if member != me.Number {
+				existing = append(existing, member)
+			}
+		}
+		sort.Strings(existing)
+		room.Members[me.Number] = true
+		now := time.Now().UnixMilli()
+		for _, member := range existing {
+			shizziMessenger.appendEventLocked(messengerEvent{
+				Kind: "room-join", From: me.Number, To: member,
+				CallID: callID, Media: room.Media, GroupID: groupID,
+				CreatedAtMillis: now,
+			})
+		}
+		shizziMessenger.mu.Unlock()
+		writeJSONStatus(conn, "200 OK", map[string]any{
+			"ok": true, "members": existing, "media": room.Media,
+		})
 		return true
 
 	case path == "signal" && request.Method == http.MethodPost:
