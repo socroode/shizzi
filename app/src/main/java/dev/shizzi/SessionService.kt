@@ -280,6 +280,7 @@ class SessionService : Service() {
         rates.retain(keys)
         mutableLiveSessions.value = sessions
         mutableAttribution.value = snapshot.attribution
+        mutableMediaDiagnostics.value = snapshot.mediaDiagnostics
     }
 
     private fun followStatus() = statusPoller.follow(
@@ -416,9 +417,17 @@ class SessionService : Service() {
         val attributionDiagnostics: StateFlow<AttributionDiagnostics> =
             mutableAttribution.asStateFlow()
 
+        private val mutableMediaDiagnostics =
+            MutableStateFlow<List<LiveMediaDiagnostic>>(emptyList())
+
+        /** Recent Media access/proxy events for the Hotspot Media diagnostic screen. */
+        val mediaDiagnostics: StateFlow<List<LiveMediaDiagnostic>> =
+            mutableMediaDiagnostics.asStateFlow()
+
         private fun clearLiveSessions() {
             mutableLiveSessions.value = emptyList()
             mutableAttribution.value = AttributionDiagnostics()
+            mutableMediaDiagnostics.value = emptyList()
         }
 
         /**
