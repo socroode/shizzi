@@ -707,6 +707,9 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	if m.serveAdminAPI(conn, request, clientIP) {
 		return
 	}
+	if m.serveMessengerAPI(conn, request, clientIP) {
+		return
+	}
 
 	path := request.URL.Path
 	switch {
@@ -714,6 +717,15 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 		(path == "/media" || strings.HasPrefix(path, "/media/")) &&
 		!m.mediaAccountAuthenticated(clientIP):
 		m.writeMediaLoginRequired(conn, request.Method)
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		path == "/messenger":
+		_, _ = io.WriteString(
+			conn,
+			"HTTP/1.1 302 Found\r\nLocation: /messenger/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+		)
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		path == "/messenger/":
+		m.serveMessengerPage(conn, request.Method, clientIP)
 	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
 		path == "/speedtest":
 		_, _ = io.WriteString(
@@ -845,7 +857,7 @@ button:disabled{opacity:.5;cursor:wait}
 <a href="/">← Portail Shizzi</a>
 <div class="eyebrow" style="margin-top:18px">RÉSEAU LOCAL</div>
 <h1>Test de débit local</h1>
-<p class="lead">Mesure le débit <strong>Reno9 → cet appareil</strong> sur le Wi-Fi Shizzi. Le test reste local : il ne télécharge rien depuis Starlink ou Internet.</p>
+<p class="lead">Mesure le débit <strong>routeur Shizzi → cet appareil</strong> sur le Wi-Fi Shizzi. Le test reste local : il ne télécharge rien depuis Starlink ou Internet.</p>
 <div class="controls">
 <select id="size" aria-label="Taille du test">
 <option value="10">Rapide · 10 Mo</option>
@@ -932,7 +944,7 @@ button:disabled{opacity:.5;cursor:wait}
       await receive("/speedtest/download?mb=10&warmup="+Date.now(),null);
 
       var mb=sizeSelect.value;
-      setStatus("Mesure du débit Reno9 → appareil…");
+      setStatus("Mesure du débit routeur Shizzi → appareil…");
       var result=await receive(
         "/speedtest/download?mb="+encodeURIComponent(mb)+"&ts="+Date.now(),
         function(progress){bar.style.width=Math.min(100,progress*100).toFixed(1)+"%";}
@@ -1317,6 +1329,11 @@ func (m *TrafficManager) writePortalHTML(
 	}
 
 	if status.Authenticated {
+	content += `<section class="messenger-link"><div class="eyebrow">COMMUNICATION LOCALE</div>
+<strong>Shizzi Messenger</strong>
+<p>Messages privés, groupes et appels entre comptes Shizzi sur ce Wi-Fi.</p>
+<a class="messenger-button" href="/messenger/">Ouvrir Shizzi Messenger</a>
+<div class="messenger-note">Compte Shizzi requis · trafic local hors quota Internet</div></section>`
 	content += `<section class="media-link"><div class="eyebrow">MEDIA LOCAL</div>
 <strong>Shizzi Media</strong>
 <p>Films, séries et musique disponibles dans le navigateur sur ce Wi-Fi, sans utiliser Internet ni le quota Data.</p>
@@ -1326,7 +1343,7 @@ func (m *TrafficManager) writePortalHTML(
 
 	content += `<section class="speedtest-link"><div class="eyebrow">RÉSEAU LOCAL</div>
 <strong>Test de débit Shizzi</strong>
-<p>Mesurez la vitesse réelle du Reno9 vers cet appareil, sans utiliser Internet.</p>
+<p>Mesurez la vitesse réelle du routeur Shizzi vers cet appareil, sans utiliser Internet.</p>
 <a class="speedtest-button" href="/speedtest/">Tester le débit local</a>
 <div class="speedtest-note">Navigateur uniquement · aucun Termux nécessaire</div></section>`
 
@@ -1370,10 +1387,10 @@ input{border:1px solid #334155;background:#0b1220;color:#fff;outline:none}button
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.grid>div{padding:12px;border-radius:14px;background:#ffffff08}.grid strong{display:block;margin-top:4px;font-size:13px}
 .status-link{display:block;text-align:center;margin-top:16px;color:#7dd3fc;text-decoration:none;font-weight:700;font-size:13px}
 button.secondary{background:#1e293b;color:#e2e8f0}
-.media-link,.speedtest-link,.app-download{margin-top:20px;padding:16px;border:1px solid #22d3ee55;border-radius:18px;background:#071b2a}
-.media-link>strong,.speedtest-link>strong,.app-download>strong{display:block;margin:5px 0 6px;font-size:18px}.media-link p,.speedtest-link p,.app-download p{margin:0 0 12px;color:#cbd5e1;font-size:13px;line-height:1.45}
-.media-button,.speedtest-button,.download-button{display:block;width:100%%;border-radius:14px;padding:14px 16px;text-align:center;text-decoration:none;background:linear-gradient(90deg,#38bdf8,#34d399);color:#06202a;font-weight:900}
-.media-note,.speedtest-note,.app-meta,.app-note{margin-top:9px;color:#94a3b8;font-size:11px;word-break:break-word}
+.messenger-link,.media-link,.speedtest-link,.app-download{margin-top:20px;padding:16px;border:1px solid #22d3ee55;border-radius:18px;background:#071b2a}
+.messenger-link>strong,.media-link>strong,.speedtest-link>strong,.app-download>strong{display:block;margin:5px 0 6px;font-size:18px}.messenger-link p,.media-link p,.speedtest-link p,.app-download p{margin:0 0 12px;color:#cbd5e1;font-size:13px;line-height:1.45}
+.messenger-button,.media-button,.speedtest-button,.download-button{display:block;width:100%%;border-radius:14px;padding:14px 16px;text-align:center;text-decoration:none;background:linear-gradient(90deg,#38bdf8,#34d399);color:#06202a;font-weight:900}
+.messenger-note,.media-note,.speedtest-note,.app-meta,.app-note{margin-top:9px;color:#94a3b8;font-size:11px;word-break:break-word}
 </style></head><body><main class="card"><h1>%s</h1><p class="sub">%s</p>%s%s</main></body></html>`,
 		refresh,
 		html.EscapeString(title),
