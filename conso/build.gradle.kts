@@ -13,8 +13,8 @@ android {
         applicationId = "dev.shizzi.conso"
         minSdk = 30
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.2.4"
+        versionCode = 9
+        versionName = "0.3.0"
     }
 
     val keystoreProperties = Properties().apply {
@@ -62,4 +62,5 @@ android {
 }
 
 dependencies {
+    implementation("io.github.webrtc-sdk:android:150.7871.01")
 }
