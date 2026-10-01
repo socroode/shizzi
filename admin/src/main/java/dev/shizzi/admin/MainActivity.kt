@@ -190,6 +190,7 @@ class MainActivity : Activity() {
         renderPortal(state.optJSONObject("portal") ?: JSONObject())
         renderAdminCredentials(state.optJSONObject("remoteAdmin") ?: JSONObject())
         renderDiagnostics(traffic)
+        renderMediaDiagnostics(traffic.optJSONArray("mediaDiagnostics") ?: JSONArray())
     }
 
     private fun renderAccounts(accounts: JSONArray) {
@@ -504,6 +505,50 @@ class MainActivity : Activity() {
                 "\nRefus sans session/forfait : " + traffic.optLong("refusedUnauthorizedFlows") +
                 "\nDNS non facturé : " + formatBytes(traffic.optLong("unattributedDnsBytes")),
         )
+    }
+
+    private fun renderMediaDiagnostics(events: JSONArray) {
+        section("Diagnostic Media")
+        if (events.length() == 0) {
+            info(
+                "Aucun accès Media enregistré pour cette session. " +
+                    "Sur un appareil client déjà connecté à un compte Shizzi, ouvrez Media puis appuyez sur Actualiser.",
+            )
+            return
+        }
+
+        val start = maxOf(0, events.length() - 10)
+        for (i in events.length() - 1 downTo start) {
+            val event = events.optJSONObject(i) ?: continue
+            val authenticated = if (event.optBoolean("accountAuthenticated")) "OUI" else "NON"
+            val backend = if (event.optBoolean("backendConnected")) "OUI" else "NON"
+            val account = event.optString("accountNumber").ifBlank { "—" }
+            val target = event.optString("proxyTarget").ifBlank { "—" }
+            val backendAddress = event.optString("backend").ifBlank { "—" }
+            val result = event.optString("result").ifBlank { "—" }
+            val error = event.optString("error")
+            val copied = event.optLong("bytesCopied")
+            val atMillis = event.optLong("atMillis")
+            val whenText = if (atMillis > 0L) {
+                java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
+                    .format(java.util.Date(atMillis))
+            } else {
+                "heure —"
+            }
+
+            info(
+                "$whenText · " + event.optString("path").ifBlank { "—" } +
+                    "\nClient : " + event.optString("clientIp").ifBlank { "—" } +
+                    "\nCompte : $account · authentifié : $authenticated" +
+                    "\nProxy : $target" +
+                    "\nBackend : $backendAddress · connecté : $backend" +
+                    "\nRésultat : $result" +
+                    if (copied > 0L) "\nTransféré : " + formatBytes(copied) else "" +
+                    if (error.isNotBlank()) "\nErreur : $error" else "",
+            )
+            divider()
+        }
+        info("Les 10 événements Media les plus récents sont affichés. Utilisez Actualiser après avoir reproduit le problème.")
     }
 
     private fun command(action: String, params: JSONObject) {
