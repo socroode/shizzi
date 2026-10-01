@@ -67,6 +67,10 @@ class SessionService : Service() {
             ),
         )
 
+        if (!isStopping && MediaPrefs.isEnabled(this)) {
+            MediaServerService.start(this)
+        }
+
         when {
             isStopping -> stopSession()
             else -> startSession()
@@ -144,9 +148,18 @@ class SessionService : Service() {
             var pendingResults = emptyList<PortalClaimResult>()
             var pendingAdminResults = emptyList<AdminCommandResult>()
             val handledAdminCommandIds = mutableSetOf<String>()
+            var nextMediaHealthCheckMillis = 0L
 
             while (internalState.value.status == UiStatus.CONNECTED) {
                 val now = System.currentTimeMillis()
+
+                if (MediaPrefs.isEnabled(this@SessionService) && now >= nextMediaHealthCheckMillis) {
+                    if (!MediaNetwork.backendReachable()) {
+                        SessionLog.warn("media backend health check failed; restarting local Media server")
+                        MediaServerService.restart(this@SessionService)
+                    }
+                    nextMediaHealthCheckMillis = now + MEDIA_HEALTH_CHECK_MS
+                }
                 val snapshot = try {
                     parseLiveTrafficSnapshot(controller.trafficStats())
                 } catch (cancelled: CancellationException) {
@@ -392,6 +405,7 @@ class SessionService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val CYBERCAFE_POLL_MS = 1_000L
         private const val CYBERCAFE_RESYNC_MS = 60_000L
+        private const val MEDIA_HEALTH_CHECK_MS = 5_000L
         const val ACTION_STOP = "dev.shizzi.STOP_SESSION"
         const val EXTRA_REPORT_AS = "reportAs"
 
