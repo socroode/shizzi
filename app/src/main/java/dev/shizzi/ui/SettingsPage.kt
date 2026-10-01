@@ -1,5 +1,6 @@
 package dev.shizzi.ui
 
+import android.content.Intent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Column
@@ -26,6 +27,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import dev.shizzi.AppPermission
+import dev.shizzi.MediaActivity
 import dev.shizzi.PermissionStatus
 import dev.shizzi.ShizukuState
 import dev.shizzi.VpnMode
@@ -155,6 +157,19 @@ private fun settingsSections(
             state = state.automation,
             actions = actions.automation,
             toasts = toasts,
+        )
+    },
+
+    SettingsSectionSpec("Media") {
+        val context = LocalContext.current
+        SettingsAction(
+            label = SettingsText(
+                title = "Shizzi Media",
+                subtitle = "Films, séries et musique sur le réseau local",
+            ),
+            onClick = {
+                context.startActivity(Intent(context, MediaActivity::class.java))
+            },
         )
     },
 

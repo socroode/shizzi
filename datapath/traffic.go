@@ -160,11 +160,13 @@ type TrafficManager struct {
 	portalTitle          string
 	portalMessage        string
 	portalHTML           string
+	portalClientApp      portalClientApp
 	portalAccounts       map[string]PortalAccount
 	portalAuthorized     map[string]*PortalAuthorization
 	portalRechargeClaims []PortalRechargeClaim
 	portalClaimResults   map[string]PortalClaimResult
 	accountUsage         map[string]*accountUsage
+	mediaDiagnostics     []MediaDiagnostic
 
 	adminConfig     remoteAdminConfig
 	adminState      json.RawMessage
@@ -529,6 +531,7 @@ type trafficStatsSnapshot struct {
 	PortalRechargeClaims     []PortalRechargeClaim       `json:"portalRechargeClaims,omitempty"`
 	AccountUsage             []accountUsageSnapshot      `json:"accountUsage,omitempty"`
 	AdminCommands            []AdminCommand              `json:"adminCommands,omitempty"`
+	MediaDiagnostics         []MediaDiagnostic           `json:"mediaDiagnostics,omitempty"`
 }
 
 func (m *TrafficManager) statsJSON() string {
@@ -557,6 +560,7 @@ func (m *TrafficManager) statsJSON() string {
 		PortalRechargeClaims:     append([]PortalRechargeClaim(nil), m.portalRechargeClaims...),
 		AccountUsage:             make([]accountUsageSnapshot, 0, len(m.accountUsage)),
 		AdminCommands:            append([]AdminCommand(nil), m.adminCommands...),
+		MediaDiagnostics:         append([]MediaDiagnostic(nil), m.mediaDiagnostics...),
 	}
 
 	nowMillis := time.Now().UnixMilli()

@@ -51,6 +51,28 @@ val gomobileBind by tasks.registering(Exec::class) {
     )
 }
 
+
+val embeddedShizziPlusDebugDir =
+    layout.buildDirectory.dir("generated/shizziPlusAssets/debug")
+val embeddedShizziPlusReleaseDir =
+    layout.buildDirectory.dir("generated/shizziPlusAssets/release")
+
+val prepareEmbeddedShizziPlusDebug by tasks.registering(Sync::class) {
+    dependsOn(":conso:assembleDebug")
+    from(rootProject.layout.projectDirectory.file("conso/build/outputs/apk/debug/conso-debug.apk"))
+    into(embeddedShizziPlusDebugDir.map { it.dir("shizzi") })
+    rename { "Shizzi-Plus.apk" }
+    outputs.dir(embeddedShizziPlusDebugDir)
+}
+
+val prepareEmbeddedShizziPlusRelease by tasks.registering(Sync::class) {
+    dependsOn(":conso:assembleRelease")
+    from(rootProject.layout.projectDirectory.file("conso/build/outputs/apk/release/conso-release.apk"))
+    into(embeddedShizziPlusReleaseDir.map { it.dir("shizzi") })
+    rename { "Shizzi-Plus.apk" }
+    outputs.dir(embeddedShizziPlusReleaseDir)
+}
+
 android {
     namespace = "dev.shizzi"
     compileSdk = 35
@@ -60,8 +82,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.4.2"
+        versionCode = 21
+        versionName = "0.4.3.9"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 
@@ -85,6 +107,11 @@ android {
                 keyPassword = keystoreProperties.getProperty("keyPassword")
             }
         }
+    }
+
+    sourceSets {
+        getByName("debug").assets.srcDir(embeddedShizziPlusDebugDir)
+        getByName("release").assets.srcDir(embeddedShizziPlusReleaseDir)
     }
 
     buildTypes {
@@ -131,12 +158,28 @@ android {
 
 tasks.named("preBuild") { dependsOn(gomobileBind) }
 
+// Every Android task that consumes a variant's source sets must see the
+// generated Shizzi+ asset first. Keeping the generated APK under build/
+// avoids treating src/main/assets as a task output and keeps lint deterministic.
+tasks.configureEach {
+    when {
+        name != "prepareEmbeddedShizziPlusDebug" &&
+            name.contains("Debug", ignoreCase = true) ->
+            dependsOn(prepareEmbeddedShizziPlusDebug)
+
+        name != "prepareEmbeddedShizziPlusRelease" &&
+            name.contains("Release", ignoreCase = true) ->
+            dependsOn(prepareEmbeddedShizziPlusRelease)
+    }
+}
+
 dependencies {
 
     implementation(files(layout.buildDirectory.file("gomobile/datapath.aar")))
 
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("androidx.activity:activity-compose:1.9.3")
 
     implementation("androidx.datastore:datastore-preferences:1.1.1")

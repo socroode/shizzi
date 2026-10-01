@@ -2,10 +2,12 @@ package dev.shizzi.admin
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
 import android.graphics.Typeface
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.Uri
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
@@ -19,6 +21,7 @@ import android.widget.Toast
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
+import java.net.Inet4Address
 import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -93,7 +96,7 @@ class MainActivity : Activity() {
         root.removeAllViews()
         title("Shizzi Admin")
         info(
-            "Compatible avec TEKOMOPAO WIFI1 et WIFI2. " +
+            "Admin associé à Shizzi 0.4.3.1 Media. " +
                 "Connectez ce téléphone au Wi-Fi Shizzi à administrer.",
         )
         if (message.isNotBlank()) info(message)
@@ -183,9 +186,11 @@ class MainActivity : Activity() {
             state.optJSONArray("vouchers") ?: JSONArray(),
         )
         renderDevices(traffic.optJSONArray("portalAuthorizations") ?: JSONArray())
+        renderMediaStatus()
         renderPortal(state.optJSONObject("portal") ?: JSONObject())
         renderAdminCredentials(state.optJSONObject("remoteAdmin") ?: JSONObject())
         renderDiagnostics(traffic)
+        renderMediaDiagnostics(traffic.optJSONArray("mediaDiagnostics") ?: JSONArray())
     }
 
     private fun renderAccounts(accounts: JSONArray) {
@@ -391,6 +396,63 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun renderMediaStatus() {
+        section("Shizzi Media")
+        val mediaStatus = TextView(this).apply {
+            text = "Détection du serveur Media…"
+            textSize = 14f
+            setPadding(0, dp(4), 0, dp(8))
+        }
+        root.addView(mediaStatus, full())
+
+        fun probe() {
+            mediaStatus.text = "Détection du serveur Media…"
+            runNetwork {
+                val wifi = boundWifi ?: run {
+                    runOnUiThread { mediaStatus.text = "Aucun Wi-Fi Shizzi connecté." }
+                    return@runNetwork
+                }
+                val found = mediaCandidates(wifi).firstOrNull { base ->
+                    runCatching {
+                        val connection = wifi.openConnection(URL(base + "health")) as HttpURLConnection
+                        connection.connectTimeout = 1_000
+                        connection.readTimeout = 1_000
+                        connection.useCaches = false
+                        val ok = connection.responseCode == 200
+                        connection.disconnect()
+                        ok
+                    }.getOrDefault(false)
+                }
+                runOnUiThread {
+                    mediaStatus.text = if (found == null) {
+                        "Serveur Media indisponible ou désactivé sur le routeur."
+                    } else {
+                        "Serveur Media actif : $found"
+                    }
+                    if (found != null) {
+                        button("Ouvrir Shizzi Media") {
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(found)))
+                        }
+                    }
+                }
+            }
+        }
+
+        button("Tester Shizzi Media") { probe() }
+        info("Le choix des dossiers Films / Séries / Musique reste volontairement effectué sur le téléphone routeur.")
+        probe()
+    }
+
+    private fun mediaCandidates(network: Network): List<String> {
+        val routes = connectivity.getLinkProperties(network)?.routes.orEmpty()
+        return routes
+            .sortedByDescending { route -> route.isDefaultRoute }
+            .mapNotNull { route -> route.gateway as? Inet4Address }
+            .mapNotNull { gateway -> gateway.hostAddress }
+            .distinct()
+            .map { gateway -> "http://$gateway:8088/" }
+    }
+
     private fun renderPortal(portal: JSONObject) {
         section("Portail")
         val titleField = field("Titre / nom Wi-Fi", portal.optString("title"))
@@ -443,6 +505,51 @@ class MainActivity : Activity() {
                 "\nRefus sans session/forfait : " + traffic.optLong("refusedUnauthorizedFlows") +
                 "\nDNS non facturé : " + formatBytes(traffic.optLong("unattributedDnsBytes")),
         )
+    }
+
+    private fun renderMediaDiagnostics(events: JSONArray) {
+        section("Diagnostic Media")
+        if (events.length() == 0) {
+            info(
+                "Aucun accès Media enregistré pour cette session. " +
+                    "Sur un appareil client déjà connecté à un compte Shizzi, ouvrez Media puis appuyez sur Actualiser.",
+            )
+            return
+        }
+
+        val start = maxOf(0, events.length() - 10)
+        for (i in events.length() - 1 downTo start) {
+            val event = events.optJSONObject(i) ?: continue
+            val authenticated = if (event.optBoolean("accountAuthenticated")) "OUI" else "NON"
+            val backend = if (event.optBoolean("backendConnected")) "OUI" else "NON"
+            val account = event.optString("accountNumber").ifBlank { "—" }
+            val target = event.optString("proxyTarget").ifBlank { "—" }
+            val backendAddress = event.optString("backend").ifBlank { "—" }
+            val result = event.optString("result").ifBlank { "—" }
+            val error = event.optString("error")
+            val copied = event.optLong("bytesCopied")
+            val atMillis = event.optLong("atMillis")
+            val whenText = if (atMillis > 0L) {
+                java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
+                    .format(java.util.Date(atMillis))
+            } else {
+                "heure —"
+            }
+
+            val detail = buildString {
+                append(whenText).append(" · ").append(event.optString("path").ifBlank { "—" })
+                append("\nClient : ").append(event.optString("clientIp").ifBlank { "—" })
+                append("\nCompte : ").append(account).append(" · authentifié : ").append(authenticated)
+                append("\nProxy : ").append(target)
+                append("\nBackend : ").append(backendAddress).append(" · connecté : ").append(backend)
+                append("\nRésultat : ").append(result)
+                if (copied > 0L) append("\nTransféré : ").append(formatBytes(copied))
+                if (error.isNotBlank()) append("\nErreur : ").append(error)
+            }
+            info(detail)
+            divider()
+        }
+        info("Les 10 événements Media les plus récents sont affichés. Utilisez Actualiser après avoir reproduit le problème.")
     }
 
     private fun command(action: String, params: JSONObject) {

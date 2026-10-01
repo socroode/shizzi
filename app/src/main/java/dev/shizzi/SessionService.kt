@@ -32,6 +32,7 @@ class SessionService : Service() {
     private val controller = TetherClient()
     private val notification by lazy { SessionNotification(this) }
     private val statusPoller = SessionStatusPoller(scope, controller)
+    private val clientAppDistribution by lazy { ClientAppDistributionServer(this) }
 
     private val internalState get() = sessionState
 
@@ -50,6 +51,7 @@ class SessionService : Service() {
     override fun onCreate() {
         super.onCreate()
         controller.onSessionLost = ::handleSessionLost
+        clientAppDistribution.start()
         liveService = this
     }
 
@@ -64,6 +66,10 @@ class SessionService : Service() {
                 isStopping,
             ),
         )
+
+        if (!isStopping && MediaPrefs.isEnabled(this)) {
+            MediaServerService.start(this)
+        }
 
         when {
             isStopping -> stopSession()
@@ -142,9 +148,18 @@ class SessionService : Service() {
             var pendingResults = emptyList<PortalClaimResult>()
             var pendingAdminResults = emptyList<AdminCommandResult>()
             val handledAdminCommandIds = mutableSetOf<String>()
+            var nextMediaHealthCheckMillis = 0L
 
             while (internalState.value.status == UiStatus.CONNECTED) {
                 val now = System.currentTimeMillis()
+
+                if (MediaPrefs.isEnabled(this@SessionService) && now >= nextMediaHealthCheckMillis) {
+                    if (!MediaNetwork.backendReachable()) {
+                        SessionLog.warn("media backend health check failed; restarting local Media server")
+                        MediaServerService.restart(this@SessionService)
+                    }
+                    nextMediaHealthCheckMillis = now + MEDIA_HEALTH_CHECK_MS
+                }
                 val snapshot = try {
                     parseLiveTrafficSnapshot(controller.trafficStats())
                 } catch (cancelled: CancellationException) {
@@ -215,6 +230,7 @@ class SessionService : Service() {
                             ledger.markers(),
                             pendingResults,
                             pendingAdminResults,
+                            clientAppDistribution.info.takeIf { it.available },
                         )
                         pushedRevision = revision
                         pushedEpoch = ledger.epoch
@@ -277,6 +293,7 @@ class SessionService : Service() {
         rates.retain(keys)
         mutableLiveSessions.value = sessions
         mutableAttribution.value = snapshot.attribution
+        mutableMediaDiagnostics.value = snapshot.mediaDiagnostics
     }
 
     private fun followStatus() = statusPoller.follow(
@@ -377,6 +394,7 @@ class SessionService : Service() {
         cybercafeJob = null
         clearLiveSessions()
         (application as App).cybercafeStore.flushUsage(System.currentTimeMillis(), force = true)
+        clientAppDistribution.stop()
         controller.unbind()
         scope.cancel()
         liveService = null
@@ -387,6 +405,7 @@ class SessionService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val CYBERCAFE_POLL_MS = 1_000L
         private const val CYBERCAFE_RESYNC_MS = 60_000L
+        private const val MEDIA_HEALTH_CHECK_MS = 5_000L
         const val ACTION_STOP = "dev.shizzi.STOP_SESSION"
         const val EXTRA_REPORT_AS = "reportAs"
 
@@ -412,9 +431,17 @@ class SessionService : Service() {
         val attributionDiagnostics: StateFlow<AttributionDiagnostics> =
             mutableAttribution.asStateFlow()
 
+        private val mutableMediaDiagnostics =
+            MutableStateFlow<List<LiveMediaDiagnostic>>(emptyList())
+
+        /** Recent Media access/proxy events for the Hotspot Media diagnostic screen. */
+        val mediaDiagnostics: StateFlow<List<LiveMediaDiagnostic>> =
+            mutableMediaDiagnostics.asStateFlow()
+
         private fun clearLiveSessions() {
             mutableLiveSessions.value = emptyList()
             mutableAttribution.value = AttributionDiagnostics()
+            mutableMediaDiagnostics.value = emptyList()
         }
 
         /**

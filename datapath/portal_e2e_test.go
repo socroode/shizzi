@@ -148,3 +148,92 @@ func TestUnresolvedUDPDoesNotStallOtherFlows(t *testing.T) {
 		t.Fatalf("TCP handshake stalled %v behind unresolved UDP", elapsed)
 	}
 }
+
+
+func TestAuthenticatedMediaRequestReachesLoopbackBackend(t *testing.T) {
+	backend, err := net.Listen("tcp", mediaBridgeAddress)
+	if err != nil {
+		t.Fatalf("listen Media backend: %v", err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+
+	backendBody := "<html><body>Shizzi Media E2E</body></html>"
+	backendDone := make(chan struct{})
+	go func() {
+		defer close(backendDone)
+		conn, acceptErr := backend.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+
+		reader := bufio.NewReader(conn)
+		for {
+			line, readErr := reader.ReadString('\n')
+			if readErr != nil {
+				return
+			}
+			if line == "\r\n" {
+				break
+			}
+		}
+
+		_, _ = fmt.Fprintf(
+			conn,
+			"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
+			len(backendBody),
+			backendBody,
+		)
+	}()
+
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portalConfigForTest(t))
+	clientIP := "192.168.7.66"
+	ok, message := manager.submitPortalAccountLogin(clientIP, "1001", "1234")
+	if !ok {
+		t.Fatalf("login failed: %s", message)
+	}
+
+	server, client := net.Pipe()
+	responseDone := make(chan struct{})
+	go func() {
+		defer close(responseDone)
+		manager.servePortal(server, clientIP)
+	}()
+
+	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
+	_, err = fmt.Fprint(
+		client,
+		"GET /media/ HTTP/1.1\r\nHost: 192.0.2.1\r\nConnection: close\r\n\r\n",
+	)
+	if err != nil {
+		t.Fatalf("write Media request: %v", err)
+	}
+
+	response, readErr := io.ReadAll(client)
+	_ = client.Close()
+	if readErr != nil {
+		t.Fatalf("read Media response: %v", readErr)
+	}
+	<-responseDone
+	<-backendDone
+
+	if !strings.Contains(string(response), "200 OK") {
+		t.Fatalf("Media response was not 200: %q", string(response))
+	}
+	if !strings.Contains(string(response), "Shizzi Media E2E") {
+		t.Fatalf("Media backend body was not proxied: %q", string(response))
+	}
+
+	stats := manager.statsJSON()
+	for _, expected := range []string{
+		`"path":"/media/"`,
+		`"accountAuthenticated":true`,
+		`"backendConnected":true`,
+		`"result":"proxied"`,
+	} {
+		if !strings.Contains(stats, expected) {
+			t.Fatalf("Media diagnostic missing %s: %s", expected, stats)
+		}
+	}
+}

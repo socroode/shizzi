@@ -5,6 +5,128 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.3.9] - 2026-09-30
+
+### Security
+
+- Shizzi Media now requires an active Shizzi account session on the requesting device.
+- Unauthenticated hotspot clients cannot open /media/, browse the catalog, open player pages or request /media/stream URLs.
+- The Media backend on port 8088 now binds to loopback only, preventing LAN clients from bypassing the captive-portal account check.
+- The Media card is hidden until a Shizzi account is connected.
+
+### Changed
+
+- Shizzi+ 0.2.4 routes Media through the secured captive-portal /media/ path instead of connecting directly to port 8088.
+- Media relative links remain under the /media/ proxy so catalog, player and stream requests all pass through the account gate.
+- Shizzi Admin remains 0.2.3.
+
+
+## [0.4.3.8] - 2026-09-30
+
+### Added
+
+- Browser-only local Wi-Fi speed test at /speedtest/ with 10, 25, 50 and 100 MiB test sizes.
+- Five-sample local latency measurement and Reno9-to-client throughput measurement with live progress.
+- Conservative estimate of simultaneous 1080p streams at 3 Mbps using a 30% Wi-Fi safety margin.
+- Portal card linking directly to the speed test before or after account login.
+- Bounded server-generated speed-test payloads; no media file, Internet download or persistent storage is required.
+
+### Changed
+
+- The local speed test uses the captive-portal path itself so the measurement reflects the Shizzi router-to-client Wi-Fi path.
+- Shizzi+ remains 0.2.3 and Shizzi Admin remains 0.2.3; only Shizzi Hotspot changes in this test build.
+
+
+## [0.4.3.7] - 2026-09-30
+
+### Added
+
+- Local browser access to Shizzi Media at /media/ through the captive portal.
+- Portal Media card available to PCs, phones and tablets connected to the Shizzi Wi-Fi.
+- Local reverse proxy preserves HTTP Range/206 responses so browser seeking works for large videos.
+- Regression test for /media/ route rewriting.
+
+### Changed
+
+- Media catalog links are relative, so the same Films/Séries/Musique interface works both directly in Shizzi+ and behind the captive-portal /media/ path.
+- Shizzi+ remains 0.2.3 and Shizzi Admin remains 0.2.3; only Shizzi Hotspot changes in this test build.
+
+
+## [0.4.3.6] - 2026-09-30
+
+### Added
+
+- Captive portal download card for Shizzi+ before or after account login.
+- Local /download/shizzi-plus.apk route that stays entirely on the hotspot and does not consume Internet quota.
+- Loopback-only Android distribution bridge so the Shizuku datapath can safely proxy the embedded client APK.
+- Shizzi+ 0.2.3 is embedded in the Hotspot build with version, size and SHA-256 metadata shown by the portal.
+- CI verifies the embedded APK package, version, permanent certificate and exact SHA-256.
+
+### Changed
+
+- Clients no longer need the Shizzi+ APK to be sent manually; they can install it from the captive portal.
+- No hotspot subnet is hard-coded for the download path: clients use the same captive-portal address they already reached.
+
+
+## [0.4.3.5] - 2026-09-29
+
+### Added
+
+- Fast Media scanner using batched Android DocumentsContract queries instead of repeated per-file DocumentFile calls.
+- Live scan progress with file and folder counts on the router phone.
+- Shizzi+ 0.2.3 HTML5 video fullscreen with landscape orientation, system-bar hiding and Back-to-exit-fullscreen behavior.
+
+### Changed
+
+- SAF remains the source of access permission; no broad storage permission is required.
+- The legacy DocumentFile scanner remains as a compatibility fallback for unusual Android document providers.
+- Shizzi Admin 0.2.3 is version-aligned with the 0.4.3.5 test suite.
+
+
+## [0.4.3.4] - 2026-09-29
+
+### Added
+
+- Persistent local Media index stored on the router phone.
+- Background indexing when a Films, Séries or Musique folder is selected or changed.
+- Manual **Scanner la médiathèque** control with indexed item counts.
+
+### Fixed
+
+- Opening Films, Séries, a player page or a stream no longer recursively scans SAF storage on the client request path.
+- Media pages now read the persistent index, so category opening is immediate after indexing.
+- Updating one Media folder rebuilds only that category and preserves the other indexed categories.
+
+
+## [0.4.3.3] - 2026-09-29
+
+### Fixed
+
+- Shizzi+ now hides the previous account portal while a Media page is loading, preventing stale TEKOMOPAO/account content from remaining visible.
+- Shizzi+ tracks the requested portal origin so stale WebView callbacks cannot replace the current Media navigation state.
+- Main-frame network and HTTP failures now show the actual Shizzi+/Media error instead of leaving an old page visible.
+- Shizzi Media landing page no longer scans every configured library before rendering; category scanning happens only when opened.
+
+
+## [0.4.3.2] - 2026-09-29
+
+### Fixed
+
+- Media client discovery now uses the actual IPv4 Wi-Fi gateway supplied by Android instead of hard-coded hotspot subnets.
+- Router Media address discovery excludes real upstream network addresses rather than relying on Oppo/Samsung interface names.
+- The same Media discovery path is shared by Shizzi+ and Shizzi Admin for OEM-independent Android compatibility.
+
+
+## [0.4.3.1] - 2026-09-29
+
+### Fixed
+
+- Runs Shizzi Media in a dedicated Android process so a media-client failure cannot terminate the hotspot/TUN process.
+- Contains client socket errors such as connection reset, socket closed and broken pipe.
+- Replaces the unbounded media thread pool with a bounded six-client worker pool.
+- Synchronizes selected SAF media folders when the isolated media process starts or restarts.
+
+
 ## [0.4.0-rc.3] - 2026-09-13
 
 Adds a quick settings tile and an intent API for starting and stopping sessions

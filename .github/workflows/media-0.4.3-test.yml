@@ -1,0 +1,128 @@
+name: Shizzi 0.4.3 Media test
+
+on:
+  push:
+    branches: [feature/media-0.4.3]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shizzi-043-media-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  signed-media-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: temurin
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.3'
+          cache-dependency-path: datapath/go.sum
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install NDK
+        run: sdkmanager --install "ndk;27.0.12077973"
+
+      - name: Install gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          gomobile init
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Restore permanent signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.SHIZZI_KEYSTORE_B64 || secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.SHIZZI_STORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SHIZZI_KEY_ALIAS || secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SHIZZI_KEY_PASSWORD || secrets.KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_B64"
+          test -n "$STORE_PASSWORD"
+          test -n "$KEY_ALIAS"
+          test -n "$KEY_PASSWORD"
+          echo "$KEYSTORE_B64" | base64 -d > shizzi-release.jks
+          cat > keystore.properties <<EOF
+          storeFile=shizzi-release.jks
+          storePassword=$STORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+
+      - name: Virtual Android router loopback test
+        run: ./gradlew :app:testDebugUnitTest --tests dev.shizzi.MediaLoopbackTest --no-daemon
+
+      - name: Virtual Android client through secured Media proxy
+        run: cd datapath && go test -run '^TestAuthenticatedMediaRequestReachesLoopbackBackend$' ./...
+
+      - name: Virtual Android client downloads Shizzi+ locally
+        run: cd datapath && go test -run TestClientAppDownload ./...
+
+      - name: Build signed Shizzi Media APK
+        run: ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Verify version and permanent certificate
+        env:
+          EXPECTED_CERT_SHA256: "FA:DF:C5:E8:7F:A6:03:51:F7:DC:B7:5D:34:F1:AB:91:11:08:24:33:3C:D1:09:7A:38:B3:C7:03:F7:AF:3D:B7"
+        run: |
+          BUILD_TOOLS=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | grep -v -- "-rc" | sort -V | tail -1)
+          APK=app/build/outputs/apk/release/app-release.apk
+          BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$APK")
+          PACKAGE=$(echo "$BADGING" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
+          VERSION_NAME=$(echo "$BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
+          VERSION_CODE=$(echo "$BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
+          test "$PACKAGE" = "dev.shizzi"
+          test "$VERSION_NAME" = "0.4.3.9"
+          test "$VERSION_CODE" = "21"
+          EXPECTED_NORM=$(echo "$EXPECTED_CERT_SHA256" | tr -d ': ')
+          ACTUAL=$("$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]')
+          ACTUAL_NORM=$(echo "$ACTUAL" | tr -d ': ')
+          test "$ACTUAL_NORM" = "$EXPECTED_NORM"
+
+          EMBEDDED=/tmp/shizzi-plus-embedded.apk
+          unzip -p "$APK" assets/shizzi/Shizzi-Plus.apk > "$EMBEDDED"
+          test -s "$EMBEDDED"
+          EMBEDDED_BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$EMBEDDED")
+          EMBEDDED_PACKAGE=$(echo "$EMBEDDED_BADGING" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
+          EMBEDDED_VERSION=$(echo "$EMBEDDED_BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
+          EMBEDDED_CODE=$(echo "$EMBEDDED_BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
+          test "$EMBEDDED_PACKAGE" = "dev.shizzi.conso"
+          test "$EMBEDDED_VERSION" = "0.2.4"
+          test "$EMBEDDED_CODE" = "8"
+          EMBEDDED_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$EMBEDDED" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]')
+          EMBEDDED_CERT_NORM=$(echo "$EMBEDDED_CERT" | tr -d ': ')
+          test "$EMBEDDED_CERT_NORM" = "$EXPECTED_NORM"
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p release-output
+          cp app/build/outputs/apk/release/app-release.apk release-output/Shizzi-Hotspot-0.4.3.9-Media-IPv4-Fix.apk
+          cd release-output
+          sha256sum Shizzi-Hotspot-0.4.3.9-Media-IPv4-Fix.apk > SHA256SUMS.txt
+
+      - name: Upload signed Media test APK
+        uses: actions/upload-artifact@v5
+        with:
+          name: Shizzi-0.4.3-media-test
+          path: |
+            release-output/Shizzi-Hotspot-0.4.3.9-Media-IPv4-Fix.apk
+            release-output/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Clean up signing material
+        if: always()
+        run: rm -f shizzi-release.jks keystore.properties

@@ -17,6 +17,8 @@ import (
 )
 
 const portalIP = "192.0.2.1"
+const clientAppBridgeAddress = "127.0.0.1:8091"
+const mediaBridgeAddress = "127.0.0.1:8088"
 
 type PortalAccount struct {
 	Number                         string `json:"number"`
@@ -116,6 +118,28 @@ type adminChallenge struct {
 	ExpiresAtMillis int64
 }
 
+type portalClientApp struct {
+	Available bool   `json:"available"`
+	Version   string `json:"version"`
+	FileName  string `json:"fileName"`
+	SizeBytes int64  `json:"sizeBytes"`
+	SHA256    string `json:"sha256"`
+}
+
+type MediaDiagnostic struct {
+	AtMillis             int64  `json:"atMillis"`
+	ClientIP             string `json:"clientIp"`
+	Path                 string `json:"path"`
+	AccountAuthenticated bool   `json:"accountAuthenticated"`
+	AccountNumber        string `json:"accountNumber,omitempty"`
+	ProxyTarget          string `json:"proxyTarget,omitempty"`
+	Backend              string `json:"backend,omitempty"`
+	BackendConnected     bool   `json:"backendConnected"`
+	BytesCopied          int64  `json:"bytesCopied,omitempty"`
+	Result               string `json:"result"`
+	Error                string `json:"error,omitempty"`
+}
+
 type portalConfig struct {
 	Title        string               `json:"title"`
 	Message      string               `json:"message"`
@@ -123,6 +147,7 @@ type portalConfig struct {
 	Accounts     []PortalAccount      `json:"accounts"`
 	Admin        remoteAdminConfig    `json:"admin"`
 	AdminState   json.RawMessage      `json:"adminState"`
+	ClientApp    portalClientApp      `json:"clientApp"`
 	// ClaimResults lets Android tell the portal how a voucher claim ended so
 	// the client sees "accepted"/"rejected" instead of a silent drop.
 	ClaimResults []PortalClaimResult   `json:"claimResults"`
@@ -210,6 +235,7 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 		m.portalMessage = "Connectez-vous à votre compte Shizzi."
 	}
 	m.portalHTML = config.HTML
+	m.portalClientApp = config.ClientApp
 	credentialsChanged := m.adminConfig.Username != config.Admin.Username ||
 		m.adminConfig.PasswordHash != config.Admin.PasswordHash ||
 		m.adminConfig.Enabled != config.Admin.Enabled
@@ -322,6 +348,39 @@ func (m *TrafficManager) portalAuthorizedLocked(ip string, nowMillis int64) bool
 		return false
 	}
 	return m.accountHasInternetLocked(account, nowMillis)
+}
+
+func (m *TrafficManager) mediaAccountIdentity(ip string) (bool, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	authorization := m.portalAuthorized[ip]
+	if authorization == nil {
+		return false, ""
+	}
+	account, ok := m.portalAccounts[authorization.AccountNumber]
+	if !ok || !account.Enabled {
+		return false, ""
+	}
+	return true, account.Number
+}
+
+func (m *TrafficManager) mediaAccountAuthenticated(ip string) bool {
+	authenticated, _ := m.mediaAccountIdentity(ip)
+	return authenticated
+}
+
+func (m *TrafficManager) noteMediaDiagnostic(event MediaDiagnostic) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if event.AtMillis == 0 {
+		event.AtMillis = time.Now().UnixMilli()
+	}
+	m.mediaDiagnostics = append(m.mediaDiagnostics, event)
+	if len(m.mediaDiagnostics) > 20 {
+		m.mediaDiagnostics = append([]MediaDiagnostic(nil), m.mediaDiagnostics[len(m.mediaDiagnostics)-20:]...)
+	}
 }
 
 func (m *TrafficManager) submitPortalAccountLogin(
@@ -685,7 +744,42 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	}
 
 	path := request.URL.Path
+	isMediaRequest := (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		(path == "/media" || strings.HasPrefix(path, "/media/"))
+	mediaAuthenticated := false
+	mediaAccount := ""
+	if isMediaRequest {
+		mediaAuthenticated, mediaAccount = m.mediaAccountIdentity(clientIP)
+	}
 	switch {
+	case isMediaRequest && !mediaAuthenticated:
+		m.noteMediaDiagnostic(MediaDiagnostic{
+			ClientIP:             clientIP,
+			Path:                 path,
+			AccountAuthenticated: false,
+			Result:               "account_required",
+		})
+		m.writeMediaLoginRequired(conn, request.Method)
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		path == "/speedtest":
+		_, _ = io.WriteString(
+			conn,
+			"HTTP/1.1 302 Found\r\nLocation: /speedtest/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+		)
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		path == "/speedtest/":
+		m.serveLocalSpeedtestPage(conn, request.Method)
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		path == "/speedtest/ping":
+		m.serveLocalSpeedtestPing(conn, request.Method)
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		path == "/speedtest/download":
+		m.serveLocalSpeedtestDownload(conn, request)
+	case isMediaRequest:
+		m.serveMediaProxy(conn, request, clientIP, mediaAccount)
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		path == "/download/shizzi-plus.apk":
+		m.serveClientAppDownload(conn, request.Method)
 	case request.Method == http.MethodPost && path == "/login":
 		_ = request.ParseForm()
 		ok, message := m.submitPortalAccountLogin(
@@ -706,6 +800,396 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	default:
 		m.writePortalHTML(conn, clientIP, "", false)
 	}
+}
+
+func speedtestDownloadBytes(rawMB string) int64 {
+	switch strings.TrimSpace(rawMB) {
+	case "10":
+		return 10 * 1024 * 1024
+	case "25":
+		return 25 * 1024 * 1024
+	case "100":
+		return 100 * 1024 * 1024
+	default:
+		return 50 * 1024 * 1024
+	}
+}
+
+func (m *TrafficManager) serveLocalSpeedtestPing(conn net.Conn, method string) {
+	body := []byte("ok")
+	header := fmt.Sprintf(
+		"HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nConnection: close\r\n\r\n",
+		len(body),
+	)
+	_, _ = conn.Write([]byte(header))
+	if method != http.MethodHead {
+		_, _ = conn.Write(body)
+	}
+}
+
+func (m *TrafficManager) serveLocalSpeedtestDownload(conn net.Conn, request *http.Request) {
+	size := speedtestDownloadBytes(request.URL.Query().Get("mb"))
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Minute))
+
+	header := fmt.Sprintf(
+		"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nX-Shizzi-Local-Speedtest: 1\r\nConnection: close\r\n\r\n",
+		size,
+	)
+	if _, err := conn.Write([]byte(header)); err != nil || request.Method == http.MethodHead {
+		return
+	}
+
+	// Generate bytes in small chunks. Nothing is read from storage and nothing
+	// is fetched from the WAN: this measures the local portal -> client path.
+	chunk := make([]byte, 64*1024)
+	remaining := size
+	for remaining > 0 {
+		writeSize := int64(len(chunk))
+		if remaining < writeSize {
+			writeSize = remaining
+		}
+		written, err := conn.Write(chunk[:int(writeSize)])
+		if err != nil {
+			return
+		}
+		remaining -= int64(written)
+		if written == 0 {
+			return
+		}
+	}
+}
+
+func (m *TrafficManager) serveLocalSpeedtestPage(conn net.Conn, method string) {
+	page := `<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Test débit local · Shizzi</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,system-ui,-apple-system,sans-serif}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:20px;color:#f8fafc;background:linear-gradient(145deg,#07111f,#111827 55%,#0f172a)}
+main{width:min(100%,620px);margin:0 auto;background:#0f172a;border:1px solid #ffffff18;border-radius:28px;padding:24px;box-shadow:0 26px 80px #0008}
+a{color:#7dd3fc;text-decoration:none}.eyebrow{font-size:11px;letter-spacing:.14em;color:#7dd3fc;font-weight:800}
+h1{margin:6px 0 8px;font-size:28px}.lead,.note{color:#94a3b8;line-height:1.5}
+.controls{display:grid;grid-template-columns:1fr auto;gap:10px;margin:18px 0}
+select,button{font:inherit;border-radius:14px;padding:14px 16px;border:0}
+select{background:#1e293b;color:#fff;border:1px solid #334155}
+button{background:linear-gradient(90deg,#22d3ee,#34d399);color:#06202a;font-weight:900;cursor:pointer}
+button:disabled{opacity:.5;cursor:wait}
+.progress{height:10px;background:#1e293b;border-radius:999px;overflow:hidden;margin:14px 0}.bar{height:100%;width:0;background:linear-gradient(90deg,#38bdf8,#34d399);transition:width .15s}
+.results{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px}.result{padding:16px;border-radius:16px;background:#ffffff08}
+.result span{display:block;color:#94a3b8;font-size:12px}.result strong{display:block;margin-top:5px;font-size:22px}
+.summary{margin-top:14px;padding:16px;border-radius:16px;background:#071b2a;border:1px solid #22d3ee55;line-height:1.5}
+@media(max-width:520px){.controls,.results{grid-template-columns:1fr}}
+</style></head><body><main>
+<a href="/">← Portail Shizzi</a>
+<div class="eyebrow" style="margin-top:18px">RÉSEAU LOCAL</div>
+<h1>Test de débit local</h1>
+<p class="lead">Mesure le débit <strong>Reno9 → cet appareil</strong> sur le Wi-Fi Shizzi. Le test reste local : il ne télécharge rien depuis Starlink ou Internet.</p>
+<div class="controls">
+<select id="size" aria-label="Taille du test">
+<option value="10">Rapide · 10 Mo</option>
+<option value="25">Court · 25 Mo</option>
+<option value="50" selected>Normal · 50 Mo</option>
+<option value="100">Précis · 100 Mo</option>
+</select>
+<button id="start">Tester le débit local</button>
+</div>
+<div id="status" class="note">Prêt.</div>
+<div class="progress"><div id="bar" class="bar"></div></div>
+<div class="results">
+<div class="result"><span>Débit moyen</span><strong id="speed">—</strong></div>
+<div class="result"><span>Latence locale</span><strong id="latency">—</strong></div>
+</div>
+<div id="summary" class="summary">Le résultat estimera aussi la capacité pour des vidéos 1080p à 3 Mbps.</div>
+<p class="note">Le débit peut varier selon la bande Wi-Fi, la distance, les interférences et les autres appareils actifs. Pour comparer plusieurs essais, reste au même endroit.</p>
+</main>
+<script>
+(function(){
+  var startButton=document.getElementById("start");
+  var sizeSelect=document.getElementById("size");
+  var statusEl=document.getElementById("status");
+  var bar=document.getElementById("bar");
+  var speedEl=document.getElementById("speed");
+  var latencyEl=document.getElementById("latency");
+  var summaryEl=document.getElementById("summary");
+
+  function setStatus(text){statusEl.textContent=text;}
+  function sleep(ms){return new Promise(function(resolve){setTimeout(resolve,ms);});}
+
+  async function measureLatency(){
+    var samples=[];
+    for(var i=0;i<5;i++){
+      var started=performance.now();
+      var response=await fetch("/speedtest/ping?ts="+Date.now()+"-"+i,{cache:"no-store"});
+      if(!response.ok) throw new Error("ping");
+      await response.text();
+      samples.push(performance.now()-started);
+      await sleep(80);
+    }
+    samples.sort(function(a,b){return a-b;});
+    return samples[Math.floor(samples.length/2)];
+  }
+
+  async function receive(url,onProgress){
+    var response=await fetch(url,{cache:"no-store"});
+    if(!response.ok) throw new Error("download");
+    var total=Number(response.headers.get("Content-Length")||0);
+    var received=0;
+    var started=performance.now();
+
+    if(response.body && response.body.getReader){
+      var reader=response.body.getReader();
+      while(true){
+        var part=await reader.read();
+        if(part.done) break;
+        received+=part.value.byteLength;
+        if(total>0 && onProgress) onProgress(received/total);
+      }
+    }else{
+      var data=await response.arrayBuffer();
+      received=data.byteLength;
+      if(onProgress) onProgress(1);
+    }
+    var seconds=(performance.now()-started)/1000;
+    return {bytes:received,seconds:seconds};
+  }
+
+  async function run(){
+    startButton.disabled=true;
+    sizeSelect.disabled=true;
+    speedEl.textContent="—";
+    latencyEl.textContent="—";
+    summaryEl.textContent="Test en cours…";
+    bar.style.width="0%";
+
+    try{
+      setStatus("Mesure de la latence locale…");
+      var latency=await measureLatency();
+      latencyEl.textContent=latency.toFixed(1)+" ms";
+
+      setStatus("Préparation du lien Wi-Fi…");
+      await receive("/speedtest/download?mb=10&warmup="+Date.now(),null);
+
+      var mb=sizeSelect.value;
+      setStatus("Mesure du débit Reno9 → appareil…");
+      var result=await receive(
+        "/speedtest/download?mb="+encodeURIComponent(mb)+"&ts="+Date.now(),
+        function(progress){bar.style.width=Math.min(100,progress*100).toFixed(1)+"%";}
+      );
+      var mbps=(result.bytes*8/result.seconds)/1000000;
+      speedEl.textContent=mbps.toFixed(1)+" Mbps";
+      bar.style.width="100%";
+
+      var conservative=Math.max(0,mbps*0.70);
+      var streams=Math.floor(conservative/3);
+      var oneStream=mbps>=4.5;
+      summaryEl.textContent=
+        "1080p à 3 Mbps : "+(oneStream?"OK":"limite")+
+        " · capacité prudente ≈ "+streams+" flux simultané"+(streams===1?"":"s")+
+        " à 3 Mbps (30 % de marge Wi-Fi).";
+      setStatus("Test terminé. "+(result.bytes/1048576).toFixed(0)+" Mo reçus localement en "+result.seconds.toFixed(1)+" s.");
+    }catch(error){
+      setStatus("Le test a échoué. Vérifie que tu es toujours connecté au Wi-Fi Shizzi puis réessaie.");
+      summaryEl.textContent="Aucun résultat valide.";
+      bar.style.width="0%";
+    }finally{
+      startButton.disabled=false;
+      sizeSelect.disabled=false;
+    }
+  }
+
+  startButton.addEventListener("click",run);
+})();
+</script></body></html>`
+
+	body := []byte(page)
+	header := fmt.Sprintf(
+		"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+		len(body),
+	)
+	_, _ = conn.Write([]byte(header))
+	if method != http.MethodHead {
+		_, _ = conn.Write(body)
+	}
+}
+
+func (m *TrafficManager) writeMediaLoginRequired(conn net.Conn, method string) {
+	body := []byte(`<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Compte Shizzi requis</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,system-ui,-apple-system,sans-serif}
+body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#07111f;color:#f8fafc}
+main{width:min(100%,460px);padding:24px;border:1px solid #ffffff18;border-radius:24px;background:#0f172a}
+h1{margin:0 0 10px}.note{color:#94a3b8;line-height:1.5}
+a{display:block;margin-top:18px;padding:14px 16px;border-radius:14px;text-align:center;text-decoration:none;background:linear-gradient(90deg,#38bdf8,#34d399);color:#06202a;font-weight:900}
+</style></head><body><main>
+<h1>Compte Shizzi requis</h1>
+<p class="note">Shizzi Media est réservé aux utilisateurs connectés à un compte Shizzi sur cet appareil.</p>
+<a href="/">Ouvrir ma connexion compte</a>
+</main></body></html>`)
+	header := fmt.Sprintf(
+		"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nX-Shizzi-Media-Auth: required\r\nConnection: close\r\n\r\n",
+		len(body),
+	)
+	_, _ = conn.Write([]byte(header))
+	if method != http.MethodHead {
+		_, _ = conn.Write(body)
+	}
+}
+
+func mediaProxyTarget(path, rawQuery string) string {
+	target := strings.TrimPrefix(path, "/media")
+	if target == "" {
+		target = "/"
+	}
+	if !strings.HasPrefix(target, "/") {
+		target = "/" + target
+	}
+	if rawQuery != "" {
+		target += "?" + rawQuery
+	}
+	return target
+}
+
+func (m *TrafficManager) serveMediaProxy(
+	conn net.Conn,
+	request *http.Request,
+	clientIP string,
+	accountNumber string,
+) {
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		body := []byte("GET/HEAD uniquement")
+		header := fmt.Sprintf(
+			"HTTP/1.1 405 Method Not Allowed\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
+			len(body),
+		)
+		_, _ = conn.Write([]byte(header))
+		_, _ = conn.Write(body)
+		return
+	}
+
+	// Films can remain open for hours. Override the captive portal's short
+	// request deadline while this connection is carrying local media bytes.
+	deadline := time.Now().Add(6 * time.Hour)
+	_ = conn.SetDeadline(deadline)
+
+	target := mediaProxyTarget(request.URL.Path, request.URL.RawQuery)
+	local, err := net.DialTimeout("tcp", mediaBridgeAddress, 3*time.Second)
+	if err != nil {
+		m.noteMediaDiagnostic(MediaDiagnostic{
+			ClientIP:             clientIP,
+			Path:                 request.URL.Path,
+			AccountAuthenticated: true,
+			AccountNumber:        accountNumber,
+			ProxyTarget:          target,
+			Backend:              mediaBridgeAddress,
+			BackendConnected:     false,
+			Result:               "backend_unavailable",
+			Error:                err.Error(),
+		})
+		body := []byte("Shizzi Media indisponible. Active le serveur Media sur le routeur.")
+		header := fmt.Sprintf(
+			"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+			len(body),
+		)
+		_, _ = conn.Write([]byte(header))
+		if request.Method != http.MethodHead {
+			_, _ = conn.Write(body)
+		}
+		return
+	}
+	defer local.Close()
+	_ = local.SetDeadline(deadline)
+
+	if _, err := fmt.Fprintf(
+		local,
+		"%s %s HTTP/1.1\r\nHost: localhost\r\n",
+		request.Method,
+		target,
+	); err != nil {
+		return
+	}
+
+	// Range is essential for seeking in large films. Forward the small set of
+	// browser headers useful to the local media server and close each upstream
+	// response explicitly.
+	for _, name := range []string{"Range", "If-Range", "Accept", "User-Agent"} {
+		if value := request.Header.Get(name); value != "" {
+			if _, err := fmt.Fprintf(local, "%s: %s\r\n", name, value); err != nil {
+				return
+			}
+		}
+	}
+	if _, err := io.WriteString(local, "Connection: close\r\n\r\n"); err != nil {
+		return
+	}
+
+	// Copy the raw upstream response so 206/Content-Range/Content-Length and
+	// MIME headers reach Chrome, Edge, Firefox, Safari and Android unchanged.
+	copied, copyErr := io.Copy(conn, local)
+	event := MediaDiagnostic{
+		ClientIP:             clientIP,
+		Path:                 request.URL.Path,
+		AccountAuthenticated: true,
+		AccountNumber:        accountNumber,
+		ProxyTarget:          target,
+		Backend:              mediaBridgeAddress,
+		BackendConnected:     true,
+		BytesCopied:          copied,
+		Result:               "proxied",
+	}
+	if copyErr != nil {
+		event.Result = "proxy_copy_error"
+		event.Error = copyErr.Error()
+	}
+	m.noteMediaDiagnostic(event)
+}
+
+func (m *TrafficManager) serveClientAppDownload(conn net.Conn, method string) {
+	m.mu.Lock()
+	app := m.portalClientApp
+	m.mu.Unlock()
+
+	if !app.Available {
+		body := []byte("Shizzi+ indisponible")
+		header := fmt.Sprintf(
+			"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
+			len(body),
+		)
+		_, _ = conn.Write([]byte(header))
+		if method != http.MethodHead {
+			_, _ = conn.Write(body)
+		}
+		return
+	}
+
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Minute))
+	local, err := net.DialTimeout("tcp", clientAppBridgeAddress, 3*time.Second)
+	if err != nil {
+		body := []byte("Téléchargement Shizzi+ momentanément indisponible.")
+		header := fmt.Sprintf(
+			"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+			len(body),
+		)
+		_, _ = conn.Write([]byte(header))
+		if method != http.MethodHead {
+			_, _ = conn.Write(body)
+		}
+		return
+	}
+	defer local.Close()
+	_ = local.SetDeadline(time.Now().Add(2 * time.Minute))
+
+	request := fmt.Sprintf(
+		"%s /shizzi-plus.apk HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+		method,
+	)
+	if _, err := io.WriteString(local, request); err != nil {
+		return
+	}
+	_, _ = io.Copy(conn, local)
 }
 
 func (m *TrafficManager) writePortalStatusJSON(conn net.Conn, ip string) {
@@ -819,6 +1303,7 @@ func (m *TrafficManager) writePortalHTML(
 	title := m.portalTitle
 	subtitle := m.portalMessage
 	custom := m.portalHTML
+	clientApp := m.portalClientApp
 	m.mu.Unlock()
 
 	alert := ""
@@ -902,6 +1387,40 @@ func (m *TrafficManager) writePortalHTML(
 		)
 	}
 
+	if status.Authenticated {
+	content += `<section class="media-link"><div class="eyebrow">MEDIA LOCAL</div>
+<strong>Shizzi Media</strong>
+<p>Films, séries et musique disponibles dans le navigateur sur ce Wi-Fi, sans utiliser Internet ni le quota Data.</p>
+<a class="media-button" href="/media/">Ouvrir Shizzi Media</a>
+<div class="media-note">Compatible PC, téléphone et tablette · lecture locale</div></section>`
+	}
+
+	content += `<section class="speedtest-link"><div class="eyebrow">RÉSEAU LOCAL</div>
+<strong>Test de débit Shizzi</strong>
+<p>Mesurez la vitesse réelle du Reno9 vers cet appareil, sans utiliser Internet.</p>
+<a class="speedtest-button" href="/speedtest/">Tester le débit local</a>
+<div class="speedtest-note">Navigateur uniquement · aucun Termux nécessaire</div></section>`
+
+	if clientApp.Available {
+		shortSHA := clientApp.SHA256
+		if len(shortSHA) > 12 {
+			shortSHA = shortSHA[:12]
+		}
+		content += fmt.Sprintf(
+			`<section class="app-download"><div class="eyebrow">APPLICATION CLIENT</div>
+<strong>Shizzi+ %s</strong>
+<p>Installez Shizzi+ directement depuis ce Wi-Fi. Aucun Internet ni quota Data n'est utilisé.</p>
+<a class="download-button" href="/download/shizzi-plus.apk" download="%s">Télécharger Shizzi+</a>
+<div id="shizzi-download-status" class="app-note" aria-live="polite"></div>
+<div class="app-meta">%s · SHA-256 %s…</div>
+<div class="app-note">Android peut demander d'autoriser l'installation depuis cette source.</div></section>`,
+			html.EscapeString(clientApp.Version),
+			html.EscapeString(clientApp.FileName),
+			html.EscapeString(formatPortalFileSize(clientApp.SizeBytes)),
+			html.EscapeString(shortSHA),
+		)
+	}
+
 	refresh := ""
 	if status.ClaimPending {
 		refresh = `<meta http-equiv="refresh" content="3;url=/">`
@@ -923,6 +1442,10 @@ input{border:1px solid #334155;background:#0b1220;color:#fff;outline:none}button
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.grid>div{padding:12px;border-radius:14px;background:#ffffff08}.grid strong{display:block;margin-top:4px;font-size:13px}
 .status-link{display:block;text-align:center;margin-top:16px;color:#7dd3fc;text-decoration:none;font-weight:700;font-size:13px}
 button.secondary{background:#1e293b;color:#e2e8f0}
+.media-link,.speedtest-link,.app-download{margin-top:20px;padding:16px;border:1px solid #22d3ee55;border-radius:18px;background:#071b2a}
+.media-link>strong,.speedtest-link>strong,.app-download>strong{display:block;margin:5px 0 6px;font-size:18px}.media-link p,.speedtest-link p,.app-download p{margin:0 0 12px;color:#cbd5e1;font-size:13px;line-height:1.45}
+.media-button,.speedtest-button,.download-button{display:block;width:100%%;border-radius:14px;padding:14px 16px;text-align:center;text-decoration:none;background:linear-gradient(90deg,#38bdf8,#34d399);color:#06202a;font-weight:900}
+.media-note,.speedtest-note,.app-meta,.app-note{margin-top:9px;color:#94a3b8;font-size:11px;word-break:break-word}
 </style></head><body><main class="card"><h1>%s</h1><p class="sub">%s</p>%s%s</main></body></html>`,
 		refresh,
 		html.EscapeString(title),
@@ -945,6 +1468,7 @@ button.secondary{background:#1e293b;color:#e2e8f0}
 	}
 
 	page = injectPortalAutoRefresh(page)
+	page = injectClientAppDownload(page)
 	writeHTTP(conn, "text/html; charset=utf-8", []byte(page))
 }
 
@@ -976,6 +1500,41 @@ func applyPortalCustomization(
 		return rendered[:index] + functional + rendered[index:]
 	}
 	return rendered + functional
+}
+
+func injectClientAppDownload(page string) string {
+	if !strings.Contains(page, "/download/shizzi-plus.apk") {
+		return page
+	}
+
+	// Do not fetch the APK into JavaScript first. On Android captive portals that
+	// extra fetch/blob/object-URL hop can delay the DownloadManager hand-off by
+	// tens of seconds even for a tiny local file. Keep the native <a download>
+	// navigation intact so the browser starts streaming from Shizzi immediately.
+	script := `<script>
+(function(){
+  var link=document.querySelector('a.download-button[href="/download/shizzi-plus.apk"]');
+  if(!link || link.dataset.shizziNativeDownload==="1") return;
+  link.dataset.shizziNativeDownload="1";
+
+  var status=document.getElementById("shizzi-download-status");
+  function setStatus(message){ if(status) status.textContent=message; }
+
+  link.addEventListener("click",function(){
+    link.textContent="Téléchargement lancé…";
+    setStatus("Téléchargement direct depuis le routeur Shizzi…");
+    setTimeout(function(){
+      link.textContent="Télécharger Shizzi+";
+    },1500);
+  });
+})();
+</script>`
+
+	lower := strings.ToLower(page)
+	if index := strings.LastIndex(lower, "</body>"); index >= 0 {
+		return page[:index] + script + page[index:]
+	}
+	return page + script
 }
 
 func injectPortalAutoRefresh(page string) string {
@@ -1070,6 +1629,16 @@ func writeHTTP(conn net.Conn, contentType string, body []byte) {
 	)
 	_, _ = conn.Write([]byte(header))
 	_, _ = conn.Write(body)
+}
+
+func formatPortalFileSize(value int64) string {
+	if value <= 0 {
+		return "taille inconnue"
+	}
+	if value < 1_000_000 {
+		return fmt.Sprintf("%.0f Ko", float64(value)/1_000.0)
+	}
+	return fmt.Sprintf("%.1f Mo", float64(value)/1_000_000.0)
 }
 
 func formatPortalBytes(value int64) string {

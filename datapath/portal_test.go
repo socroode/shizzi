@@ -175,3 +175,67 @@ func TestPortalAutoRefreshRunsEveryTwoSeconds(t *testing.T) {
 		t.Fatal("portal refresh does not use status.json")
 	}
 }
+
+
+func TestMediaProxyTargetKeepsLocalPrefixOutOfUpstream(t *testing.T) {
+	cases := []struct {
+		path     string
+		query    string
+		expected string
+	}{
+		{path: "/media", expected: "/"},
+		{path: "/media/", expected: "/"},
+		{path: "/media/library", query: "kind=films", expected: "/library?kind=films"},
+		{path: "/media/play", query: "id=abc123", expected: "/play?id=abc123"},
+		{path: "/media/stream", query: "id=abc123", expected: "/stream?id=abc123"},
+	}
+
+	for _, test := range cases {
+		if actual := mediaProxyTarget(test.path, test.query); actual != test.expected {
+			t.Fatalf("mediaProxyTarget(%q, %q)=%q, want %q", test.path, test.query, actual, test.expected)
+		}
+	}
+}
+
+
+func TestSpeedtestDownloadSizesAreBounded(t *testing.T) {
+	cases := map[string]int64{
+		"10":  10 * 1024 * 1024,
+		"25":  25 * 1024 * 1024,
+		"50":  50 * 1024 * 1024,
+		"100": 100 * 1024 * 1024,
+		"999": 50 * 1024 * 1024,
+		"":    50 * 1024 * 1024,
+	}
+
+	for raw, expected := range cases {
+		if actual := speedtestDownloadBytes(raw); actual != expected {
+			t.Fatalf("speedtestDownloadBytes(%q)=%d, want %d", raw, actual, expected)
+		}
+	}
+}
+
+
+func TestMediaAccessFollowsAccountSession(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portalConfigForTest(t))
+	ip := "192.168.7.66"
+
+	if manager.mediaAccountAuthenticated(ip) {
+		t.Fatal("media available before login")
+	}
+	ok, message := manager.submitPortalAccountLogin(ip, "1001", "1234")
+	if !ok {
+		t.Fatalf("login failed: %s", message)
+	}
+	if !manager.mediaAccountAuthenticated(ip) {
+		t.Fatal("media unavailable after login")
+	}
+	ok, _ = manager.submitPortalLogout(ip)
+	if !ok {
+		t.Fatal("logout failed")
+	}
+	if manager.mediaAccountAuthenticated(ip) {
+		t.Fatal("media still available after logout")
+	}
+}
