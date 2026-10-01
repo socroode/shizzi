@@ -100,7 +100,7 @@ jobs:
             test "$ACTUAL_NORM" = "$EXPECTED_NORM"
           }
 
-          verify_apk app/build/outputs/apk/release/app-release.apk dev.shizzi 0.4.3.9 20
+          verify_apk app/build/outputs/apk/release/app-release.apk dev.shizzi 0.4.3.9 21
           verify_apk conso/build/outputs/apk/release/conso-release.apk dev.shizzi.conso 0.2.4 8
           verify_apk admin/build/outputs/apk/release/admin-release.apk dev.shizzi.admin 0.2.4 6
 
@@ -112,7 +112,7 @@ jobs:
       - name: Prepare suite artifacts
         run: |
           mkdir -p suite-output
-          cp app/build/outputs/apk/release/app-release.apk suite-output/Shizzi-Hotspot-0.4.3.9-InApp-Media-Diagnostics.apk
+          cp app/build/outputs/apk/release/app-release.apk suite-output/Shizzi-Hotspot-0.4.3.9-Media-IPv4-Fix.apk
           cp conso/build/outputs/apk/release/conso-release.apk suite-output/Shizzi-Plus-0.2.4-Test.apk
           cp admin/build/outputs/apk/release/admin-release.apk suite-output/Shizzi-Admin-0.2.4-Media-Diagnostics-Test.apk
           cd suite-output
@@ -123,7 +123,7 @@ jobs:
         with:
           name: Shizzi-0.4.3.9-suite-test
           path: |
-            suite-output/Shizzi-Hotspot-0.4.3.9-InApp-Media-Diagnostics.apk
+            suite-output/Shizzi-Hotspot-0.4.3.9-Media-IPv4-Fix.apk
             suite-output/Shizzi-Plus-0.2.4-Test.apk
             suite-output/Shizzi-Admin-0.2.4-Media-Diagnostics-Test.apk
             suite-output/SHA256SUMS.txt
