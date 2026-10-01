@@ -200,7 +200,7 @@ class MediaHttpServer(private val context: Context) {
         val mediaTag = if (entry.kind == MediaKind.MUSIC) {
             "<audio controls autoplay preload=\"metadata\" src=\"stream?id=${entry.id}\"></audio>"
         } else {
-            "<video controls autoplay playsinline preload=\"metadata\" src=\"/stream?id=${entry.id}\"></video>"
+            "<video controls autoplay playsinline preload=\"metadata\" src=\"stream?id=${entry.id}\"></video>"
         }
         val html = page(
             entry.name,
