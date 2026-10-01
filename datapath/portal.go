@@ -126,6 +126,20 @@ type portalClientApp struct {
 	SHA256    string `json:"sha256"`
 }
 
+type MediaDiagnostic struct {
+	AtMillis             int64  `json:"atMillis"`
+	ClientIP             string `json:"clientIp"`
+	Path                 string `json:"path"`
+	AccountAuthenticated bool   `json:"accountAuthenticated"`
+	AccountNumber        string `json:"accountNumber,omitempty"`
+	ProxyTarget          string `json:"proxyTarget,omitempty"`
+	Backend              string `json:"backend,omitempty"`
+	BackendConnected     bool   `json:"backendConnected"`
+	BytesCopied          int64  `json:"bytesCopied,omitempty"`
+	Result               string `json:"result"`
+	Error                string `json:"error,omitempty"`
+}
+
 type portalConfig struct {
 	Title        string               `json:"title"`
 	Message      string               `json:"message"`
@@ -336,16 +350,37 @@ func (m *TrafficManager) portalAuthorizedLocked(ip string, nowMillis int64) bool
 	return m.accountHasInternetLocked(account, nowMillis)
 }
 
-func (m *TrafficManager) mediaAccountAuthenticated(ip string) bool {
+func (m *TrafficManager) mediaAccountIdentity(ip string) (bool, string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	authorization := m.portalAuthorized[ip]
 	if authorization == nil {
-		return false
+		return false, ""
 	}
 	account, ok := m.portalAccounts[authorization.AccountNumber]
-	return ok && account.Enabled
+	if !ok || !account.Enabled {
+		return false, ""
+	}
+	return true, account.Number
+}
+
+func (m *TrafficManager) mediaAccountAuthenticated(ip string) bool {
+	authenticated, _ := m.mediaAccountIdentity(ip)
+	return authenticated
+}
+
+func (m *TrafficManager) noteMediaDiagnostic(event MediaDiagnostic) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if event.AtMillis == 0 {
+		event.AtMillis = time.Now().UnixMilli()
+	}
+	m.mediaDiagnostics = append(m.mediaDiagnostics, event)
+	if len(m.mediaDiagnostics) > 20 {
+		m.mediaDiagnostics = append([]MediaDiagnostic(nil), m.mediaDiagnostics[len(m.mediaDiagnostics)-20:]...)
+	}
 }
 
 func (m *TrafficManager) submitPortalAccountLogin(
@@ -709,10 +744,21 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	}
 
 	path := request.URL.Path
+	isMediaRequest := (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		(path == "/media" || strings.HasPrefix(path, "/media/"))
+	mediaAuthenticated := false
+	mediaAccount := ""
+	if isMediaRequest {
+		mediaAuthenticated, mediaAccount = m.mediaAccountIdentity(clientIP)
+	}
 	switch {
-	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
-		(path == "/media" || strings.HasPrefix(path, "/media/")) &&
-		!m.mediaAccountAuthenticated(clientIP):
+	case isMediaRequest && !mediaAuthenticated:
+		m.noteMediaDiagnostic(MediaDiagnostic{
+			ClientIP:             clientIP,
+			Path:                 path,
+			AccountAuthenticated: false,
+			Result:               "account_required",
+		})
 		m.writeMediaLoginRequired(conn, request.Method)
 	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
 		path == "/speedtest":
@@ -729,9 +775,8 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
 		path == "/speedtest/download":
 		m.serveLocalSpeedtestDownload(conn, request)
-	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
-		(path == "/media" || strings.HasPrefix(path, "/media/")):
-		m.serveMediaProxy(conn, request)
+	case isMediaRequest:
+		m.serveMediaProxy(conn, request, clientIP, mediaAccount)
 	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
 		path == "/download/shizzi-plus.apk":
 		m.serveClientAppDownload(conn, request.Method)
@@ -1008,7 +1053,12 @@ func mediaProxyTarget(path, rawQuery string) string {
 	return target
 }
 
-func (m *TrafficManager) serveMediaProxy(conn net.Conn, request *http.Request) {
+func (m *TrafficManager) serveMediaProxy(
+	conn net.Conn,
+	request *http.Request,
+	clientIP string,
+	accountNumber string,
+) {
 	if request.Method != http.MethodGet && request.Method != http.MethodHead {
 		body := []byte("GET/HEAD uniquement")
 		header := fmt.Sprintf(
@@ -1025,8 +1075,20 @@ func (m *TrafficManager) serveMediaProxy(conn net.Conn, request *http.Request) {
 	deadline := time.Now().Add(6 * time.Hour)
 	_ = conn.SetDeadline(deadline)
 
+	target := mediaProxyTarget(request.URL.Path, request.URL.RawQuery)
 	local, err := net.DialTimeout("tcp", mediaBridgeAddress, 3*time.Second)
 	if err != nil {
+		m.noteMediaDiagnostic(MediaDiagnostic{
+			ClientIP:             clientIP,
+			Path:                 request.URL.Path,
+			AccountAuthenticated: true,
+			AccountNumber:        accountNumber,
+			ProxyTarget:          target,
+			Backend:              mediaBridgeAddress,
+			BackendConnected:     false,
+			Result:               "backend_unavailable",
+			Error:                err.Error(),
+		})
 		body := []byte("Shizzi Media indisponible. Active le serveur Media sur le routeur.")
 		header := fmt.Sprintf(
 			"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
@@ -1041,7 +1103,6 @@ func (m *TrafficManager) serveMediaProxy(conn net.Conn, request *http.Request) {
 	defer local.Close()
 	_ = local.SetDeadline(deadline)
 
-	target := mediaProxyTarget(request.URL.Path, request.URL.RawQuery)
 	if _, err := fmt.Fprintf(
 		local,
 		"%s %s HTTP/1.1\r\nHost: localhost\r\n",
@@ -1067,7 +1128,23 @@ func (m *TrafficManager) serveMediaProxy(conn net.Conn, request *http.Request) {
 
 	// Copy the raw upstream response so 206/Content-Range/Content-Length and
 	// MIME headers reach Chrome, Edge, Firefox, Safari and Android unchanged.
-	_, _ = io.Copy(conn, local)
+	copied, copyErr := io.Copy(conn, local)
+	event := MediaDiagnostic{
+		ClientIP:             clientIP,
+		Path:                 request.URL.Path,
+		AccountAuthenticated: true,
+		AccountNumber:        accountNumber,
+		ProxyTarget:          target,
+		Backend:              mediaBridgeAddress,
+		BackendConnected:     true,
+		BytesCopied:          copied,
+		Result:               "proxied",
+	}
+	if copyErr != nil {
+		event.Result = "proxy_copy_error"
+		event.Error = copyErr.Error()
+	}
+	m.noteMediaDiagnostic(event)
 }
 
 func (m *TrafficManager) serveClientAppDownload(conn net.Conn, method string) {
