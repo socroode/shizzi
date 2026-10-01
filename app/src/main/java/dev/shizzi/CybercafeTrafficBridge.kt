@@ -77,6 +77,20 @@ data class AdminCommandResult(
     val payloadJson: String = "",
 )
 
+data class LiveMediaDiagnostic(
+    val atMillis: Long = 0L,
+    val clientIp: String = "",
+    val path: String = "",
+    val accountAuthenticated: Boolean = false,
+    val accountNumber: String = "",
+    val proxyTarget: String = "",
+    val backend: String = "",
+    val backendConnected: Boolean = false,
+    val bytesCopied: Long = 0L,
+    val result: String = "",
+    val error: String = "",
+)
+
 data class LiveTrafficSnapshot(
     val epoch: Long = 0L,
     val accountUsage: List<LiveAccountUsage> = emptyList(),
@@ -85,6 +99,7 @@ data class LiveTrafficSnapshot(
     val portalAuthorizations: List<LivePortalAuthorization> = emptyList(),
     val portalRechargeClaims: List<LivePortalRechargeClaim> = emptyList(),
     val adminCommands: List<LiveAdminCommand> = emptyList(),
+    val mediaDiagnostics: List<LiveMediaDiagnostic> = emptyList(),
 )
 
 fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
@@ -177,6 +192,29 @@ fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
         }
     }.orEmpty()
 
+    val mediaDiagnostics = root.optJSONArray("mediaDiagnostics")?.let { array ->
+        buildList {
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                add(
+                    LiveMediaDiagnostic(
+                        atMillis = item.optLong("atMillis"),
+                        clientIp = item.optString("clientIp"),
+                        path = item.optString("path"),
+                        accountAuthenticated = item.optBoolean("accountAuthenticated"),
+                        accountNumber = item.optString("accountNumber"),
+                        proxyTarget = item.optString("proxyTarget"),
+                        backend = item.optString("backend"),
+                        backendConnected = item.optBoolean("backendConnected"),
+                        bytesCopied = item.optLong("bytesCopied"),
+                        result = item.optString("result"),
+                        error = item.optString("error"),
+                    ),
+                )
+            }
+        }
+    }.orEmpty()
+
     val usage = root.optJSONArray("accountUsage")?.let { array ->
         buildList {
             for (index in 0 until array.length()) {
@@ -222,6 +260,7 @@ fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
         portalAuthorizations = authorizations,
         portalRechargeClaims = claims,
         adminCommands = adminCommands,
+        mediaDiagnostics = mediaDiagnostics,
     )
 }
 
