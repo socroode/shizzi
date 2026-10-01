@@ -1,5 +1,7 @@
 package dev.shizzi
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -29,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -57,6 +60,7 @@ class MediaActivity : ComponentActivity() {
 @Composable
 private fun MediaScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    val mediaDiagnostics by SessionService.mediaDiagnostics.collectAsState()
     var revision by remember { mutableIntStateOf(0) }
     var pendingKind by remember { mutableStateOf<MediaKind?>(null) }
     var enabled by remember(revision) { mutableStateOf(MediaPrefs.isEnabled(context)) }
@@ -228,6 +232,16 @@ private fun MediaScreen(onBack: () -> Unit) {
                 }
             }
 
+            HorizontalDivider()
+
+            MediaDiagnosticsPanel(
+                events = mediaDiagnostics,
+                onCopy = { text ->
+                    val clipboard = context.getSystemService(ClipboardManager::class.java)
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Diagnostic Media Shizzi", text))
+                },
+            )
+
             Spacer(Modifier.height(8.dp))
             Text(
                 "Media indexé : scanne la médiathèque après avoir choisi ou modifié un dossier. La lecture reste locale avec avance/retour.",
@@ -261,4 +275,72 @@ private fun FolderRow(
             }
         }
     }
+}
+
+@Composable
+private fun MediaDiagnosticsPanel(
+    events: List<LiveMediaDiagnostic>,
+    onCopy: (String) -> Unit,
+) {
+    Text("Diagnostic Media", fontWeight = FontWeight.SemiBold)
+
+    if (events.isEmpty()) {
+        Text(
+            "Aucun accès Media enregistré pour cette session. " +
+                "Depuis un appareil client connecté à un compte Shizzi, ouvre Media : " +
+                "le diagnostic apparaîtra ici automatiquement.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        return
+    }
+
+    val latest = events.last()
+    Text(
+        mediaDiagnosticInterpretation(latest),
+        style = MaterialTheme.typography.bodyMedium,
+        fontWeight = FontWeight.SemiBold,
+    )
+    Text(
+        formatMediaDiagnostic(latest),
+        style = MaterialTheme.typography.bodySmall,
+    )
+
+    val recent = events.takeLast(10)
+    Button(onClick = { onCopy(recent.joinToString("\n\n") { formatMediaDiagnostic(it) }) }) {
+        Text("Copier le diagnostic")
+    }
+
+    if (recent.size > 1) {
+        Text(
+            "Historique récent : ${recent.size} accès Media. " +
+                "L'écran se met à jour automatiquement pendant que Shizzi est actif.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+private fun mediaDiagnosticInterpretation(event: LiveMediaDiagnostic): String = when (event.result) {
+    "proxied" ->
+        "✓ Shizzi reconnaît le compte et transmet bien Media au serveur local."
+    "account_required" ->
+        "Compte non reconnu pour cet appareil : le blocage se produit avant le serveur Media."
+    "backend_unavailable" ->
+        "Le compte est reconnu, mais le serveur Media local ne répond pas sur ${event.backend.ifBlank { \"127.0.0.1:8088\" }}."
+    "proxy_copy_error" ->
+        "Le serveur Media a été joint, mais le transfert vers l'appareil client s'est interrompu."
+    else ->
+        "Événement Media détecté : ${event.result.ifBlank { \"résultat inconnu\" }}."
+}
+
+private fun formatMediaDiagnostic(event: LiveMediaDiagnostic): String = buildString {
+    append("Client : ").append(event.clientIp.ifBlank { "—" })
+    append("\nCompte : ").append(event.accountNumber.ifBlank { "—" })
+    append("\nAuthentifié : ").append(if (event.accountAuthenticated) "OUI" else "NON")
+    append("\nChemin : ").append(event.path.ifBlank { "—" })
+    append("\nProxy : ").append(event.proxyTarget.ifBlank { "—" })
+    append("\nBackend : ").append(event.backend.ifBlank { "—" })
+    append("\nBackend connecté : ").append(if (event.backendConnected) "OUI" else "NON")
+    append("\nRésultat : ").append(event.result.ifBlank { "—" })
+    if (event.bytesCopied > 0L) append("\nOctets transférés : ").append(event.bytesCopied)
+    if (event.error.isNotBlank()) append("\nErreur : ").append(event.error)
 }
