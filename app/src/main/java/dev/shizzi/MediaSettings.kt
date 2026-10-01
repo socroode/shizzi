@@ -292,6 +292,7 @@ object MediaCatalog {
 }
 
 object MediaNetwork {
+    const val LOOPBACK_HOST = "127.0.0.1"
     const val PORT = 8088
 
     /**
