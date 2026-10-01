@@ -102,7 +102,7 @@ jobs:
 
           verify_apk app/build/outputs/apk/release/app-release.apk dev.shizzi 0.4.3.9 19
           verify_apk conso/build/outputs/apk/release/conso-release.apk dev.shizzi.conso 0.2.4 8
-          verify_apk admin/build/outputs/apk/release/admin-release.apk dev.shizzi.admin 0.2.3 5
+          verify_apk admin/build/outputs/apk/release/admin-release.apk dev.shizzi.admin 0.2.4 6
 
           unzip -p app/build/outputs/apk/release/app-release.apk             assets/shizzi/Shizzi-Plus.apk > /tmp/shizzi-plus-embedded.apk
           test -s /tmp/shizzi-plus-embedded.apk
@@ -114,7 +114,7 @@ jobs:
           mkdir -p suite-output
           cp app/build/outputs/apk/release/app-release.apk suite-output/Shizzi-Hotspot-0.4.3.9-Account-Media-Test.apk
           cp conso/build/outputs/apk/release/conso-release.apk suite-output/Shizzi-Plus-0.2.4-Test.apk
-          cp admin/build/outputs/apk/release/admin-release.apk suite-output/Shizzi-Admin-0.2.3-Test.apk
+          cp admin/build/outputs/apk/release/admin-release.apk suite-output/Shizzi-Admin-0.2.4-Media-Diagnostics-Test.apk
           cd suite-output
           sha256sum *.apk > SHA256SUMS.txt
 
@@ -125,7 +125,7 @@ jobs:
           path: |
             suite-output/Shizzi-Hotspot-0.4.3.9-Account-Media-Test.apk
             suite-output/Shizzi-Plus-0.2.4-Test.apk
-            suite-output/Shizzi-Admin-0.2.3-Test.apk
+            suite-output/Shizzi-Admin-0.2.4-Media-Diagnostics-Test.apk
             suite-output/SHA256SUMS.txt
           if-no-files-found: error
 
