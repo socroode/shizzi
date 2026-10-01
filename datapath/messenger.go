@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ const (
 	messengerMaxGroupMembers = 20
 	messengerMaxGroupCall    = 6
 	messengerMaxTextLength   = 2000
+	messengerStatePath        = "/data/local/tmp/shizzi-messenger-v1.json"
 )
 
 type messengerIdentity struct {
@@ -85,6 +87,14 @@ type messengerEvent struct {
 	CreatedAtMillis int64  `json:"createdAtMillis"`
 }
 
+type messengerPersistentState struct {
+	Version       int                     `json:"version"`
+	NextMessageID int64                   `json:"nextMessageId"`
+	Messages      []messengerMessage      `json:"messages"`
+	Groups        []messengerGroupPayload `json:"groups"`
+	Blocks        map[string][]string      `json:"blocks"`
+}
+
 type messengerHub struct {
 	mu            sync.Mutex
 	nextMessageID int64
@@ -95,17 +105,144 @@ type messengerHub struct {
 	events        []messengerEvent
 	blocks        map[string]map[string]bool
 	recentSends   map[string][]int64
+	persistSignal  chan struct{}
 }
 
 var shizziMessenger = newMessengerHub()
 
 func newMessengerHub() *messengerHub {
-	return &messengerHub{
-		groups:      make(map[string]*messengerGroup),
-		rooms:       make(map[string]*messengerRoom),
-		blocks:      make(map[string]map[string]bool),
-		recentSends: make(map[string][]int64),
+	hub := &messengerHub{
+		groups:        make(map[string]*messengerGroup),
+		rooms:         make(map[string]*messengerRoom),
+		blocks:        make(map[string]map[string]bool),
+		recentSends:   make(map[string][]int64),
+		persistSignal: make(chan struct{}, 1),
 	}
+	hub.loadPersistentState()
+	go hub.persistenceLoop()
+	return hub
+}
+
+func (h *messengerHub) loadPersistentState() {
+	raw, err := os.ReadFile(messengerStatePath)
+	if err != nil || len(raw) == 0 {
+		return
+	}
+	var state messengerPersistentState
+	if json.Unmarshal(raw, &state) != nil || state.Version != 1 {
+		return
+	}
+
+	h.nextMessageID = state.NextMessageID
+	h.messages = append([]messengerMessage(nil), state.Messages...)
+	if len(h.messages) > messengerMaxMessages {
+		h.messages = append([]messengerMessage(nil), h.messages[len(h.messages)-messengerMaxMessages:]...)
+	}
+	for _, payload := range state.Groups {
+		if payload.ID == "" || payload.Owner == "" {
+			continue
+		}
+		group := &messengerGroup{
+			ID: payload.ID,
+			Name: payload.Name,
+			Owner: payload.Owner,
+			Admins: make(map[string]bool),
+			Members: make(map[string]bool),
+			CreatedAtMillis: payload.CreatedAtMillis,
+		}
+		for _, account := range payload.Admins {
+			if account != "" {
+				group.Admins[account] = true
+			}
+		}
+		for _, account := range payload.Members {
+			if account != "" {
+				group.Members[account] = true
+			}
+		}
+		group.Members[group.Owner] = true
+		group.Admins[group.Owner] = true
+		h.groups[group.ID] = group
+	}
+	for owner, values := range state.Blocks {
+		if owner == "" {
+			continue
+		}
+		set := make(map[string]bool)
+		for _, account := range values {
+			if account != "" {
+				set[account] = true
+			}
+		}
+		if len(set) > 0 {
+			h.blocks[owner] = set
+		}
+	}
+}
+
+func (h *messengerHub) markPersistentDirtyLocked() {
+	select {
+	case h.persistSignal <- struct{}{}:
+	default:
+	}
+}
+
+func (h *messengerHub) persistenceLoop() {
+	for range h.persistSignal {
+		// Coalesce bursts such as group creation + several membership events.
+		time.Sleep(150 * time.Millisecond)
+		for {
+			select {
+			case <-h.persistSignal:
+				continue
+			default:
+			}
+			break
+		}
+		h.persistNow()
+	}
+}
+
+func (h *messengerHub) persistentStateLocked() messengerPersistentState {
+	groups := make([]messengerGroupPayload, 0, len(h.groups))
+	for _, group := range h.groups {
+		groups = append(groups, messengerGroupPayloadFor(group))
+	}
+	sort.Slice(groups, func(i, j int) bool { return groups[i].ID < groups[j].ID })
+
+	blocks := make(map[string][]string, len(h.blocks))
+	for owner, values := range h.blocks {
+		items := make([]string, 0, len(values))
+		for account := range values {
+			items = append(items, account)
+		}
+		sort.Strings(items)
+		blocks[owner] = items
+	}
+
+	return messengerPersistentState{
+		Version: 1,
+		NextMessageID: h.nextMessageID,
+		Messages: append([]messengerMessage(nil), h.messages...),
+		Groups: groups,
+		Blocks: blocks,
+	}
+}
+
+func (h *messengerHub) persistNow() {
+	h.mu.Lock()
+	state := h.persistentStateLocked()
+	h.mu.Unlock()
+
+	raw, err := json.Marshal(state)
+	if err != nil {
+		return
+	}
+	temp := messengerStatePath + ".tmp"
+	if err := os.WriteFile(temp, raw, 0o600); err != nil {
+		return
+	}
+	_ = os.Rename(temp, messengerStatePath)
 }
 
 func (m *TrafficManager) messengerIdentity(ip string) (messengerIdentity, bool) {
@@ -202,6 +339,7 @@ func (h *messengerHub) appendMessageLocked(message messengerMessage) messengerMe
 	if len(h.messages) > messengerMaxMessages {
 		h.messages = append([]messengerMessage(nil), h.messages[len(h.messages)-messengerMaxMessages:]...)
 	}
+	h.markPersistentDirtyLocked()
 	return message
 }
 
@@ -402,6 +540,7 @@ func (m *TrafficManager) serveMessengerAPI(
 			Members: members, CreatedAtMillis: time.Now().UnixMilli(),
 		}
 		shizziMessenger.groups[id] = group
+		shizziMessenger.markPersistentDirtyLocked()
 		payload := messengerGroupPayloadFor(group)
 		now := time.Now().UnixMilli()
 		for member := range members {
@@ -534,6 +673,7 @@ func (m *TrafficManager) serveMessengerAPI(
 				}
 				group.Members[target] = true
 			}
+			shizziMessenger.markPersistentDirtyLocked()
 			payload := messengerGroupPayloadFor(group)
 			shizziMessenger.appendEventLocked(messengerEvent{
 				Kind: "group-update", From: me.Number, To: target,
@@ -581,6 +721,7 @@ func (m *TrafficManager) serveMessengerAPI(
 		} else {
 			delete(shizziMessenger.blocks[me.Number], target)
 		}
+		shizziMessenger.markPersistentDirtyLocked()
 		shizziMessenger.mu.Unlock()
 		writeJSONStatus(conn, "200 OK", map[string]any{"ok": true})
 		return true
