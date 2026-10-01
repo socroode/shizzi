@@ -54,7 +54,13 @@ class MediaServerService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun startServer() {
-        if (server != null) return
+        val current = server
+        if (current?.isListening() == true) return
+        if (current != null) {
+            Log.w(TAG, "media listener stale; rebuilding loopback server")
+            current.stop()
+            server = null
+        }
         val candidate = MediaHttpServer(applicationContext)
         if (!candidate.start()) {
             Log.e(TAG, "media server did not start")
