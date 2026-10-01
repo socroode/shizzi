@@ -1507,58 +1507,25 @@ func injectClientAppDownload(page string) string {
 		return page
 	}
 
+	// Do not fetch the APK into JavaScript first. On Android captive portals that
+	// extra fetch/blob/object-URL hop can delay the DownloadManager hand-off by
+	// tens of seconds even for a tiny local file. Keep the native <a download>
+	// navigation intact so the browser starts streaming from Shizzi immediately.
 	script := `<script>
 (function(){
   var link=document.querySelector('a.download-button[href="/download/shizzi-plus.apk"]');
-  if(!link || link.dataset.shizziLocalFetch==="1") return;
-  link.dataset.shizziLocalFetch="1";
+  if(!link || link.dataset.shizziNativeDownload==="1") return;
+  link.dataset.shizziNativeDownload="1";
 
   var status=document.getElementById("shizzi-download-status");
-  var originalText=link.textContent;
-
   function setStatus(message){ if(status) status.textContent=message; }
 
-  link.addEventListener("click",async function(event){
-    if(!window.fetch || !window.URL || !URL.createObjectURL) return;
-    event.preventDefault();
-    if(link.dataset.shizziBusy==="1") return;
-
-    link.dataset.shizziBusy="1";
-    link.textContent="Téléchargement local…";
-    setStatus("Récupération directe depuis le routeur Shizzi…");
-
-    var href=link.getAttribute("href") || "/download/shizzi-plus.apk";
-    var fileName=link.getAttribute("download") || "Shizzi-Plus.apk";
-
-    try{
-      var response=await fetch(href,{cache:"no-store",credentials:"same-origin"});
-      if(!response.ok) throw new Error("HTTP "+response.status);
-
-      var expected=Number(response.headers.get("Content-Length") || 0);
-      var blob=await response.blob();
-      if(expected>0 && blob.size!==expected){
-        throw new Error("APK incomplet: "+blob.size+"/"+expected);
-      }
-
-      var objectUrl=URL.createObjectURL(blob);
-      var save=document.createElement("a");
-      save.href=objectUrl;
-      save.download=fileName;
-      save.style.display="none";
-      document.body.appendChild(save);
-      save.click();
-      save.remove();
-      setTimeout(function(){ URL.revokeObjectURL(objectUrl); },30000);
-
-      setStatus("Shizzi+ reçu depuis le Wi-Fi local ("+blob.size+" octets).");
-    }catch(error){
-      setStatus("Échec du transfert navigateur. Nouvelle tentative directe…");
-      var separator=href.indexOf("?")>=0 ? "&" : "?";
-      window.location.assign(href+separator+"fallback=1&ts="+Date.now());
-    }finally{
-      link.dataset.shizziBusy="0";
-      link.textContent=originalText;
-    }
+  link.addEventListener("click",function(){
+    link.textContent="Téléchargement lancé…";
+    setStatus("Téléchargement direct depuis le routeur Shizzi…");
+    setTimeout(function(){
+      link.textContent="Télécharger Shizzi+";
+    },1500);
   });
 })();
 </script>`
