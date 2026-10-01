@@ -183,6 +183,7 @@ func TestMediaProxyTargetKeepsLocalPrefixOutOfUpstream(t *testing.T) {
 		query    string
 		expected string
 	}{
+		{path: "/media", expected: "/"},
 		{path: "/media/", expected: "/"},
 		{path: "/media/library", query: "kind=films", expected: "/library?kind=films"},
 		{path: "/media/play", query: "id=abc123", expected: "/play?id=abc123"},
