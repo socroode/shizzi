@@ -7,7 +7,9 @@ import android.provider.DocumentsContract
 import android.webkit.MimeTypeMap
 import androidx.documentfile.provider.DocumentFile
 import java.net.Inet4Address
+import java.net.InetSocketAddress
 import java.net.NetworkInterface
+import java.net.Socket
 import java.security.MessageDigest
 import java.util.ArrayDeque
 import java.util.Collections
@@ -294,6 +296,25 @@ object MediaCatalog {
 object MediaNetwork {
     const val LOOPBACK_HOST = "127.0.0.1"
     const val PORT = 8088
+
+    fun backendReachable(
+        host: String = LOOPBACK_HOST,
+        port: Int = PORT,
+        timeoutMillis: Int = 500,
+    ): Boolean =
+        runCatching {
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress(host, port), timeoutMillis)
+                socket.soTimeout = timeoutMillis
+                socket.getOutputStream().write(
+                    "GET /health HTTP/1.1\r\nHost: $host\r\nConnection: close\r\n\r\n"
+                        .toByteArray(Charsets.US_ASCII),
+                )
+                socket.getOutputStream().flush()
+                val status = socket.getInputStream().bufferedReader(Charsets.US_ASCII).readLine().orEmpty()
+                status.contains(" 200 ")
+            }
+        }.getOrDefault(false)
 
     /**
      * Returns addresses that belong to local interfaces which are not exposed
