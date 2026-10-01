@@ -42,4 +42,57 @@ class MediaLoopbackTest {
             assertTrue("virtual router worker did not finish", !worker.isAlive)
         }
     }
+ 
+
+    @Test
+    fun healthProbeReachesVirtualAndroidRouterBackend() {
+        val bindAddress = InetAddress.getByName(MediaNetwork.LOOPBACK_HOST)
+        ServerSocket().use { server ->
+            server.reuseAddress = true
+            server.bind(InetSocketAddress(bindAddress, 0))
+
+            val worker = thread(name = "virtual-android-router-media") {
+                server.accept().use { peer ->
+                    val reader = peer.getInputStream().bufferedReader()
+                    while (true) {
+                        val line = reader.readLine() ?: break
+                        if (line.isEmpty()) break
+                    }
+                    val body = "ok"
+                    val response =
+                        "HTTP/1.1 200 OK\r\n" +
+                            "Content-Type: text/plain\r\n" +
+                            "Content-Length: ${body.length}\r\n" +
+                            "Connection: close\r\n\r\n" +
+                            body
+                    peer.getOutputStream().write(response.toByteArray())
+                    peer.getOutputStream().flush()
+                }
+            }
+
+            assertTrue(
+                "virtual Android router Media backend must answer /health",
+                MediaNetwork.backendReachable(
+                    host = MediaNetwork.LOOPBACK_HOST,
+                    port = server.localPort,
+                    timeoutMillis = 1_000,
+                ),
+            )
+            worker.join(1_000)
+            assertTrue("virtual Android router worker did not finish", !worker.isAlive)
+        }
+    }
+
+    @Test
+    fun healthProbeRejectsStoppedVirtualAndroidRouterBackend() {
+        val port = ServerSocket(0).use { it.localPort }
+        assertTrue(
+            "stopped Media backend must be reported unavailable",
+            !MediaNetwork.backendReachable(
+                host = MediaNetwork.LOOPBACK_HOST,
+                port = port,
+                timeoutMillis = 200,
+            ),
+        )
+    }
 }
