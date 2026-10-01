@@ -536,16 +536,17 @@ class MainActivity : Activity() {
                 "heure —"
             }
 
-            info(
-                "$whenText · " + event.optString("path").ifBlank { "—" } +
-                    "\nClient : " + event.optString("clientIp").ifBlank { "—" } +
-                    "\nCompte : $account · authentifié : $authenticated" +
-                    "\nProxy : $target" +
-                    "\nBackend : $backendAddress · connecté : $backend" +
-                    "\nRésultat : $result" +
-                    if (copied > 0L) "\nTransféré : " + formatBytes(copied) else "" +
-                    if (error.isNotBlank()) "\nErreur : $error" else "",
-            )
+            val detail = buildString {
+                append(whenText).append(" · ").append(event.optString("path").ifBlank { "—" })
+                append("\nClient : ").append(event.optString("clientIp").ifBlank { "—" })
+                append("\nCompte : ").append(account).append(" · authentifié : ").append(authenticated)
+                append("\nProxy : ").append(target)
+                append("\nBackend : ").append(backendAddress).append(" · connecté : ").append(backend)
+                append("\nRésultat : ").append(result)
+                if (copied > 0L) append("\nTransféré : ").append(formatBytes(copied))
+                if (error.isNotBlank()) append("\nErreur : ").append(error)
+            }
+            info(detail)
             divider()
         }
         info("Les 10 événements Media les plus récents sont affichés. Utilisez Actualiser après avoir reproduit le problème.")
