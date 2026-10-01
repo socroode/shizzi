@@ -91,6 +91,8 @@ class MessengerCallActivity : Activity() {
     private var inviter = ""
     private var callStarted = false
     private var finishingCall = false
+    private var muted = false
+    private var cameraPaused = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -154,6 +156,26 @@ class MessengerCallActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             setPadding(0, dp(10), 0, 0)
+        }
+        controls.addView(Button(this).apply {
+            text = "Micro"
+            isAllCaps = false
+            setOnClickListener {
+                muted = !muted
+                audioTrack?.setEnabled(!muted)
+                text = if (muted) "Réactiver micro" else "Micro"
+            }
+        })
+        if (video) {
+            controls.addView(Button(this).apply {
+                text = "Caméra"
+                isAllCaps = false
+                setOnClickListener {
+                    cameraPaused = !cameraPaused
+                    videoTrack?.setEnabled(!cameraPaused)
+                    text = if (cameraPaused) "Réactiver caméra" else "Caméra"
+                }
+            })
         }
         controls.addView(Button(this).apply {
             text = "Raccrocher"
