@@ -31,7 +31,12 @@ class MediaHttpServer(private val context: Context) {
         val socket = try {
             ServerSocket().apply {
                 reuseAddress = true
-                bind(InetSocketAddress(InetAddress.getLoopbackAddress(), MediaNetwork.PORT))
+                bind(
+                    InetSocketAddress(
+                        InetAddress.getByName(MediaNetwork.LOOPBACK_HOST),
+                        MediaNetwork.PORT,
+                    ),
+                )
             }
         } catch (failure: IOException) {
             running.set(false)
@@ -41,7 +46,7 @@ class MediaHttpServer(private val context: Context) {
 
         serverSocket = socket
         acceptExecutor.execute { acceptLoop(socket) }
-        Log.i(TAG, "media server listening on loopback port ${MediaNetwork.PORT}")
+        Log.i(TAG, "media server listening on ${MediaNetwork.LOOPBACK_HOST}:${MediaNetwork.PORT}")
         return true
     }
 
