@@ -325,11 +325,11 @@ private fun mediaDiagnosticInterpretation(event: LiveMediaDiagnostic): String = 
     "account_required" ->
         "Compte non reconnu pour cet appareil : le blocage se produit avant le serveur Media."
     "backend_unavailable" ->
-        "Le compte est reconnu, mais le serveur Media local ne répond pas sur ${event.backend.ifBlank { \"127.0.0.1:8088\" }}."
+        "Le compte est reconnu, mais le serveur Media local ne répond pas sur ${event.backend.ifBlank { "127.0.0.1:8088" }}."
     "proxy_copy_error" ->
         "Le serveur Media a été joint, mais le transfert vers l'appareil client s'est interrompu."
     else ->
-        "Événement Media détecté : ${event.result.ifBlank { \"résultat inconnu\" }}."
+        "Événement Media détecté : ${event.result.ifBlank { "résultat inconnu" }}."
 }
 
 private fun formatMediaDiagnostic(event: LiveMediaDiagnostic): String = buildString {
