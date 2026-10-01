@@ -2,6 +2,8 @@ package dev.shizzi.conso
 
 import android.app.Activity
 import android.graphics.Color
+import android.content.Intent
+import android.net.Uri
 import android.content.pm.ActivityInfo
 import android.net.ConnectivityManager
 import android.net.Network
@@ -70,7 +72,7 @@ class MainActivity : Activity() {
             })
 
             addView(TextView(this@MainActivity).apply {
-                text = "Compte · Conso · Recharge · Media"
+                text = "Compte · Conso · Recharge · Messenger · Media"
                 textSize = 15f
                 setTextColor(Color.rgb(148, 163, 184))
                 gravity = Gravity.CENTER
@@ -86,6 +88,18 @@ class MainActivity : Activity() {
             })
             addView(primaryButton("Recharger avec un voucher") {
                 openPortal(PORTAL_URL)
+            })
+
+            addView(sectionLabel("COMMUNICATION"))
+            addView(primaryButton("Messages · Groupes · Appels") {
+                openPortal(MESSENGER_URL, "Shizzi Messenger")
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "Communication locale entre comptes Shizzi : messages, groupes et appels sans quota Internet."
+                textSize = 13f
+                setTextColor(Color.rgb(148, 163, 184))
+                gravity = Gravity.CENTER
+                setPadding(0, dp(8), 0, dp(8))
             })
 
             addView(sectionLabel("SHIZZI MEDIA"))
@@ -143,6 +157,29 @@ class MainActivity : Activity() {
                 }
             }
             webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                    val uri = request?.url ?: return false
+                    if (uri.scheme == "shizzi-call") {
+                        startActivity(Intent(this@MainActivity, MessengerCallActivity::class.java).apply {
+                            data = uri
+                        })
+                        return true
+                    }
+                    return false
+                }
+
+                @Deprecated("Deprecated in Java")
+                override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                    val uri = url?.let(Uri::parse) ?: return false
+                    if (uri.scheme == "shizzi-call") {
+                        startActivity(Intent(this@MainActivity, MessengerCallActivity::class.java).apply {
+                            data = uri
+                        })
+                        return true
+                    }
+                    return false
+                }
+
                 override fun onPageStarted(
                     view: WebView?,
                     url: String?,
@@ -183,7 +220,7 @@ class MainActivity : Activity() {
                     if (request?.isForMainFrame != true) return
                     if (!belongsToRequestedTarget(request.url?.toString())) return
                     val code = errorResponse?.statusCode ?: 0
-                    if (requestedLabel == "Shizzi Media" && code == 401) {
+                    if ((requestedLabel == "Shizzi Media" || requestedLabel == "Shizzi Messenger") && code == 401) {
                         return
                     }
                     showNavigationFailure(
@@ -476,6 +513,7 @@ class MainActivity : Activity() {
 
     private companion object {
         const val PORTAL_URL = "http://192.0.2.1/"
+        const val MESSENGER_URL = "http://192.0.2.1/messenger/"
         const val PORTAL_MEDIA_URL = "http://192.0.2.1/media/"
     }
 }
