@@ -33,6 +33,18 @@ class SessionService : Service() {
     private val notification by lazy { SessionNotification(this) }
     private val statusPoller = SessionStatusPoller(scope, controller)
     private val clientAppDistribution by lazy { ClientAppDistributionServer(this) }
+    private val messagingServer by lazy {
+        MessagingHttpServer(this) {
+            (application as App).cybercafeStore.state.value.accounts
+                .mapValues { (_, account) ->
+                    MessagingAccount(
+                        number = account.number,
+                        name = account.name,
+                        enabled = account.enabled,
+                    )
+                }
+        }
+    }
 
     private val internalState get() = sessionState
 
@@ -52,6 +64,11 @@ class SessionService : Service() {
         super.onCreate()
         controller.onSessionLost = ::handleSessionLost
         clientAppDistribution.start()
+        if (!messagingServer.start()) {
+            SessionLog.warn("messaging backend failed to start")
+        } else {
+            SessionLog.info("messaging backend ready on 127.0.0.1:${MessagingHttpServer.PORT}")
+        }
         liveService = this
     }
 
@@ -402,6 +419,7 @@ class SessionService : Service() {
         cybercafeJob = null
         clearLiveSessions()
         (application as App).cybercafeStore.flushUsage(System.currentTimeMillis(), force = true)
+        messagingServer.stop()
         clientAppDistribution.stop()
         controller.unbind()
         scope.cancel()
