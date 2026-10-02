@@ -187,7 +187,8 @@ object MediaCatalog {
         folderName: String,
     ): List<MediaEntry> {
         val resolver = context.contentResolver
-        val rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
+        val rootDocumentId = runCatching { DocumentsContract.getDocumentId(treeUri) }
+            .getOrElse { DocumentsContract.getTreeDocumentId(treeUri) }
         val pending = ArrayDeque<PendingDirectory>()
         pending.add(PendingDirectory(rootDocumentId, ""))
 
