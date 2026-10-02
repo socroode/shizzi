@@ -69,6 +69,9 @@ jobs:
       - name: Virtual local-only WebRTC UI contract
         run: ./gradlew :app:testDebugUnitTest --tests dev.shizzi.MessagingCallWebUiTest --no-daemon
 
+      - name: Virtual Android secure call origin and native bridge
+        run: ./gradlew :conso:testDebugUnitTest --tests dev.shizzi.conso.SecureChatWebSupportTest --no-daemon
+
       - name: Messaging regression
         run: ./gradlew :app:testDebugUnitTest --tests dev.shizzi.MessagingStoreTest --no-daemon
 
@@ -120,8 +123,8 @@ jobs:
           CONSO_VERSION=$(echo "$CONSO_BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
           CONSO_CODE=$(echo "$CONSO_BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
           test "$CONSO_PACKAGE" = "dev.shizzi.conso"
-          test "$CONSO_VERSION" = "0.2.7-test"
-          test "$CONSO_CODE" = "11"
+          test "$CONSO_VERSION" = "0.2.8-test"
+          test "$CONSO_CODE" = "12"
           CONSO_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$CONSO" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
           test "$CONSO_CERT" = "$EXPECTED_NORM"
 
@@ -131,8 +134,8 @@ jobs:
           EMBEDDED_BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$EMBEDDED")
           EMBEDDED_VERSION=$(echo "$EMBEDDED_BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
           EMBEDDED_CODE=$(echo "$EMBEDDED_BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
-          test "$EMBEDDED_VERSION" = "0.2.7-test"
-          test "$EMBEDDED_CODE" = "11"
+          test "$EMBEDDED_VERSION" = "0.2.8-test"
+          test "$EMBEDDED_CODE" = "12"
           EMBEDDED_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$EMBEDDED" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
           test "$EMBEDDED_CERT" = "$EXPECTED_NORM"
 
@@ -140,7 +143,7 @@ jobs:
         run: |
           mkdir -p release-output
           cp app/build/outputs/apk/release/app-release.apk release-output/Shizzi-Hotspot-0.4.3.9-Calls-Test.apk
-          cp conso/build/outputs/apk/release/conso-release.apk release-output/Shizzi-Plus-0.2.7-Media-Fullscreen-Test.apk
+          cp conso/build/outputs/apk/release/conso-release.apk release-output/Shizzi-Plus-0.2.8-Calls-Secure-Test.apk
           cd release-output
           sha256sum Shizzi-Hotspot-0.4.3.9-Calls-Test.apk Shizzi-Plus-0.2.7-Media-Fullscreen-Test.apk > SHA256SUMS.txt
 
