@@ -13,6 +13,9 @@ class MessagingCallWebUiTest {
         listOf(
             "RTCPeerConnection",
             "getUserMedia",
+            "window.isSecureContext",
+            "ShizziNativeBridge",
+            "nativeBridgeAvailable",
             "call/start",
             "call/answer",
             "call/ice",
