@@ -407,7 +407,7 @@ class MessagingHttpServer(
             e.preventDefault();var value=text.value.trim();if(!selected||!value)return;text.value="";
             await fetch("/chat/api/send",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({conversationId:selected,text:value})});refresh(true);
           };
-          search.oninput=renderList; document.getElementById("back").onclick=function(){app.classList.remove("chat-open")};
+          search.oninput=renderList; document.getElementById("back").onclick=function(){selected="";app.classList.remove("chat-open");refresh(false)};
           document.getElementById("newGroup").onclick=function(){
             if(!state)return;document.getElementById("groupName").value="";groupMembers.textContent="";
             state.users.filter(function(u){return u.number!==state.self.number}).forEach(function(u){
@@ -422,7 +422,7 @@ class MessagingHttpServer(
             var r=await fetch("/chat/api/group/create",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:name,members:members})});
             var j=await r.json();if(j.ok){selected=j.conversationId;groupDialog.close();app.classList.add("chat-open");refresh(true)}
           };
-          refresh(false);setInterval(function(){refresh(false)},2000);
+          refresh(false);setInterval(function(){refresh(Boolean(selected))},2000);
         })();
         </script>
         </body></html>
