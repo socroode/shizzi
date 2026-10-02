@@ -527,8 +527,8 @@ class MainActivity : Activity() {
                             SecureChatWebSupport.SECURE_BASE_URL,
                             page.html,
                             "text/html",
-                            "UTF-8",
                             null,
+                            SecureChatWebSupport.SECURE_BASE_URL,
                         )
                     }
                 }
