@@ -25,6 +25,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -62,8 +63,9 @@ private fun MediaScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val mediaDiagnostics by SessionService.mediaDiagnostics.collectAsState()
     var revision by remember { mutableIntStateOf(0) }
-    var pendingKind by remember { mutableStateOf<MediaKind?>(null) }
+    var pendingFolderId by remember { mutableStateOf<String?>(null) }
     var enabled by remember(revision) { mutableStateOf(MediaPrefs.isEnabled(context)) }
+    val folders = remember(revision) { MediaFolderStore.load(context) }
     var scanning by remember { mutableStateOf(false) }
     var scanMessage by remember { mutableStateOf<String?>(null) }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
@@ -105,18 +107,20 @@ private fun MediaScreen(onBack: () -> Unit) {
     val treeLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
     ) { uri ->
-        val kind = pendingKind
-        pendingKind = null
-        if (uri != null && kind != null) {
+        val folderId = pendingFolderId
+        pendingFolderId = null
+        if (uri != null && folderId != null) {
             runCatching {
                 context.contentResolver.takePersistableUriPermission(
                     uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION,
                 )
             }
-            MediaPrefs.setTreeUri(context, kind, uri)
+            MediaFolderStore.byId(context, folderId)?.let { folder ->
+                MediaFolderStore.upsert(context, folder.copy(treeUri = uri.toString()))
+            }
             revision++
-            startScan(kind)
+            startScan(null)
         }
     }
 
@@ -177,27 +181,60 @@ private fun MediaScreen(onBack: () -> Unit) {
 
             HorizontalDivider()
 
-            MediaKind.entries.forEach { kind ->
-                val uri = MediaPrefs.treeUri(context, kind)
-                FolderRow(
-                    kind = kind,
-                    uri = uri,
+            Text(
+                "Dossiers Media personnalisés (${folders.size}/${MediaFolderStore.MAX_FOLDERS})",
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                "Laisse « Comptes autorisés » vide pour rendre un dossier visible à tous les comptes. " +
+                    "Sinon saisis les numéros de compte séparés par des virgules.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            folders.forEach { folder ->
+                CustomFolderRow(
+                    folder = folder,
+                    onSave = { updated ->
+                        MediaFolderStore.upsert(context, updated)
+                        revision++
+                        startScan(null)
+                    },
                     onChoose = {
-                        pendingKind = kind
-                        treeLauncher.launch(uri)
+                        pendingFolderId = folder.id
+                        treeLauncher.launch(folder.uri())
                     },
                     onClear = {
-                        MediaPrefs.setTreeUri(context, kind, null)
-                        MediaIndex.remove(context.applicationContext, kind)
-                        scanMessage = "${kind.label} retiré de l’index Media."
+                        MediaFolderStore.upsert(context, folder.copy(treeUri = null))
+                        MediaIndex.removeFolder(context.applicationContext, folder.id)
+                        scanMessage = "${folder.name} retiré de l’index Media."
+                        revision++
+                        if (enabled) MediaServerService.restart(context)
+                    },
+                    onDelete = {
+                        MediaFolderStore.remove(context, folder.id)
+                        MediaIndex.removeFolder(context.applicationContext, folder.id)
+                        scanMessage = "${folder.name} supprimé de Shizzi Media."
                         revision++
                         if (enabled) MediaServerService.restart(context)
                     },
                 )
+                HorizontalDivider()
+            }
+
+            if (folders.size < MediaFolderStore.MAX_FOLDERS) {
+                Button(
+                    onClick = {
+                        val created = MediaFolderStore.create("Dossier ${folders.size + 1}")
+                        MediaFolderStore.upsert(context, created)
+                        revision++
+                    },
+                ) {
+                    Text("Ajouter un dossier")
+                }
             }
 
             Button(
-                enabled = !scanning && MediaPrefs.hasAnyLibrary(context),
+                enabled = !scanning && folders.any { it.uri() != null },
                 onClick = { startScan(null) },
             ) {
                 Text(if (scanning) "Scan en cours…" else "Scanner la médiathèque")
@@ -252,27 +289,90 @@ private fun MediaScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun FolderRow(
-    kind: MediaKind,
-    uri: Uri?,
+private fun CustomFolderRow(
+    folder: MediaFolderConfig,
+    onSave: (MediaFolderConfig) -> Unit,
     onChoose: () -> Unit,
     onClear: () -> Unit,
+    onDelete: () -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(kind.label, fontWeight = FontWeight.SemiBold)
+    var name by remember(folder.id, folder.name) { mutableStateOf(folder.name) }
+    var accounts by remember(folder.id, folder.allowedAccounts) {
+        mutableStateOf(folder.allowedAccounts.joinToString(", "))
+    }
+    var kind by remember(folder.id, folder.kind) { mutableStateOf(folder.kind) }
+    var enabled by remember(folder.id, folder.enabled) { mutableStateOf(folder.enabled) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Nom du dossier") },
+            singleLine = true,
+        )
+        OutlinedTextField(
+            value = accounts,
+            onValueChange = { accounts = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Comptes autorisés (vide = tous)") },
+            singleLine = true,
+        )
         Text(
-            uri?.lastPathSegment?.substringAfterLast(':') ?: "Aucun dossier choisi",
+            folder.uri()?.lastPathSegment?.substringAfterLast(':') ?: "Aucun dossier Android choisi",
             style = MaterialTheme.typography.bodySmall,
         )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("Actif")
+            Switch(
+                checked = enabled,
+                onCheckedChange = { enabled = it },
+            )
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(
+                onClick = {
+                    kind = when (kind) {
+                        MediaKind.FILMS -> MediaKind.SERIES
+                        MediaKind.SERIES -> MediaKind.MUSIC
+                        MediaKind.MUSIC -> MediaKind.FILMS
+                    }
+                },
+            ) {
+                Text("Type : ${kind.label}")
+            }
             Button(onClick = onChoose) {
-                Text(if (uri == null) "Choisir le dossier" else "Changer")
+                Text(if (folder.uri() == null) "Choisir" else "Changer")
             }
-            if (uri != null) {
-                TextButton(onClick = onClear) {
-                    Text("Retirer")
-                }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = {
+                    val allowed = accounts
+                        .split(',', ';', '\n')
+                        .map(::normalizeMediaAccount)
+                        .filter { it.isNotBlank() }
+                        .toSet()
+                    onSave(
+                        folder.copy(
+                            name = name.trim().ifBlank { "Dossier Media" },
+                            kind = kind,
+                            enabled = enabled,
+                            allowedAccounts = allowed,
+                        ),
+                    )
+                },
+            ) {
+                Text("Enregistrer")
             }
+            if (folder.uri() != null) {
+                TextButton(onClick = onClear) { Text("Retirer source") }
+            }
+            TextButton(onClick = onDelete) { Text("Supprimer") }
         }
     }
 }
