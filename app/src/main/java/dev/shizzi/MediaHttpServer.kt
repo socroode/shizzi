@@ -467,6 +467,6 @@ class MediaHttpServer(private val context: Context) {
 
     companion object {
         private const val TAG = "ShizziMedia"
-        internal const val MAX_CLIENTS = 12
+        internal const val MAX_CLIENTS = 24
     }
 }
