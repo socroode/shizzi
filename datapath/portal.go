@@ -1191,12 +1191,12 @@ func (m *TrafficManager) writeChatLoginRequired(conn net.Conn, method string) {
 <style>:root{color-scheme:dark;font-family:system-ui,sans-serif}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#07111f;color:#f8fafc}main{width:min(100%,460px);padding:24px;border:1px solid #ffffff18;border-radius:24px;background:#0f172a}a{display:block;margin-top:18px;padding:14px;border-radius:14px;text-align:center;text-decoration:none;background:#22d3ee;color:#06202a;font-weight:900}.note{color:#94a3b8;line-height:1.5}</style>
 </head><body><main><h1>Compte Shizzi requis</h1><p class="note">Ouvre d’abord ton compte Shizzi sur cet appareil pour utiliser la messagerie locale.</p><a href="/">Ouvrir ma connexion compte</a></main></body></html>`)
 	header := fmt.Sprintf(
-		"HTTP/1.1 200 OK\\r\\n"+
-			"Content-Type: text/html; charset=utf-8\\r\\n"+
-			"Content-Length: %d\\r\\n"+
-			"Cache-Control: no-store\\r\\n"+
-			"X-Shizzi-Chat-Auth: required\\r\\n"+
-			"Connection: close\\r\\n\\r\\n",
+		"HTTP/1.1 200 OK\r\n"+
+			"Content-Type: text/html; charset=utf-8\r\n"+
+			"Content-Length: %d\r\n"+
+			"Cache-Control: no-store\r\n"+
+			"X-Shizzi-Chat-Auth: required\r\n"+
+			"Connection: close\r\n\r\n",
 		len(body),
 	)
 	_, _ = conn.Write([]byte(header))
@@ -1244,7 +1244,7 @@ func (m *TrafficManager) serveChatProxy(
 
 	if _, err := fmt.Fprintf(
 		local,
-		"%s %s HTTP/1.1\\r\\nHost: localhost\\r\\nX-Shizzi-Chat-Account: %s\\r\\n",
+		"%s %s HTTP/1.1\r\nHost: localhost\r\nX-Shizzi-Chat-Account: %s\r\n",
 		request.Method,
 		target,
 		accountNumber,
@@ -1252,16 +1252,16 @@ func (m *TrafficManager) serveChatProxy(
 		return
 	}
 	if value := request.Header.Get("Content-Type"); value != "" {
-		if _, err := fmt.Fprintf(local, "Content-Type: %s\\r\\n", value); err != nil {
+		if _, err := fmt.Fprintf(local, "Content-Type: %s\r\n", value); err != nil {
 			return
 		}
 	}
 	if request.Method == http.MethodPost {
-		if _, err := fmt.Fprintf(local, "Content-Length: %d\\r\\n", len(body)); err != nil {
+		if _, err := fmt.Fprintf(local, "Content-Length: %d\r\n", len(body)); err != nil {
 			return
 		}
 	}
-	if _, err := io.WriteString(local, "Connection: close\\r\\n\\r\\n"); err != nil {
+	if _, err := io.WriteString(local, "Connection: close\r\n\r\n"); err != nil {
 		return
 	}
 	if len(body) > 0 {
