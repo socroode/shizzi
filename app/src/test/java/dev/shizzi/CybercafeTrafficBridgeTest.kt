@@ -42,4 +42,55 @@ class CybercafeTrafficBridgeTest {
         assertEquals("proxied", event.result)
         assertFalse(event.error.isNotBlank())
     }
+
+    @Test
+    fun adminStateContainsMediaFoldersAndAccessRules() {
+        val state = CybercafeState()
+        val folders = listOf(
+            MediaFolderConfig(
+                id = "films-family",
+                name = "Films famille",
+                kind = MediaKind.FILMS,
+                treeUri = "content://test/tree/primary%3AMovies",
+                allowedAccounts = setOf("1001", "1003"),
+            ),
+            MediaFolderConfig(
+                id = "music",
+                name = "Musique",
+                kind = MediaKind.MUSIC,
+                treeUri = null,
+                enabled = false,
+            ),
+        )
+
+        val root = org.json.JSONObject(
+            state.toPortalConfigJson(
+                mediaEnabled = true,
+                mediaFolders = folders,
+                mediaSummary = MediaIndexSummary(
+                    films = 12,
+                    series = 3,
+                    music = 5,
+                    total = 20,
+                    updatedAt = 1234L,
+                ),
+            ),
+        )
+
+        val media = root
+            .getJSONObject("adminState")
+            .getJSONObject("media")
+        assertTrue(media.getBoolean("enabled"))
+        assertEquals(10, media.getInt("maxFolders"))
+        assertEquals(20, media.getJSONObject("summary").getInt("total"))
+
+        val serialized = media.getJSONArray("folders")
+        assertEquals(2, serialized.length())
+        val first = serialized.getJSONObject(0)
+        assertEquals("films-family", first.getString("id"))
+        assertEquals("Films famille", first.getString("name"))
+        assertEquals("films", first.getString("kind"))
+        assertEquals(2, first.getJSONArray("allowedAccounts").length())
+    }
+
 }
