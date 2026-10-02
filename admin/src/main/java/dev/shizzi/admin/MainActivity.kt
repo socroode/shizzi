@@ -186,7 +186,10 @@ class MainActivity : Activity() {
             state.optJSONArray("vouchers") ?: JSONArray(),
         )
         renderDevices(traffic.optJSONArray("portalAuthorizations") ?: JSONArray())
-        renderMediaStatus()
+        renderMediaManagement(
+            state.optJSONObject("media") ?: JSONObject(),
+            state.optJSONArray("accounts") ?: JSONArray(),
+        )
         renderPortal(state.optJSONObject("portal") ?: JSONObject())
         renderAdminCredentials(state.optJSONObject("remoteAdmin") ?: JSONObject())
         renderDiagnostics(traffic)
