@@ -1122,6 +1122,9 @@ func (m *TrafficManager) serveMediaProxy(
 			}
 		}
 	}
+	if _, err := fmt.Fprintf(local, "X-Shizzi-Media-Account: %s\r\n", accountNumber); err != nil {
+		return
+	}
 	if _, err := io.WriteString(local, "Connection: close\r\n\r\n"); err != nil {
 		return
 	}
