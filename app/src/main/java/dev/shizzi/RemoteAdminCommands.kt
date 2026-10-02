@@ -1,5 +1,6 @@
 package dev.shizzi
 
+import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -7,6 +8,7 @@ fun processRemoteAdminCommand(
     command: LiveAdminCommand,
     store: CybercafeStore,
     nowMillis: Long,
+    context: Context,
 ): AdminCommandResult {
     val params = runCatching { JSONObject(command.paramsJson) }.getOrElse { JSONObject() }
 
