@@ -122,6 +122,90 @@ fun processRemoteAdminCommand(
                 ),
             )
 
+
+            "media.enable" -> {
+                val enabled = params.optBoolean("enabled", true)
+                MediaPrefs.setEnabled(context, enabled)
+                if (enabled) MediaServerService.start(context) else MediaServerService.stop(context)
+                AdminCommandResult(
+                    command.id,
+                    true,
+                    if (enabled) "Shizzi Media activé." else "Shizzi Media désactivé.",
+                )
+            }
+
+            "media.folder.create" -> {
+                val current = MediaFolderStore.load(context)
+                if (current.size >= MediaFolderStore.MAX_FOLDERS) {
+                    AdminCommandResult(command.id, false, "Maximum de dossiers Media atteint.")
+                } else {
+                    val kind = MediaKind.fromKey(params.optString("kind")) ?: MediaKind.FILMS
+                    val created = MediaFolderStore.create(
+                        params.optString("name").ifBlank { "Dossier Media" },
+                        kind,
+                    )
+                    MediaFolderStore.upsert(context, created)
+                    MediaServerService.restart(context)
+                    AdminCommandResult(
+                        command.id,
+                        true,
+                        "Dossier Media créé.",
+                        JSONObject().put("id", created.id).toString(),
+                    )
+                }
+            }
+
+            "media.folder.update" -> {
+                val id = params.optString("id")
+                val current = MediaFolderStore.byId(context, id)
+                if (current == null) {
+                    AdminCommandResult(command.id, false, "Dossier Media introuvable.")
+                } else {
+                    val accounts = buildSet {
+                        val array = params.optJSONArray("allowedAccounts") ?: JSONArray()
+                        for (index in 0 until array.length()) {
+                            normalizeMediaAccount(array.optString(index))
+                                .takeIf { it.isNotBlank() }
+                                ?.let(::add)
+                        }
+                    }
+                    val kind = MediaKind.fromKey(params.optString("kind")) ?: current.kind
+                    val updated = current.copy(
+                        name = params.optString("name", current.name),
+                        kind = kind,
+                        enabled = params.optBoolean("enabled", current.enabled),
+                        allowedAccounts = accounts,
+                    )
+                    val needsRescan = updated.kind != current.kind || updated.name != current.name
+                    MediaFolderStore.upsert(context, updated)
+                    MediaServerService.restart(context)
+                    if (needsRescan && updated.uri() != null) {
+                        kotlin.concurrent.thread(name = "shizzi-media-admin-rescan") {
+                            runCatching {
+                                MediaIndex.rebuild(context.applicationContext)
+                                if (MediaPrefs.isEnabled(context)) {
+                                    MediaServerService.restart(context.applicationContext)
+                                }
+                            }
+                        }
+                    }
+                    AdminCommandResult(command.id, true, "Dossier Media modifié.")
+                }
+            }
+
+            "media.folder.delete" -> {
+                val id = params.optString("id")
+                val current = MediaFolderStore.byId(context, id)
+                if (current == null) {
+                    AdminCommandResult(command.id, false, "Dossier Media introuvable.")
+                } else {
+                    MediaFolderStore.remove(context, id)
+                    MediaIndex.removeFolder(context.applicationContext, id)
+                    MediaServerService.restart(context)
+                    AdminCommandResult(command.id, true, "Dossier Media supprimé.")
+                }
+            }
+
             else -> AdminCommandResult(
                 command.id,
                 false,
