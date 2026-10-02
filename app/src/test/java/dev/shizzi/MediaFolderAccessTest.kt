@@ -91,6 +91,74 @@ class MediaFolderAccessTest {
     }
 
     @Test
+    fun crossProcessSnapshotKeepsDeniedAccountsOut() {
+        val source = listOf(
+            MediaFolderConfig(
+                id = "public",
+                name = "Films",
+                kind = MediaKind.FILMS,
+                treeUri = "content://virtual/public",
+            ),
+            MediaFolderConfig(
+                id = "private",
+                name = "Privé",
+                kind = MediaKind.FILMS,
+                treeUri = "content://virtual/private",
+                allowedAccounts = setOf("1001", "1003"),
+            ),
+        )
+
+        // Simulates main Android process -> Intent payload -> :media process.
+        val transported = MediaFolderStore.decodeSnapshot(
+            MediaFolderStore.encodeSnapshot(source),
+        )
+
+        assertTrue(MediaFolderStore.canAccessSnapshot(transported, "private", "1001"))
+        assertTrue(MediaFolderStore.canAccessSnapshot(transported, "private", "1003"))
+        assertFalse(MediaFolderStore.canAccessSnapshot(transported, "private", "1002"))
+        assertFalse(MediaFolderStore.canAccessSnapshot(transported, "private", "1004"))
+        assertFalse(MediaFolderStore.canAccessSnapshot(transported, "private", null))
+    }
+
+    @Test
+    fun crossProcessSnapshotIsolatesOneToEightRealAccountNumbers() {
+        val source = (1..10).map { index ->
+            MediaFolderConfig(
+                id = "folder-$index",
+                name = "Dossier $index",
+                kind = MediaKind.FILMS,
+                treeUri = "content://virtual/folder-$index",
+                allowedAccounts = when (index) {
+                    1 -> emptySet()
+                    else -> setOf("10%02d".format(((index - 2) % 8) + 1))
+                },
+            )
+        }
+        val transported = MediaFolderStore.decodeSnapshot(
+            MediaFolderStore.encodeSnapshot(source),
+        )
+
+        for (userCount in 1..8) {
+            for (user in 1..userCount) {
+                val number = "10%02d".format(user)
+                transported.forEach { folder ->
+                    val expected = folder.allowedAccounts.isEmpty() ||
+                        number in folder.allowedAccounts
+                    assertEquals(
+                        "account $number / ${folder.id} / clients=$userCount",
+                        expected,
+                        MediaFolderStore.canAccessSnapshot(
+                            transported,
+                            folder.id,
+                            number,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
     fun virtualRouterAndOneToEightAndroidClientsStayIsolated() {
         val folders = (1..10).map { index ->
             MediaFolderConfig(
