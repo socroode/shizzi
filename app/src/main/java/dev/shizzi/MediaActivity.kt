@@ -18,10 +18,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -62,6 +65,10 @@ class MediaActivity : ComponentActivity() {
 private fun MediaScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val mediaDiagnostics by SessionService.mediaDiagnostics.collectAsState()
+    val cybercafeState by App.instance.cybercafeStore.state.collectAsState()
+    val accountOptions = remember(cybercafeState.accounts) {
+        mediaAccountOptions(cybercafeState)
+    }
     var revision by remember { mutableIntStateOf(0) }
     var pendingFolderId by remember { mutableStateOf<String?>(null) }
     var enabled by remember(revision) { mutableStateOf(MediaPrefs.isEnabled(context)) }
@@ -186,18 +193,26 @@ private fun MediaScreen(onBack: () -> Unit) {
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                "Laisse « Comptes autorisés » vide pour rendre un dossier visible à tous les comptes. " +
-                    "Sinon saisis les numéros de compte séparés par des virgules.",
+                "Chaque dossier peut être visible par tous les comptes ou seulement par les comptes que tu coches.",
                 style = MaterialTheme.typography.bodySmall,
             )
 
             folders.forEach { folder ->
                 CustomFolderRow(
                     folder = folder,
+                    accountOptions = accountOptions,
                     onSave = { updated ->
                         MediaFolderStore.upsert(context, updated)
                         revision++
                         startScan(null)
+                    },
+                    onAccessChange = { allowedAccounts ->
+                        MediaFolderStore.upsert(
+                            context,
+                            folder.copy(allowedAccounts = allowedAccounts),
+                        )
+                        revision++
+                        if (enabled) MediaServerService.restart(context)
                     },
                     onChoose = {
                         pendingFolderId = folder.id
@@ -291,17 +306,17 @@ private fun MediaScreen(onBack: () -> Unit) {
 @Composable
 private fun CustomFolderRow(
     folder: MediaFolderConfig,
+    accountOptions: List<MediaAccountOption>,
     onSave: (MediaFolderConfig) -> Unit,
+    onAccessChange: (Set<String>) -> Unit,
     onChoose: () -> Unit,
     onClear: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var name by remember(folder.id, folder.name) { mutableStateOf(folder.name) }
-    var accounts by remember(folder.id, folder.allowedAccounts) {
-        mutableStateOf(folder.allowedAccounts.joinToString(", "))
-    }
     var kind by remember(folder.id, folder.kind) { mutableStateOf(folder.kind) }
     var enabled by remember(folder.id, folder.enabled) { mutableStateOf(folder.enabled) }
+    var showAccessDialog by remember(folder.id) { mutableStateOf(false) }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
@@ -311,13 +326,33 @@ private fun CustomFolderRow(
             label = { Text("Nom du dossier") },
             singleLine = true,
         )
-        OutlinedTextField(
-            value = accounts,
-            onValueChange = { accounts = it },
+
+        val accessLabel = when {
+            folder.allowedAccounts.isEmpty() -> "Tous les comptes"
+            folder.allowedAccounts.size == 1 -> "1 compte"
+            else -> "${folder.allowedAccounts.size} comptes"
+        }
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Comptes autorisés (vide = tous)") },
-            singleLine = true,
-        )
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Accès", fontWeight = FontWeight.SemiBold)
+                Text(accessLabel, style = MaterialTheme.typography.bodySmall)
+            }
+            Button(onClick = { showAccessDialog = true }) {
+                Text("Modifier l’accès")
+            }
+        }
+
+        if (accountOptions.isEmpty()) {
+            Text(
+                "Aucun compte n’est encore créé dans Accounts. Le dossier reste accessible à tous les comptes.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
         Text(
             folder.uri()?.lastPathSegment?.substringAfterLast(':') ?: "Aucun dossier Android choisi",
             style = MaterialTheme.typography.bodySmall,
@@ -352,17 +387,11 @@ private fun CustomFolderRow(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 onClick = {
-                    val allowed = accounts
-                        .split(',', ';', '\n')
-                        .map(::normalizeMediaAccount)
-                        .filter { it.isNotBlank() }
-                        .toSet()
                     onSave(
                         folder.copy(
                             name = name.trim().ifBlank { "Dossier Media" },
                             kind = kind,
                             enabled = enabled,
-                            allowedAccounts = allowed,
                         ),
                     )
                 },
@@ -375,6 +404,129 @@ private fun CustomFolderRow(
             TextButton(onClick = onDelete) { Text("Supprimer") }
         }
     }
+
+    if (showAccessDialog) {
+        MediaAccessDialog(
+            folderName = folder.name,
+            accounts = accountOptions,
+            initiallyAllowed = folder.allowedAccounts,
+            onDismiss = { showAccessDialog = false },
+            onApply = { allowed ->
+                onAccessChange(allowed)
+                showAccessDialog = false
+            },
+        )
+    }
+}
+
+@Composable
+private fun MediaAccessDialog(
+    folderName: String,
+    accounts: List<MediaAccountOption>,
+    initiallyAllowed: Set<String>,
+    onDismiss: () -> Unit,
+    onApply: (Set<String>) -> Unit,
+) {
+    var allAccounts by remember(folderName, initiallyAllowed) {
+        mutableStateOf(initiallyAllowed.isEmpty())
+    }
+    var selected by remember(folderName, initiallyAllowed, accounts) {
+        mutableStateOf(
+            initiallyAllowed
+                .map(::normalizeMediaAccount)
+                .filter { it.isNotBlank() }
+                .toSet(),
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Accès · $folderName") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 440.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = allAccounts,
+                        onCheckedChange = { checked ->
+                            allAccounts = checked
+                            if (checked) selected = emptySet()
+                        },
+                    )
+                    Column {
+                        Text("Tous les comptes", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Les comptes actuels et futurs peuvent voir ce dossier.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+
+                HorizontalDivider()
+
+                if (accounts.isEmpty()) {
+                    Text(
+                        "Aucun compte disponible. Crée d’abord un compte dans Accounts.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                } else {
+                    accounts.forEach { account ->
+                        val checked = account.number in selected
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = checked,
+                                enabled = !allAccounts,
+                                onCheckedChange = { value ->
+                                    if (!allAccounts) {
+                                        selected = if (value) {
+                                            selected + account.number
+                                        } else {
+                                            selected - account.number
+                                        }
+                                    }
+                                },
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(account.label)
+                                if (!account.enabled) {
+                                    Text(
+                                        "Compte suspendu",
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = allAccounts || selected.isNotEmpty(),
+                onClick = {
+                    onApply(if (allAccounts) emptySet() else selected)
+                },
+            ) {
+                Text("Appliquer")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Annuler")
+            }
+        },
+    )
 }
 
 @Composable
