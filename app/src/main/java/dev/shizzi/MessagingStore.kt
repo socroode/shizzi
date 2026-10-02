@@ -142,10 +142,11 @@ class MessagingStore(private val file: File) {
                 .filter { it.conversationId == conversationId }
                 .maxOfOrNull(ChatMessage::id)
                 ?: 0L
-            if (lastId > 0L) {
+            val markerKey = markerKey(conversationId, account)
+            val previous = state.readMarkers[markerKey] ?: 0L
+            if (lastId > previous) {
                 state = state.copy(
-                    readMarkers = state.readMarkers +
-                        (markerKey(conversationId, account) to lastId),
+                    readMarkers = state.readMarkers + (markerKey to lastId),
                 )
                 persist()
             }
@@ -247,7 +248,12 @@ class MessagingStore(private val file: File) {
         return when {
             conversationId.startsWith("dm:") -> {
                 val members = parseDirectMembers(conversationId) ?: return false
-                account in members &&
+                val canonical = directConversationId(
+                    members.elementAt(0),
+                    members.elementAt(1),
+                )
+                conversationId == canonical &&
+                    account in members &&
                     members.all { accounts[it]?.enabled == true }
             }
 
