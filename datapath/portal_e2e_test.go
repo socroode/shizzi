@@ -158,6 +158,7 @@ func TestAuthenticatedMediaRequestReachesLoopbackBackend(t *testing.T) {
 	t.Cleanup(func() { _ = backend.Close() })
 
 	backendBody := "<html><body>Shizzi Media E2E</body></html>"
+	backendHeaders := make(chan string, 1)
 	backendDone := make(chan struct{})
 	go func() {
 		defer close(backendDone)
@@ -168,15 +169,18 @@ func TestAuthenticatedMediaRequestReachesLoopbackBackend(t *testing.T) {
 		defer conn.Close()
 
 		reader := bufio.NewReader(conn)
+		var received strings.Builder
 		for {
 			line, readErr := reader.ReadString('\n')
 			if readErr != nil {
 				return
 			}
+			received.WriteString(line)
 			if line == "\r\n" {
 				break
 			}
 		}
+		backendHeaders <- received.String()
 
 		_, _ = fmt.Fprintf(
 			conn,
@@ -217,6 +221,10 @@ func TestAuthenticatedMediaRequestReachesLoopbackBackend(t *testing.T) {
 	}
 	<-responseDone
 	<-backendDone
+	headersSeen := <-backendHeaders
+	if !strings.Contains(headersSeen, "X-Shizzi-Media-Account: 1001") {
+		t.Fatalf("Media account identity was not forwarded to backend: %q", headersSeen)
+	}
 
 	if !strings.Contains(string(response), "200 OK") {
 		t.Fatalf("Media response was not 200: %q", string(response))
