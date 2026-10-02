@@ -124,7 +124,20 @@ internal object MessagingWebUi {
             return {number:number,name:user&&user.name?user.name:number,online:Boolean(user&&user.online)};
           }
 
+          function nativeBridgeAvailable(){
+            return Boolean(window.ShizziNativeBridge&&typeof window.ShizziNativeBridge.request==="function");
+          }
+
           async function api(path,method,payload){
+            if(nativeBridgeAvailable()){
+              try{
+                var nativeBody=payload===undefined?"":JSON.stringify(payload);
+                var nativeRaw=window.ShizziNativeBridge.request(path,method||"GET",nativeBody);
+                return JSON.parse(nativeRaw||'{"ok":false,"message":"Réponse locale vide."}');
+              }catch(_){
+                return {ok:false,message:"Pont local Shizzi+ indisponible."};
+              }
+            }
             var options={method:method||"GET",cache:"no-store"};
             if(payload!==undefined){
               options.headers={"Content-Type":"application/json"};
@@ -182,8 +195,8 @@ internal object MessagingWebUi {
 
           async function refresh(markRead){
             try{
-              var url="/chat/api/snapshot"+(selected?"?conversation="+encodeURIComponent(selected)+"&markRead="+(markRead?"1":"0"):"");
-              var r=await fetch(url,{cache:"no-store"});var j=await r.json();if(!j.ok)return;state=j;
+              var path="snapshot"+(selected?"?conversation="+encodeURIComponent(selected)+"&markRead="+(markRead?"1":"0"):"");
+              var j=await api(path,"GET");if(!j.ok)return;state=j;
               if(selected&&!state.conversations.some(function(c){return c.id===selected}))selected="";
               render();
             }catch(_){}
@@ -219,8 +232,11 @@ internal object MessagingWebUi {
           }
 
           async function acquireLocal(kind){
+            if(!window.isSecureContext){
+              throw new Error("Le mode d'appel sécurisé Shizzi+ n'est pas actif.");
+            }
             if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
-              throw new Error("Les appels nécessitent Shizzi+ avec accès au micro et à la caméra.");
+              throw new Error("Shizzi+ n'a pas accès au micro ou à la caméra.");
             }
             localStream=await navigator.mediaDevices.getUserMedia(mediaConstraints(kind));
             if(kind==="video"){
@@ -511,7 +527,10 @@ internal object MessagingWebUi {
 
           window.addEventListener("beforeunload",function(){
             var id=currentCall&&currentCall.id?currentCall.id:(incomingCall&&incomingCall.callId?incomingCall.callId:"");
-            if(id&&navigator.sendBeacon){
+            if(!id)return;
+            if(nativeBridgeAvailable()){
+              try{window.ShizziNativeBridge.request("call/end","POST",JSON.stringify({callId:id}))}catch(_){}
+            }else if(navigator.sendBeacon){
               navigator.sendBeacon("/chat/api/call/end",JSON.stringify({callId:id}));
             }
           });
