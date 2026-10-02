@@ -145,7 +145,7 @@ fun processRemoteAdminCommand(
                         kind,
                     )
                     MediaFolderStore.upsert(context, created)
-                    MediaServerService.restart(context)
+                    if (MediaPrefs.isEnabled(context)) MediaServerService.restart(context)
                     AdminCommandResult(
                         command.id,
                         true,
@@ -178,7 +178,7 @@ fun processRemoteAdminCommand(
                     )
                     val needsRescan = updated.kind != current.kind || updated.name != current.name
                     MediaFolderStore.upsert(context, updated)
-                    MediaServerService.restart(context)
+                    if (MediaPrefs.isEnabled(context)) MediaServerService.restart(context)
                     if (needsRescan && updated.uri() != null) {
                         kotlin.concurrent.thread(name = "shizzi-media-admin-rescan") {
                             runCatching {
@@ -201,7 +201,7 @@ fun processRemoteAdminCommand(
                 } else {
                     MediaFolderStore.remove(context, id)
                     MediaIndex.removeFolder(context.applicationContext, id)
-                    MediaServerService.restart(context)
+                    if (MediaPrefs.isEnabled(context)) MediaServerService.restart(context)
                     AdminCommandResult(command.id, true, "Dossier Media supprimé.")
                 }
             }
@@ -216,7 +216,7 @@ fun processRemoteAdminCommand(
                 } else if (rawUri.isBlank()) {
                     MediaFolderStore.upsert(context, current.copy(treeUri = null))
                     MediaIndex.removeFolder(context.applicationContext, id)
-                    MediaServerService.restart(context)
+                    if (MediaPrefs.isEnabled(context)) MediaServerService.restart(context)
                     AdminCommandResult(command.id, true, "Source Media retirée.")
                 } else {
                     val uri = android.net.Uri.parse(rawUri)
@@ -229,7 +229,7 @@ fun processRemoteAdminCommand(
                     } else {
                         MediaFolderStore.upsert(context, current.copy(treeUri = rawUri))
                         MediaIndex.removeFolder(context.applicationContext, id)
-                        MediaServerService.restart(context)
+                        if (MediaPrefs.isEnabled(context)) MediaServerService.restart(context)
                         kotlin.concurrent.thread(name = "shizzi-media-admin-source-scan") {
                             runCatching {
                                 MediaIndex.rebuild(context.applicationContext)
