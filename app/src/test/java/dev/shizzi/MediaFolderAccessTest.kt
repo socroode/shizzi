@@ -10,8 +10,9 @@ import org.junit.Test
 class MediaFolderAccessTest {
 
     @Test
-    fun supportsTenCustomFolders() {
+    fun supportsTenCustomFoldersAndEightConcurrentClients() {
         assertEquals(10, MediaFolderStore.MAX_FOLDERS)
+        assertTrue(MediaHttpServer.MAX_CLIENTS >= 8)
     }
 
     @Test
