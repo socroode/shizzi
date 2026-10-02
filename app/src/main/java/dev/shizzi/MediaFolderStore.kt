@@ -148,6 +148,12 @@ object MediaFolderStore {
         return folder.copy(id = id, name = name, allowedAccounts = accounts)
     }
 
+    internal fun encodeSnapshot(folders: List<MediaFolderConfig>): String =
+        encode(folders)
+
+    internal fun decodeSnapshot(raw: String): List<MediaFolderConfig> =
+        decode(raw).take(MAX_FOLDERS)
+
     private fun encode(folders: List<MediaFolderConfig>): String =
         JSONArray().apply {
             folders.forEach { folder ->
