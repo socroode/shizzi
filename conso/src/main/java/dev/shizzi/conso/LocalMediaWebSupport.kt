@@ -1,6 +1,9 @@
 package dev.shizzi.conso
 
 internal object LocalMediaWebSupport {
+    fun shouldKeepNetworkAvailable(hasWifiTransport: Boolean): Boolean =
+        hasWifiTransport
+
     val fullscreenScript: String = """
         (function(){
           if(window.__shizziFullscreenInstalled)return;
