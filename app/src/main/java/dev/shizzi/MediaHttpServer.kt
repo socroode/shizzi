@@ -145,44 +145,77 @@ class MediaHttpServer(private val context: Context) {
 
             val uri = target.substringBefore('?')
             val query = parseQuery(target.substringAfter('?', ""))
+            val accountNumber = normalizeMediaAccount(headers["x-shizzi-media-account"])
             when (uri) {
-                "/", "/index.html" -> serveHome(output, method == "HEAD")
-                "/library" -> serveLibrary(output, query["kind"], method == "HEAD")
-                "/play" -> servePlayer(output, query["id"], method == "HEAD")
-                "/stream" -> serveStream(output, query["id"], headers["range"], method == "HEAD")
+                "/", "/index.html" -> serveHome(output, accountNumber, method == "HEAD")
+                "/library" -> serveLibrary(
+                    output,
+                    query["folder"],
+                    query["kind"],
+                    accountNumber,
+                    method == "HEAD",
+                )
+                "/play" -> servePlayer(output, query["id"], accountNumber, method == "HEAD")
+                "/stream" -> serveStream(
+                    output,
+                    query["id"],
+                    headers["range"],
+                    accountNumber,
+                    method == "HEAD",
+                )
                 "/health" -> writeText(output, 200, "OK", "text/plain; charset=utf-8", "ok", method == "HEAD")
                 else -> writeText(output, 404, "Not Found", "text/plain; charset=utf-8", "Introuvable", method == "HEAD")
             }
         }
     }
 
-    private fun serveHome(output: BufferedOutputStream, headOnly: Boolean) {
-        // Keep the landing page instant. Large libraries are scanned only when
-        // the user opens a category, never just to render three counters.
-        val cards = MediaKind.entries.joinToString("") { kind ->
-            "<a class=\"card\" href=\"library?kind=${kind.key}\"><strong>${escape(kind.label)}</strong><span>Ouvrir</span></a>"
+    private fun serveHome(
+        output: BufferedOutputStream,
+        accountNumber: String,
+        headOnly: Boolean,
+    ) {
+        val folders = MediaFolderStore.visibleTo(context, accountNumber)
+            .filter { it.uri() != null }
+        val cards = if (folders.isEmpty()) {
+            "<p>Aucun dossier Media n'est autorisé pour ce compte.</p>"
+        } else {
+            folders.joinToString("") { folder ->
+                "<a class=\"card\" href=\"library?folder=${folder.id}\"><strong>${escape(folder.name)}</strong><span>Ouvrir</span></a>"
+            }
         }
         val html = page(
             "Shizzi Media",
             """
             <h1>Shizzi Media</h1>
-            <p class="lead">Films, séries et musique disponibles directement sur le réseau local.</p>
+            <p class="lead">Contenus disponibles pour le compte ${escape(accountNumber.ifBlank { "local" })}.</p>
             <div class="grid">$cards</div>
-            <p class="hint">La lecture locale ne passe pas par Internet et ne doit pas réduire le quota Data Shizzi.</p>
+            <p class="hint">Seuls les dossiers autorisés pour ce compte sont affichés.</p>
             """.trimIndent(),
         )
         writeText(output, 200, "OK", "text/html; charset=utf-8", html, headOnly)
     }
 
-    private fun serveLibrary(output: BufferedOutputStream, rawKind: String?, headOnly: Boolean) {
-        val kind = MediaKind.fromKey(rawKind)
-        if (kind == null) {
-            writeText(output, 400, "Bad Request", "text/plain; charset=utf-8", "Catégorie invalide", headOnly)
+    private fun serveLibrary(
+        output: BufferedOutputStream,
+        folderId: String?,
+        rawKind: String?,
+        accountNumber: String,
+        headOnly: Boolean,
+    ) {
+        val folder = folderId
+            ?.let { MediaFolderStore.byId(context, it) }
+            ?: MediaKind.fromKey(rawKind)?.let { kind ->
+                MediaFolderStore.visibleTo(context, accountNumber).firstOrNull { it.kind == kind }
+            }
+
+        if (folder == null || !folder.visibleTo(accountNumber)) {
+            writeText(output, 404, "Not Found", "text/plain; charset=utf-8", "Dossier introuvable", headOnly)
             return
         }
-        val entries = MediaIndex.entries(context, kind)
+
+        val entries = MediaIndex.entriesForFolder(context, folder.id)
         val rows = if (entries.isEmpty()) {
-            "<p>Aucun fichier trouvé. Choisis le dossier ${escape(kind.label)} dans Shizzi.</p>"
+            "<p>Aucun fichier trouvé dans ${escape(folder.name)}.</p>"
         } else {
             entries.joinToString("") { entry ->
                 val size = if (entry.size > 0) humanBytes(entry.size) else "taille inconnue"
@@ -195,19 +228,24 @@ class MediaHttpServer(private val context: Context) {
             }
         }
         val html = page(
-            kind.label,
+            folder.name,
             """
             <a class="back" href="./">← Shizzi Media</a>
-            <h1>${escape(kind.label)}</h1>
+            <h1>${escape(folder.name)}</h1>
             <div class="list">$rows</div>
             """.trimIndent(),
         )
         writeText(output, 200, "OK", "text/html; charset=utf-8", html, headOnly)
     }
 
-    private fun servePlayer(output: BufferedOutputStream, id: String?, headOnly: Boolean) {
+    private fun servePlayer(
+        output: BufferedOutputStream,
+        id: String?,
+        accountNumber: String,
+        headOnly: Boolean,
+    ) {
         val entry = MediaIndex.find(context, id)
-        if (entry == null) {
+        if (entry == null || !entryAllowed(entry, accountNumber)) {
             writeText(output, 404, "Not Found", "text/plain; charset=utf-8", "Fichier introuvable", headOnly)
             return
         }
@@ -219,7 +257,7 @@ class MediaHttpServer(private val context: Context) {
         val html = page(
             entry.name,
             """
-            <a class="back" href="library?kind=${entry.kind.key}">← ${escape(entry.kind.label)}</a>
+            <a class="back" href="library?folder=${entry.folderId}">← ${escape(entry.folderName.ifBlank { entry.kind.label })}</a>
             <h1>${escape(entry.name)}</h1>
             <p>${escape(entry.relativePath)}</p>
             <div class="player">$mediaTag</div>
@@ -233,10 +271,11 @@ class MediaHttpServer(private val context: Context) {
         output: BufferedOutputStream,
         id: String?,
         rangeHeader: String?,
+        accountNumber: String,
         headOnly: Boolean,
     ) {
         val entry = MediaIndex.find(context, id)
-        if (entry == null || entry.size <= 0L) {
+        if (entry == null || entry.size <= 0L || !entryAllowed(entry, accountNumber)) {
             writeText(output, 404, "Not Found", "text/plain; charset=utf-8", "Fichier introuvable", headOnly)
             return
         }
@@ -300,6 +339,11 @@ class MediaHttpServer(private val context: Context) {
                 output.flush()
             }
         }
+    }
+
+    private fun entryAllowed(entry: MediaEntry, accountNumber: String): Boolean {
+        if (entry.folderId.isBlank()) return true
+        return MediaFolderStore.canAccess(context, entry.folderId, accountNumber)
     }
 
     private fun parseRange(header: String?, size: Long): Pair<Long, Long>? {
@@ -423,6 +467,6 @@ class MediaHttpServer(private val context: Context) {
 
     companion object {
         private const val TAG = "ShizziMedia"
-        private const val MAX_CLIENTS = 6
+        internal const val MAX_CLIENTS = 12
     }
 }
