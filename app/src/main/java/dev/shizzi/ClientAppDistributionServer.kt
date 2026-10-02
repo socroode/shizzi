@@ -104,9 +104,15 @@ class ClientAppDistributionServer(private val context: Context) {
             val method = parts.getOrNull(0).orEmpty()
             val path = parts.getOrNull(1).orEmpty().substringBefore('?')
 
+            val headers = linkedMapOf<String, String>()
             while (true) {
                 val line = readLine(input) ?: break
                 if (line.isEmpty()) break
+                val split = line.indexOf(':')
+                if (split > 0) {
+                    headers[line.substring(0, split).trim().lowercase()] =
+                        line.substring(split + 1).trim()
+                }
             }
 
             if ((method != "GET" && method != "HEAD") || path != "/shizzi-plus.apk") {
@@ -120,13 +126,45 @@ class ClientAppDistributionServer(private val context: Context) {
                 return
             }
 
+            val rangeHeader = headers["range"]
+            val requestedRange = parseClientDownloadRange(rangeHeader, metadata.sizeBytes)
+            if (!rangeHeader.isNullOrBlank() && requestedRange == null) {
+                val header = buildString {
+                    append("HTTP/1.1 416 Range Not Satisfiable\r\n")
+                    append("Content-Range: bytes */").append(metadata.sizeBytes).append("\r\n")
+                    append("Accept-Ranges: bytes\r\n")
+                    append("Content-Length: 0\r\n")
+                    append("Cache-Control: no-store\r\n")
+                    append("Connection: close\r\n\r\n")
+                }
+                output.write(header.toByteArray(Charsets.UTF_8))
+                output.flush()
+                return
+            }
+
+            val contentLength = requestedRange?.byteLength() ?: metadata.sizeBytes
             val header = buildString {
-                append("HTTP/1.1 200 OK\r\n")
+                if (requestedRange != null) {
+                    append("HTTP/1.1 206 Partial Content\r\n")
+                } else {
+                    append("HTTP/1.1 200 OK\r\n")
+                }
                 append("Content-Type: application/vnd.android.package-archive\r\n")
                 append("Content-Disposition: attachment; filename=\"")
                     .append(metadata.fileName)
                     .append("\"\r\n")
-                append("Content-Length: ").append(metadata.sizeBytes).append("\r\n")
+                append("Content-Length: ").append(contentLength).append("\r\n")
+                append("Accept-Ranges: bytes\r\n")
+                if (requestedRange != null) {
+                    append("Content-Range: bytes ")
+                        .append(requestedRange.first)
+                        .append("-")
+                        .append(requestedRange.last)
+                        .append("/")
+                        .append(metadata.sizeBytes)
+                        .append("\r\n")
+                }
+                append("X-Content-Type-Options: nosniff\r\n")
                 append("X-Shizzi-Version: ").append(metadata.version).append("\r\n")
                 append("X-Shizzi-SHA256: ").append(metadata.sha256).append("\r\n")
                 append("Cache-Control: no-store\r\n")
@@ -136,10 +174,51 @@ class ClientAppDistributionServer(private val context: Context) {
 
             if (method == "GET") {
                 context.assets.open(ASSET_PATH).use { asset ->
-                    asset.copyTo(output, DEFAULT_BUFFER_SIZE)
+                    if (requestedRange != null) {
+                        skipFully(asset, requestedRange.first)
+                        copyLimited(asset, output, requestedRange.byteLength())
+                    } else {
+                        asset.copyTo(output, DEFAULT_BUFFER_SIZE)
+                    }
                 }
             }
             output.flush()
+        }
+    }
+
+    private fun skipFully(
+        input: java.io.InputStream,
+        bytes: Long,
+    ) {
+        var remaining = bytes
+        while (remaining > 0L) {
+            val skipped = input.skip(remaining)
+            if (skipped > 0L) {
+                remaining -= skipped
+                continue
+            }
+            if (input.read() < 0) break
+            remaining--
+        }
+    }
+
+    private fun copyLimited(
+        input: java.io.InputStream,
+        output: BufferedOutputStream,
+        bytes: Long,
+    ) {
+        var remaining = bytes
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (remaining > 0L) {
+            val read = input.read(
+                buffer,
+                0,
+                minOf(buffer.size.toLong(), remaining).toInt(),
+            )
+            if (read < 0) break
+            if (read == 0) continue
+            output.write(buffer, 0, read)
+            remaining -= read.toLong()
         }
     }
 
