@@ -177,8 +177,8 @@ class MediaHttpServer(
         accountNumber: String,
         headOnly: Boolean,
     ) {
-        val folders = folderSnapshot
-            .filter { it.visibleTo(accountNumber) && it.uri() != null }
+        val folders = MediaFolderStore.visibleFromSnapshot(folderSnapshot, accountNumber)
+            .filter { it.uri() != null }
         val cards = if (folders.isEmpty()) {
             "<p>Aucun dossier Media n'est autorisé pour ce compte.</p>"
         } else {
@@ -208,10 +208,11 @@ class MediaHttpServer(
         val folder = folderId
             ?.let { wanted -> folderSnapshot.firstOrNull { it.id == wanted } }
             ?: MediaKind.fromKey(rawKind)?.let { kind ->
-                folderSnapshot.firstOrNull { it.kind == kind && it.visibleTo(accountNumber) }
+                MediaFolderStore.visibleFromSnapshot(folderSnapshot, accountNumber)
+                    .firstOrNull { it.kind == kind }
             }
 
-        if (folder == null || !folder.visibleTo(accountNumber)) {
+        if (folder == null || !MediaFolderStore.canAccessSnapshot(folderSnapshot, folder.id, accountNumber)) {
             writeText(output, 404, "Not Found", "text/plain; charset=utf-8", "Dossier introuvable", headOnly)
             return
         }
@@ -346,8 +347,7 @@ class MediaHttpServer(
 
     private fun entryAllowed(entry: MediaEntry, accountNumber: String): Boolean {
         if (entry.folderId.isBlank()) return true
-        val folder = folderSnapshot.firstOrNull { it.id == entry.folderId } ?: return false
-        return folder.visibleTo(accountNumber)
+        return MediaFolderStore.canAccessSnapshot(folderSnapshot, entry.folderId, accountNumber)
     }
 
     private fun parseRange(header: String?, size: Long): Pair<Long, Long>? {
