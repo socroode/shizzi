@@ -46,6 +46,51 @@ class MediaFolderAccessTest {
     }
 
     @Test
+    fun mediaSelectorShowsExistingAccountsWithNamesAndNumbers() {
+        val accounts = (1..8).associate { index ->
+            val number = "10%02d".format(index)
+            number to PrepaidAccount(
+                number = number,
+                name = "Client $index",
+                pinSalt = "salt-$index",
+                pinHash = "hash-$index",
+                enabled = index != 4,
+            )
+        }
+        val options = mediaAccountOptions(
+            CybercafeState(accounts = accounts),
+        )
+
+        assertEquals(8, options.size)
+        assertEquals("Client 1 · 1001", options.first().label)
+        assertEquals("1004", options.first { !it.enabled }.number)
+        assertEquals(
+            accounts.keys.sorted(),
+            options.map { it.number }.sorted(),
+        )
+    }
+
+    @Test
+    fun selectorPermissionChoiceStillIsolatesEightClients() {
+        val selected = setOf("1002", "1005", "1008")
+        val folder = MediaFolderConfig(
+            id = "selector-private",
+            name = "Privé",
+            kind = MediaKind.FILMS,
+            treeUri = "content://test/private",
+            allowedAccounts = selected,
+        )
+
+        for (user in 1..8) {
+            val number = "10%02d".format(user)
+            assertEquals(
+                number in selected,
+                MediaFolderStore.canAccess(folder, number),
+            )
+        }
+    }
+
+    @Test
     fun virtualRouterAndOneToEightAndroidClientsStayIsolated() {
         val folders = (1..10).map { index ->
             MediaFolderConfig(
