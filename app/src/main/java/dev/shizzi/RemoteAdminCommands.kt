@@ -161,13 +161,17 @@ fun processRemoteAdminCommand(
                 if (current == null) {
                     AdminCommandResult(command.id, false, "Dossier Media introuvable.")
                 } else {
-                    val accounts = buildSet {
-                        val array = params.optJSONArray("allowedAccounts") ?: JSONArray()
-                        for (index in 0 until array.length()) {
-                            normalizeMediaAccount(array.optString(index))
-                                .takeIf { it.isNotBlank() }
-                                ?.let(::add)
+                    val accounts = if (params.has("allowedAccounts")) {
+                        buildSet {
+                            val array = params.optJSONArray("allowedAccounts") ?: JSONArray()
+                            for (index in 0 until array.length()) {
+                                normalizeMediaAccount(array.optString(index))
+                                    .takeIf { it.isNotBlank() }
+                                    ?.let(::add)
+                            }
                         }
+                    } else {
+                        current.allowedAccounts
                     }
                     val kind = MediaKind.fromKey(params.optString("kind")) ?: current.kind
                     val updated = current.copy(
