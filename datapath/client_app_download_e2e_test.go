@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -42,9 +43,9 @@ func TestClientAppDownloadProxyReturnsCompleteAPK(t *testing.T) {
 			conn,
 			"HTTP/1.1 200 OK\r\n"+
 				"Content-Type: application/vnd.android.package-archive\r\n"+
-				"Content-Disposition: attachment; filename=\"Shizzi-Plus-0.2.4.apk\"\r\n"+
+				"Content-Disposition: attachment; filename=\"Shizzi-Plus-0.2.6-test.apk\"\r\n"+
 				"Content-Length: %d\r\n"+
-				"X-Shizzi-Version: 0.2.4\r\n"+
+				"X-Shizzi-Version: 0.2.6-test\r\n"+
 				"Cache-Control: no-store\r\n"+
 				"Connection: close\r\n\r\n",
 			len(apk),
@@ -55,8 +56,8 @@ func TestClientAppDownloadProxyReturnsCompleteAPK(t *testing.T) {
 	manager := newTrafficManager()
 	manager.portalClientApp = portalClientApp{
 		Available: true,
-		Version:   "0.2.4",
-		FileName:  "Shizzi-Plus-0.2.4.apk",
+		Version:   "0.2.6-test",
+		FileName:  "Shizzi-Plus-0.2.6-test.apk",
 		SizeBytes: int64(len(apk)),
 		SHA256:    "virtual-sha256",
 	}
@@ -65,7 +66,13 @@ func TestClientAppDownloadProxyReturnsCompleteAPK(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		manager.serveClientAppDownload(server, "GET")
+		manager.serveClientAppDownload(
+			server,
+			&http.Request{
+				Method: http.MethodGet,
+				Header: make(http.Header),
+			},
+		)
 		_ = server.Close()
 	}()
 
@@ -82,8 +89,8 @@ func TestClientAppDownloadProxyReturnsCompleteAPK(t *testing.T) {
 	for _, expected := range []string{
 		"HTTP/1.1 200 OK",
 		"Content-Type: application/vnd.android.package-archive",
-		"Content-Disposition: attachment; filename=\"Shizzi-Plus-0.2.4.apk\"",
-		"X-Shizzi-Version: 0.2.4",
+		"Content-Disposition: attachment; filename=\"Shizzi-Plus-0.2.6-test.apk\"",
+		"X-Shizzi-Version: 0.2.6-test",
 		string(apk),
 	} {
 		if !strings.Contains(text, expected) {
