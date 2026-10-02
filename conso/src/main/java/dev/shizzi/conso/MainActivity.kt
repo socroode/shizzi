@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
@@ -47,11 +48,52 @@ class MainActivity : Activity() {
     private var previousOrientation: Int = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
     private var pendingWebPermissionRequest: PermissionRequest? = null
     private var pendingWebPermissionResources: Array<String> = emptyArray()
+    private var wifiCallbackRegistered = false
+    private val wifiNetworkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            val caps = connectivityManager.getNetworkCapabilities(network)
+            if (LocalMediaWebSupport.shouldKeepNetworkAvailable(
+                    caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true,
+                )
+            ) {
+                runOnUiThread {
+                    if (::webView.isInitialized) webView.setNetworkAvailable(true)
+                }
+            }
+        }
+
+        override fun onCapabilitiesChanged(
+            network: Network,
+            networkCapabilities: NetworkCapabilities,
+        ) {
+            if (LocalMediaWebSupport.shouldKeepNetworkAvailable(
+                    networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+                )
+            ) {
+                runOnUiThread {
+                    if (::webView.isInitialized) webView.setNetworkAvailable(true)
+                }
+            }
+        }
+
+        override fun onLost(network: Network) {
+            if (network != boundWifiNetwork) return
+            runOnUiThread {
+                val replacement = findWifiNetwork()
+                if (replacement != null) {
+                    bindPortalToWifi()
+                } else if (::webView.isInitialized) {
+                    webView.setNetworkAvailable(false)
+                }
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         connectivityManager = getSystemService(ConnectivityManager::class.java)
         buildUi()
+        registerLocalWifiCallback()
         detectMedia()
     }
 
@@ -178,6 +220,7 @@ class MainActivity : Activity() {
                     favicon: android.graphics.Bitmap?,
                 ) {
                     if (!belongsToRequestedTarget(url)) return
+                    this@MainActivity.webView.setNetworkAvailable(true)
                     this@MainActivity.webView.visibility = View.INVISIBLE
                     this@MainActivity.progress.visibility = View.VISIBLE
                     this@MainActivity.status.visibility = View.VISIBLE
@@ -186,6 +229,10 @@ class MainActivity : Activity() {
 
                 override fun onPageFinished(view: WebView?, url: String?) {
                     if (!belongsToRequestedTarget(url)) return
+                    this@MainActivity.webView.setNetworkAvailable(true)
+                    if (requestedLabel == "Shizzi Media") {
+                        view?.evaluateJavascript(LocalMediaWebSupport.fullscreenScript, null)
+                    }
                     this@MainActivity.progress.visibility = View.GONE
                     this@MainActivity.status.visibility = View.GONE
                     this@MainActivity.webView.visibility = View.VISIBLE
@@ -351,10 +398,30 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun registerLocalWifiCallback() {
+        if (wifiCallbackRegistered) return
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .build()
+        runCatching {
+            connectivityManager.registerNetworkCallback(request, wifiNetworkCallback)
+            wifiCallbackRegistered = true
+        }
+    }
+
+    private fun unregisterLocalWifiCallback() {
+        if (!wifiCallbackRegistered) return
+        runCatching { connectivityManager.unregisterNetworkCallback(wifiNetworkCallback) }
+        wifiCallbackRegistered = false
+    }
+
     private fun bindPortalToWifi(): Boolean {
         val wifi = findWifiNetwork() ?: return false
         if (!connectivityManager.bindProcessToNetwork(wifi)) return false
         boundWifiNetwork = wifi
+        if (::webView.isInitialized) {
+            webView.setNetworkAvailable(true)
+        }
         return true
     }
 
@@ -568,6 +635,7 @@ class MainActivity : Activity() {
         pendingWebPermissionRequest = null
         pendingWebPermissionResources = emptyArray()
         if (fullscreenView != null) exitVideoFullscreen()
+        unregisterLocalWifiCallback()
         releaseWifiBinding()
         webView.stopLoading()
         webView.destroy()
