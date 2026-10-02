@@ -1526,7 +1526,12 @@ func (m *TrafficManager) writePortalHTML(
 <strong>Shizzi Media</strong>
 <p>Films, séries et musique disponibles dans le navigateur sur ce Wi-Fi, sans utiliser Internet ni le quota Data.</p>
 <a class="media-button" href="/media/">Ouvrir Shizzi Media</a>
-<div class="media-note">Compatible PC, téléphone et tablette · lecture locale</div></section>`
+<div class="media-note">Compatible PC, téléphone et tablette · lecture locale</div></section>
+<section class="media-link"><div class="eyebrow">MESSAGERIE LOCALE</div>
+<strong>Messagerie Shizzi</strong>
+<p>Messages privés et groupes entre comptes Shizzi connectés, avec historique stocké sur le routeur.</p>
+<a class="media-button" href="/chat/">Ouvrir la messagerie</a>
+<div class="media-note">Trafic local · ne consomme pas le quota Internet</div></section>`
 	}
 
 	content += `<section class="speedtest-link"><div class="eyebrow">RÉSEAU LOCAL</div>
