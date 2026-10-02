@@ -138,6 +138,21 @@ object MediaFolderStore {
         accountNumber: String?,
     ): Boolean = folder.visibleTo(accountNumber)
 
+    internal fun visibleFromSnapshot(
+        folders: List<MediaFolderConfig>,
+        accountNumber: String?,
+    ): List<MediaFolderConfig> = folders.filter { it.visibleTo(accountNumber) }
+
+    internal fun canAccessSnapshot(
+        folders: List<MediaFolderConfig>,
+        folderId: String?,
+        accountNumber: String?,
+    ): Boolean {
+        if (folderId.isNullOrBlank()) return false
+        val folder = folders.firstOrNull { it.id == folderId } ?: return false
+        return folder.visibleTo(accountNumber)
+    }
+
     private fun sanitize(folder: MediaFolderConfig): MediaFolderConfig {
         val id = folder.id.trim().ifBlank { UUID.randomUUID().toString() }
         val name = folder.name.trim().take(60).ifBlank { "Dossier Media" }
