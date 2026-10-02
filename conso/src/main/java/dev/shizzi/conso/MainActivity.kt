@@ -1,8 +1,10 @@
 package dev.shizzi.conso
 
+import android.Manifest
 import android.app.Activity
 import android.graphics.Color
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -11,6 +13,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
+import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -42,6 +45,8 @@ class MainActivity : Activity() {
     private var fullscreenContainer: FrameLayout? = null
     private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
     private var previousOrientation: Int = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    private var pendingWebPermissionRequest: PermissionRequest? = null
+    private var pendingWebPermissionResources: Array<String> = emptyArray()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,7 +75,7 @@ class MainActivity : Activity() {
             })
 
             addView(TextView(this@MainActivity).apply {
-                text = "Compte · Conso · Recharge · Media · Messagerie"
+                text = "Compte · Conso · Recharge · Media · Messagerie · Appels"
                 textSize = 15f
                 setTextColor(Color.rgb(148, 163, 184))
                 gravity = Gravity.CENTER
@@ -102,7 +107,7 @@ class MainActivity : Activity() {
             })
 
             addView(sectionLabel("MESSAGERIE SHIZZI"))
-            addView(primaryButton("Messages privés · Groupes") {
+            addView(primaryButton("Messages · Appels vocaux · Vidéo") {
                 openPortal(PORTAL_CHAT_URL, "Messagerie Shizzi")
             })
             addView(TextView(this@MainActivity).apply {
@@ -139,6 +144,18 @@ class MainActivity : Activity() {
             settings.mediaPlaybackRequiresUserGesture = false
             settings.cacheMode = WebSettings.LOAD_NO_CACHE
             webChromeClient = object : WebChromeClient() {
+                override fun onPermissionRequest(request: PermissionRequest?) {
+                    request ?: return
+                    runOnUiThread { handleWebPermissionRequest(request) }
+                }
+
+                override fun onPermissionRequestCanceled(request: PermissionRequest?) {
+                    if (request != null && pendingWebPermissionRequest === request) {
+                        pendingWebPermissionRequest = null
+                        pendingWebPermissionResources = emptyArray()
+                    }
+                }
+
                 override fun onShowCustomView(
                     view: View?,
                     callback: CustomViewCallback?,
@@ -225,6 +242,77 @@ class MainActivity : Activity() {
         )
 
         setContentView(root)
+    }
+
+    private fun handleWebPermissionRequest(request: PermissionRequest) {
+        val origin = request.origin
+        val trusted =
+            origin.scheme.equals("http", ignoreCase = true) &&
+                origin.host == PORTAL_HOST
+        if (!trusted) {
+            request.deny()
+            return
+        }
+
+        val requestedResources = request.resources.filter { resource ->
+            resource == PermissionRequest.RESOURCE_AUDIO_CAPTURE ||
+                resource == PermissionRequest.RESOURCE_VIDEO_CAPTURE
+        }
+        if (requestedResources.isEmpty()) {
+            request.deny()
+            return
+        }
+
+        val requiredPermissions = requestedResources.mapNotNull { resource ->
+            when (resource) {
+                PermissionRequest.RESOURCE_AUDIO_CAPTURE -> Manifest.permission.RECORD_AUDIO
+                PermissionRequest.RESOURCE_VIDEO_CAPTURE -> Manifest.permission.CAMERA
+                else -> null
+            }
+        }.distinct()
+
+        val missing = requiredPermissions.filter { permission ->
+            checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED
+        }
+
+        if (missing.isEmpty()) {
+            request.grant(requestedResources.toTypedArray())
+            return
+        }
+
+        pendingWebPermissionRequest?.deny()
+        pendingWebPermissionRequest = request
+        pendingWebPermissionResources = requestedResources.toTypedArray()
+        requestPermissions(missing.toTypedArray(), REQUEST_CALL_PERMISSIONS)
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_CALL_PERMISSIONS) return
+
+        val request = pendingWebPermissionRequest
+        val resources = pendingWebPermissionResources
+        pendingWebPermissionRequest = null
+        pendingWebPermissionResources = emptyArray()
+
+        if (request == null) return
+
+        val audioOk =
+            PermissionRequest.RESOURCE_AUDIO_CAPTURE !in resources ||
+                checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        val videoOk =
+            PermissionRequest.RESOURCE_VIDEO_CAPTURE !in resources ||
+                checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+
+        if (audioOk && videoOk) {
+            request.grant(resources)
+        } else {
+            request.deny()
+        }
     }
 
     private fun sectionLabel(text: String): TextView = TextView(this).apply {
@@ -476,6 +564,9 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        pendingWebPermissionRequest?.deny()
+        pendingWebPermissionRequest = null
+        pendingWebPermissionResources = emptyArray()
         if (fullscreenView != null) exitVideoFullscreen()
         releaseWifiBinding()
         webView.stopLoading()
@@ -487,6 +578,8 @@ class MainActivity : Activity() {
         (value * resources.displayMetrics.density).toInt()
 
     private companion object {
+        const val PORTAL_HOST = "192.0.2.1"
+        const val REQUEST_CALL_PERMISSIONS = 4102
         const val PORTAL_URL = "http://192.0.2.1/"
         const val PORTAL_MEDIA_URL = "http://192.0.2.1/media/"
         const val PORTAL_CHAT_URL = "http://192.0.2.1/chat/"
