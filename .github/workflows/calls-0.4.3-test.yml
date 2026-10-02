@@ -145,7 +145,7 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk release-output/Shizzi-Hotspot-0.4.3.9-Calls-Test.apk
           cp conso/build/outputs/apk/release/conso-release.apk release-output/Shizzi-Plus-0.2.8-Calls-Secure-Test.apk
           cd release-output
-          sha256sum Shizzi-Hotspot-0.4.3.9-Calls-Test.apk Shizzi-Plus-0.2.7-Media-Fullscreen-Test.apk > SHA256SUMS.txt
+          sha256sum Shizzi-Hotspot-0.4.3.9-Calls-Test.apk Shizzi-Plus-0.2.8-Calls-Secure-Test.apk > SHA256SUMS.txt
 
       - name: Upload signed calls test APKs
         uses: actions/upload-artifact@v5
@@ -153,7 +153,7 @@ jobs:
           name: Shizzi-0.4.3-calls-test
           path: |
             release-output/Shizzi-Hotspot-0.4.3.9-Calls-Test.apk
-            release-output/Shizzi-Plus-0.2.7-Media-Fullscreen-Test.apk
+            release-output/Shizzi-Plus-0.2.8-Calls-Secure-Test.apk
             release-output/SHA256SUMS.txt
           if-no-files-found: error
 
