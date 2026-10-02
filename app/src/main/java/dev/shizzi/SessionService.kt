@@ -208,7 +208,12 @@ class SessionService : Service() {
                     }
                     if (freshAdminCommands.isNotEmpty()) {
                         pendingAdminResults = pendingAdminResults + freshAdminCommands.map {
-                            processRemoteAdminCommand(it, store, now)
+                            processRemoteAdminCommand(
+                                it,
+                                store,
+                                now,
+                                this@SessionService,
+                            )
                         }
                     }
 
