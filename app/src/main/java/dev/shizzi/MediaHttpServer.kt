@@ -19,7 +19,10 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 
-class MediaHttpServer(private val context: Context) {
+class MediaHttpServer(
+    private val context: Context,
+    private val folderSnapshot: List<MediaFolderConfig> = MediaFolderStore.load(context),
+) {
     private val running = AtomicBoolean(false)
     private val acceptExecutor = Executors.newSingleThreadExecutor()
     private val clientPool = Executors.newFixedThreadPool(MAX_CLIENTS)
@@ -174,8 +177,8 @@ class MediaHttpServer(private val context: Context) {
         accountNumber: String,
         headOnly: Boolean,
     ) {
-        val folders = MediaFolderStore.visibleTo(context, accountNumber)
-            .filter { it.uri() != null }
+        val folders = folderSnapshot
+            .filter { it.visibleTo(accountNumber) && it.uri() != null }
         val cards = if (folders.isEmpty()) {
             "<p>Aucun dossier Media n'est autorisé pour ce compte.</p>"
         } else {
@@ -203,9 +206,9 @@ class MediaHttpServer(private val context: Context) {
         headOnly: Boolean,
     ) {
         val folder = folderId
-            ?.let { MediaFolderStore.byId(context, it) }
+            ?.let { wanted -> folderSnapshot.firstOrNull { it.id == wanted } }
             ?: MediaKind.fromKey(rawKind)?.let { kind ->
-                MediaFolderStore.visibleTo(context, accountNumber).firstOrNull { it.kind == kind }
+                folderSnapshot.firstOrNull { it.kind == kind && it.visibleTo(accountNumber) }
             }
 
         if (folder == null || !folder.visibleTo(accountNumber)) {
@@ -343,7 +346,8 @@ class MediaHttpServer(private val context: Context) {
 
     private fun entryAllowed(entry: MediaEntry, accountNumber: String): Boolean {
         if (entry.folderId.isBlank()) return true
-        return MediaFolderStore.canAccess(context, entry.folderId, accountNumber)
+        val folder = folderSnapshot.firstOrNull { it.id == entry.folderId } ?: return false
+        return folder.visibleTo(accountNumber)
     }
 
     private fun parseRange(header: String?, size: Long): Pair<Long, Long>? {
