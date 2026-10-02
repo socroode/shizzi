@@ -743,6 +743,19 @@ func (m *TrafficManager) serveAdminAPI(conn net.Conn, request *http.Request, cli
 	return true
 }
 
+func isClientAppDownloadPath(rawPath string) bool {
+	path := strings.TrimSpace(strings.ToLower(rawPath))
+	for len(path) > 1 && strings.HasSuffix(path, "/") {
+		path = strings.TrimSuffix(path, "/")
+	}
+	switch path {
+	case "/shizzi-plus.apk", "/download/shizzi-plus.apk":
+		return true
+	default:
+		return false
+	}
+}
+
 func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
@@ -797,7 +810,7 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	case isChatRequest:
 		m.serveChatProxy(conn, request, localAccount)
 	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
-		(path == "/download/shizzi-plus.apk" || path == "/shizzi-plus.apk"):
+		isClientAppDownloadPath(path):
 		m.serveClientAppDownload(conn, request)
 	case request.Method == http.MethodPost && path == "/login":
 		_ = request.ParseForm()
@@ -1550,7 +1563,7 @@ func (m *TrafficManager) writePortalHTML(
 			`<section class="app-download"><div class="eyebrow">APPLICATION CLIENT</div>
 <strong>Shizzi+ %s</strong>
 <p>Installez Shizzi+ directement depuis ce Wi-Fi. Aucun Internet ni quota Data n'est utilisé.</p>
-<a class="download-button" href="http://192.0.2.1/shizzi-plus.apk" download="%s" target="_blank" rel="noopener">Télécharger Shizzi+</a>
+<a class="download-button" href="http://192.0.2.1/shizzi-plus.apk" download="%s">Télécharger Shizzi+</a>
 <div id="shizzi-download-status" class="app-note" aria-live="polite"></div>
 <div class="app-meta">%s · SHA-256 %s…</div>
 <div class="app-note">Lien direct : http://192.0.2.1/shizzi-plus.apk</div>
