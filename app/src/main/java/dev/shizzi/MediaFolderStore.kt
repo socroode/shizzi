@@ -33,6 +33,9 @@ object MediaFolderStore {
     private const val PREFS = "shizzi_media"
     private const val KEY_FOLDERS = "folders_v2"
 
+    fun isConfigured(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).contains(KEY_FOLDERS)
+
     fun load(context: Context): List<MediaFolderConfig> {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val raw = prefs.getString(KEY_FOLDERS, null)
