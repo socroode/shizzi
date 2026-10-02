@@ -841,7 +841,7 @@ func (m *TrafficManager) serveLocalSpeedtestPing(conn net.Conn, method string) {
 		len(body),
 	)
 	_, _ = conn.Write([]byte(header))
-	if request.Method != http.MethodHead {
+	if method != http.MethodHead {
 		_, _ = conn.Write(body)
 	}
 }
@@ -1027,7 +1027,7 @@ button:disabled{opacity:.5;cursor:wait}
 		len(body),
 	)
 	_, _ = conn.Write([]byte(header))
-	if request.Method != http.MethodHead {
+	if method != http.MethodHead {
 		_, _ = conn.Write(body)
 	}
 }
@@ -1053,7 +1053,7 @@ a{display:block;margin-top:18px;padding:14px 16px;border-radius:14px;text-align:
 		len(body),
 	)
 	_, _ = conn.Write([]byte(header))
-	if request.Method != http.MethodHead {
+	if method != http.MethodHead {
 		_, _ = conn.Write(body)
 	}
 }
@@ -1200,7 +1200,7 @@ func (m *TrafficManager) writeChatLoginRequired(conn net.Conn, method string) {
 		len(body),
 	)
 	_, _ = conn.Write([]byte(header))
-	if request.Method != http.MethodHead {
+	if method != http.MethodHead {
 		_, _ = conn.Write(body)
 	}
 }
