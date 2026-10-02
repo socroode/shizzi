@@ -270,6 +270,9 @@ fun CybercafeState.toPortalConfigJson(
     claimResults: List<PortalClaimResult> = emptyList(),
     adminResults: List<AdminCommandResult> = emptyList(),
     clientApp: ClientAppDistributionInfo? = null,
+    mediaEnabled: Boolean = false,
+    mediaFolders: List<MediaFolderConfig> = emptyList(),
+    mediaSummary: MediaIndexSummary? = null,
 ): String =
     JSONObject().apply {
         put("clientApp", JSONObject().apply {
@@ -352,6 +355,29 @@ fun CybercafeState.toPortalConfigJson(
                         put("snapshotPriceXpf", voucher.snapshotPriceXpf)
                     })
                 }
+            })
+            put("media", JSONObject().apply {
+                put("enabled", mediaEnabled)
+                put("maxFolders", MediaFolderStore.MAX_FOLDERS)
+                put("summary", JSONObject().apply {
+                    put("films", mediaSummary?.films ?: 0)
+                    put("series", mediaSummary?.series ?: 0)
+                    put("music", mediaSummary?.music ?: 0)
+                    put("total", mediaSummary?.total ?: 0)
+                    put("updatedAt", mediaSummary?.updatedAt ?: 0L)
+                })
+                put("folders", JSONArray().apply {
+                    mediaFolders.forEach { folder ->
+                        put(JSONObject().apply {
+                            put("id", folder.id)
+                            put("name", folder.name)
+                            put("kind", folder.kind.key)
+                            put("treeUri", folder.treeUri ?: JSONObject.NULL)
+                            put("enabled", folder.enabled)
+                            put("allowedAccounts", JSONArray(folder.allowedAccounts.toList()))
+                        })
+                    }
+                })
             })
         })
         put("title", portal.title)
@@ -440,6 +466,9 @@ suspend fun TetherClient.applyCybercafePolicies(
     claimResults: List<PortalClaimResult>,
     adminResults: List<AdminCommandResult> = emptyList(),
     clientApp: ClientAppDistributionInfo? = null,
+    mediaEnabled: Boolean = false,
+    mediaFolders: List<MediaFolderConfig> = emptyList(),
+    mediaSummary: MediaIndexSummary? = null,
 ) {
     val portalRequired = state.accounts.isNotEmpty() || state.remoteAdmin.enabled
 
@@ -455,6 +484,9 @@ suspend fun TetherClient.applyCybercafePolicies(
             claimResults,
             adminResults,
             clientApp,
+            mediaEnabled,
+            mediaFolders,
+            mediaSummary,
         ),
     )
     if (!portalRequired) setRequireClientAttribution(false)
