@@ -797,8 +797,8 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	case isChatRequest:
 		m.serveChatProxy(conn, request, localAccount)
 	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
-		path == "/download/shizzi-plus.apk":
-		m.serveClientAppDownload(conn, request.Method)
+		(path == "/download/shizzi-plus.apk" || path == "/shizzi-plus.apk"):
+		m.serveClientAppDownload(conn, request)
 	case request.Method == http.MethodPost && path == "/login":
 		_ = request.ParseForm()
 		ok, message := m.submitPortalAccountLogin(
@@ -841,7 +841,7 @@ func (m *TrafficManager) serveLocalSpeedtestPing(conn net.Conn, method string) {
 		len(body),
 	)
 	_, _ = conn.Write([]byte(header))
-	if method != http.MethodHead {
+	if request.Method != http.MethodHead {
 		_, _ = conn.Write(body)
 	}
 }
@@ -1027,7 +1027,7 @@ button:disabled{opacity:.5;cursor:wait}
 		len(body),
 	)
 	_, _ = conn.Write([]byte(header))
-	if method != http.MethodHead {
+	if request.Method != http.MethodHead {
 		_, _ = conn.Write(body)
 	}
 }
@@ -1053,7 +1053,7 @@ a{display:block;margin-top:18px;padding:14px 16px;border-radius:14px;text-align:
 		len(body),
 	)
 	_, _ = conn.Write([]byte(header))
-	if method != http.MethodHead {
+	if request.Method != http.MethodHead {
 		_, _ = conn.Write(body)
 	}
 }
@@ -1200,7 +1200,7 @@ func (m *TrafficManager) writeChatLoginRequired(conn net.Conn, method string) {
 		len(body),
 	)
 	_, _ = conn.Write([]byte(header))
-	if method != http.MethodHead {
+	if request.Method != http.MethodHead {
 		_, _ = conn.Write(body)
 	}
 }
@@ -1272,7 +1272,7 @@ func (m *TrafficManager) serveChatProxy(
 	_, _ = io.Copy(conn, local)
 }
 
-func (m *TrafficManager) serveClientAppDownload(conn net.Conn, method string) {
+func (m *TrafficManager) serveClientAppDownload(conn net.Conn, request *http.Request) {
 	m.mu.Lock()
 	app := m.portalClientApp
 	m.mu.Unlock()
@@ -1284,7 +1284,7 @@ func (m *TrafficManager) serveClientAppDownload(conn net.Conn, method string) {
 			len(body),
 		)
 		_, _ = conn.Write([]byte(header))
-		if method != http.MethodHead {
+		if request.Method != http.MethodHead {
 			_, _ = conn.Write(body)
 		}
 		return
@@ -1299,7 +1299,7 @@ func (m *TrafficManager) serveClientAppDownload(conn net.Conn, method string) {
 			len(body),
 		)
 		_, _ = conn.Write([]byte(header))
-		if method != http.MethodHead {
+		if request.Method != http.MethodHead {
 			_, _ = conn.Write(body)
 		}
 		return
@@ -1307,11 +1307,21 @@ func (m *TrafficManager) serveClientAppDownload(conn net.Conn, method string) {
 	defer local.Close()
 	_ = local.SetDeadline(time.Now().Add(2 * time.Minute))
 
-	request := fmt.Sprintf(
-		"%s /shizzi-plus.apk HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-		method,
-	)
-	if _, err := io.WriteString(local, request); err != nil {
+	if _, err := fmt.Fprintf(
+		local,
+		"%s /shizzi-plus.apk HTTP/1.1\r\nHost: localhost\r\n",
+		request.Method,
+	); err != nil {
+		return
+	}
+	for _, name := range []string{"Range", "If-Range", "User-Agent"} {
+		if value := request.Header.Get(name); value != "" {
+			if _, err := fmt.Fprintf(local, "%s: %s\r\n", name, value); err != nil {
+				return
+			}
+		}
+	}
+	if _, err := io.WriteString(local, "Connection: close\r\n\r\n"); err != nil {
 		return
 	}
 	_, _ = io.Copy(conn, local)
@@ -1540,9 +1550,10 @@ func (m *TrafficManager) writePortalHTML(
 			`<section class="app-download"><div class="eyebrow">APPLICATION CLIENT</div>
 <strong>Shizzi+ %s</strong>
 <p>Installez Shizzi+ directement depuis ce Wi-Fi. Aucun Internet ni quota Data n'est utilisé.</p>
-<a class="download-button" href="/download/shizzi-plus.apk" download="%s">Télécharger Shizzi+</a>
+<a class="download-button" href="http://192.0.2.1/shizzi-plus.apk" download="%s" target="_blank" rel="noopener">Télécharger Shizzi+</a>
 <div id="shizzi-download-status" class="app-note" aria-live="polite"></div>
 <div class="app-meta">%s · SHA-256 %s…</div>
+<div class="app-note">Lien direct : http://192.0.2.1/shizzi-plus.apk</div>
 <div class="app-note">Android peut demander d'autoriser l'installation depuis cette source.</div></section>`,
 			html.EscapeString(clientApp.Version),
 			html.EscapeString(clientApp.FileName),
@@ -1633,7 +1644,7 @@ func applyPortalCustomization(
 }
 
 func injectClientAppDownload(page string) string {
-	if !strings.Contains(page, "/download/shizzi-plus.apk") {
+	if !strings.Contains(page, "shizzi-plus.apk") {
 		return page
 	}
 
@@ -1643,7 +1654,7 @@ func injectClientAppDownload(page string) string {
 	// navigation intact so the browser starts streaming from Shizzi immediately.
 	script := `<script>
 (function(){
-  var link=document.querySelector('a.download-button[href="/download/shizzi-plus.apk"]');
+  var link=document.querySelector('a.download-button[href*="shizzi-plus.apk"]');
   if(!link || link.dataset.shizziNativeDownload==="1") return;
   link.dataset.shizziNativeDownload="1";
 
