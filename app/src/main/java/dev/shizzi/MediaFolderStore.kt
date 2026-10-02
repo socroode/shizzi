@@ -28,6 +28,32 @@ data class MediaFolderConfig(
 fun normalizeMediaAccount(value: String?): String =
     value.orEmpty().trim().uppercase(Locale.US)
 
+data class MediaAccountOption(
+    val number: String,
+    val name: String,
+    val enabled: Boolean,
+) {
+    val label: String
+        get() = if (name.isBlank()) number else "$name · $number"
+}
+
+fun mediaAccountOptions(state: CybercafeState): List<MediaAccountOption> =
+    state.accounts.values
+        .map { account ->
+            MediaAccountOption(
+                number = normalizeMediaAccount(account.number),
+                name = account.name.trim(),
+                enabled = account.enabled,
+            )
+        }
+        .filter { it.number.isNotBlank() }
+        .sortedWith(
+            compareBy<MediaAccountOption>(
+                { it.name.lowercase(Locale.getDefault()) },
+                { it.number },
+            ),
+        )
+
 object MediaFolderStore {
     const val MAX_FOLDERS = 10
     private const val PREFS = "shizzi_media"
