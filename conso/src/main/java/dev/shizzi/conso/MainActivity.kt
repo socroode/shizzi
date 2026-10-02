@@ -70,7 +70,7 @@ class MainActivity : Activity() {
             })
 
             addView(TextView(this@MainActivity).apply {
-                text = "Compte · Conso · Recharge · Media"
+                text = "Compte · Conso · Recharge · Media · Messagerie"
                 textSize = 15f
                 setTextColor(Color.rgb(148, 163, 184))
                 gravity = Gravity.CENTER
@@ -99,6 +99,18 @@ class MainActivity : Activity() {
                 setTextColor(Color.rgb(148, 163, 184))
                 gravity = Gravity.CENTER
                 setPadding(0, dp(14), 0, 0)
+            })
+
+            addView(sectionLabel("MESSAGERIE SHIZZI"))
+            addView(primaryButton("Messages privés · Groupes") {
+                openPortal(PORTAL_CHAT_URL, "Messagerie Shizzi")
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "Messagerie locale entre comptes Shizzi. Les messages restent sur le routeur et n'utilisent pas le quota Internet."
+                textSize = 13f
+                setTextColor(Color.rgb(148, 163, 184))
+                gravity = Gravity.CENTER
+                setPadding(0, dp(14), 0, dp(8))
             })
 
             addView(primaryButton("Actualiser la détection Shizzi") {
@@ -477,5 +489,6 @@ class MainActivity : Activity() {
     private companion object {
         const val PORTAL_URL = "http://192.0.2.1/"
         const val PORTAL_MEDIA_URL = "http://192.0.2.1/media/"
+        const val PORTAL_CHAT_URL = "http://192.0.2.1/chat/"
     }
 }
