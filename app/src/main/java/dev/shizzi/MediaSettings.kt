@@ -97,7 +97,7 @@ object MediaCatalog {
         val configured = MediaFolderStore.load(context)
             .filter { it.enabled && it.uri() != null && (kind == null || it.kind == kind) }
 
-        if (configured.isNotEmpty()) {
+        if (MediaFolderStore.isConfigured(context)) {
             return configured.flatMap { scanFolder(context, it, onProgress) }
                 .sortedWith(
                     compareBy<MediaEntry>(
