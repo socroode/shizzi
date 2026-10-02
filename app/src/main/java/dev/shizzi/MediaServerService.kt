@@ -14,9 +14,11 @@ import androidx.core.content.ContextCompat
 
 class MediaServerService : Service() {
     private var server: MediaHttpServer? = null
+    private var folderSnapshot: List<MediaFolderConfig> = emptyList()
 
     override fun onCreate() {
         super.onCreate()
+        folderSnapshot = MediaFolderStore.load(this)
         createChannel()
         startForeground(NOTIFICATION_ID, notification())
     }
@@ -61,7 +63,10 @@ class MediaServerService : Service() {
             current.stop()
             server = null
         }
-        val candidate = MediaHttpServer(applicationContext)
+        val candidate = MediaHttpServer(
+            context = applicationContext,
+            folderSnapshot = folderSnapshot,
+        )
         if (!candidate.start()) {
             Log.e(TAG, "media server did not start")
             return
@@ -73,6 +78,13 @@ class MediaServerService : Service() {
 
     private fun syncConfig(intent: Intent?) {
         if (intent == null) return
+
+        intent.getStringExtra(EXTRA_FOLDER_SNAPSHOT)
+            ?.takeIf { it.isNotBlank() }
+            ?.let { raw ->
+                folderSnapshot = MediaFolderStore.decodeSnapshot(raw)
+            }
+
         MediaKind.entries.forEach { kind ->
             val key = extraTree(kind)
             if (!intent.hasExtra(key)) return@forEach
@@ -127,6 +139,7 @@ class MediaServerService : Service() {
         private const val ACTION_STOP = "dev.shizzi.media.STOP"
         private const val ACTION_RESTART = "dev.shizzi.media.RESTART"
         private const val TAG = "ShizziMedia"
+        internal const val EXTRA_FOLDER_SNAPSHOT = "media_folder_snapshot_v2"
 
         private fun extraTree(kind: MediaKind) = "tree_${kind.key}"
 
@@ -134,6 +147,10 @@ class MediaServerService : Service() {
             Intent(context, MediaServerService::class.java)
                 .setAction(action)
                 .apply {
+                    putExtra(
+                        EXTRA_FOLDER_SNAPSHOT,
+                        MediaFolderStore.encodeSnapshot(MediaFolderStore.load(context)),
+                    )
                     MediaKind.entries.forEach { kind ->
                         putExtra(
                             extraTree(kind),
