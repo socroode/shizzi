@@ -816,6 +816,15 @@ class MainActivity : Activity() {
     }
 
     private fun command(action: String, params: JSONObject) {
+        commandResult(action, params, refreshOnSuccess = true)
+    }
+
+    private fun commandResult(
+        action: String,
+        params: JSONObject,
+        refreshOnSuccess: Boolean,
+        onSuccess: ((JSONObject) -> Unit)? = null,
+    ) {
         runNetwork {
             val start = request(
                 "POST",
@@ -825,7 +834,7 @@ class MainActivity : Activity() {
             if (!start.optBoolean("ok")) error(start.optString("message", "Commande refusée."))
             val id = start.getString("id")
             var result: JSONObject? = null
-            for (attempt in 0 until 20) {
+            for (attempt in 0 until 30) {
                 Thread.sleep(300)
                 val candidate = get("/result?id=" + URLEncoder.encode(id, "UTF-8"))
                 if (!candidate.optBoolean("pending", true)) {
@@ -834,11 +843,13 @@ class MainActivity : Activity() {
                 }
             }
             val finished = result ?: error("La commande est toujours en attente.")
+            val success = finished.optBoolean("success")
             val message = finished.optString("message")
             runOnUiThread {
-                toast(message.ifBlank { if (finished.optBoolean("success")) "OK" else "Échec" })
+                toast(message.ifBlank { if (success) "OK" else "Échec" })
+                if (success) onSuccess?.invoke(finished)
             }
-            if (finished.optBoolean("success")) {
+            if (success && refreshOnSuccess) {
                 Thread.sleep(250)
                 refresh()
             }
