@@ -14,6 +14,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
+import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -28,6 +29,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import java.net.HttpURLConnection
 import java.net.URL
+import org.json.JSONObject
 import kotlin.concurrent.thread
 
 class MainActivity : Activity() {
@@ -48,6 +50,9 @@ class MainActivity : Activity() {
     private var previousOrientation: Int = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
     private var pendingWebPermissionRequest: PermissionRequest? = null
     private var pendingWebPermissionResources: Array<String> = emptyArray()
+    @Volatile private var secureChatActive = false
+    private var chatBridgeInstalled = false
+    private val chatBridge = ShizziNativeChatBridge()
     private var wifiCallbackRegistered = false
     private val wifiNetworkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
@@ -150,7 +155,7 @@ class MainActivity : Activity() {
 
             addView(sectionLabel("MESSAGERIE SHIZZI"))
             addView(primaryButton("Messages · Appels vocaux · Vidéo") {
-                openPortal(PORTAL_CHAT_URL, "Messagerie Shizzi")
+                openSecureChat()
             })
             addView(TextView(this@MainActivity).apply {
                 text = "Messagerie locale entre comptes Shizzi. Les messages restent sur le routeur et n'utilisent pas le quota Internet."
@@ -293,9 +298,10 @@ class MainActivity : Activity() {
 
     private fun handleWebPermissionRequest(request: PermissionRequest) {
         val origin = request.origin
-        val trusted =
-            origin.scheme.equals("http", ignoreCase = true) &&
-                origin.host == PORTAL_HOST
+        val trusted = SecureChatWebSupport.isTrustedMediaOrigin(
+            origin.scheme,
+            origin.host,
+        )
         if (!trusted) {
             request.deny()
             return
@@ -359,6 +365,174 @@ class MainActivity : Activity() {
             request.grant(resources)
         } else {
             request.deny()
+        }
+    }
+
+    private data class SecureChatPage(
+        val html: String? = null,
+        val loginRequired: Boolean = false,
+        val error: String = "",
+    )
+
+    private inner class ShizziNativeChatBridge {
+        @JavascriptInterface
+        fun request(path: String, method: String, body: String): String {
+            if (!secureChatActive) {
+                return bridgeError("Messagerie Shizzi+ inactive.")
+            }
+
+            val target = SecureChatWebSupport.apiUrl(path)
+                ?: return bridgeError("Requête locale refusée.")
+            val verb = method.trim().uppercase()
+            if (verb != "GET" && verb != "POST") {
+                return bridgeError("Méthode locale refusée.")
+            }
+
+            val network = boundWifiNetwork ?: findWifiNetwork()
+                ?: return bridgeError("Wi-Fi Shizzi indisponible.")
+
+            return runCatching {
+                val connection = network.openConnection(URL(target)) as HttpURLConnection
+                connection.connectTimeout = 3_000
+                connection.readTimeout = 10_000
+                connection.useCaches = false
+                connection.requestMethod = verb
+                connection.setRequestProperty("Accept", "application/json")
+
+                if (verb == "POST") {
+                    val bytes = body.toByteArray(Charsets.UTF_8)
+                    connection.doOutput = true
+                    connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    connection.setFixedLengthStreamingMode(bytes.size)
+                    connection.outputStream.use { output -> output.write(bytes) }
+                }
+
+                val code = connection.responseCode
+                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+                val response = stream
+                    ?.bufferedReader(Charsets.UTF_8)
+                    ?.use { reader -> reader.readText() }
+                    .orEmpty()
+                connection.disconnect()
+
+                if (response.isBlank()) {
+                    bridgeError("Réponse locale vide.")
+                } else {
+                    response
+                }
+            }.getOrElse {
+                bridgeError("Messagerie locale indisponible.")
+            }
+        }
+    }
+
+    private fun bridgeError(message: String): String =
+        JSONObject()
+            .put("ok", false)
+            .put("message", message)
+            .toString()
+
+    private fun installSecureChatBridge() {
+        if (chatBridgeInstalled) return
+        webView.addJavascriptInterface(chatBridge, "ShizziNativeBridge")
+        chatBridgeInstalled = true
+    }
+
+    private fun deactivateSecureChat() {
+        secureChatActive = false
+        if (chatBridgeInstalled && ::webView.isInitialized) {
+            webView.removeJavascriptInterface("ShizziNativeBridge")
+            chatBridgeInstalled = false
+        }
+    }
+
+    private fun fetchSecureChatPage(): SecureChatPage {
+        val network = boundWifiNetwork ?: findWifiNetwork()
+            ?: return SecureChatPage(error = "Wi-Fi Shizzi indisponible.")
+
+        return runCatching {
+            val connection = network.openConnection(URL(SecureChatWebSupport.PORTAL_CHAT_URL)) as HttpURLConnection
+            connection.connectTimeout = 3_000
+            connection.readTimeout = 10_000
+            connection.useCaches = false
+            connection.requestMethod = "GET"
+            connection.setRequestProperty("Accept", "text/html")
+
+            val code = connection.responseCode
+            val loginRequired =
+                connection.getHeaderField("X-Shizzi-Chat-Auth")
+                    ?.equals("required", ignoreCase = true) == true
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val html = stream
+                ?.bufferedReader(Charsets.UTF_8)
+                ?.use { reader -> reader.readText() }
+                .orEmpty()
+            connection.disconnect()
+
+            when {
+                loginRequired -> SecureChatPage(loginRequired = true)
+                code !in 200..299 -> SecureChatPage(error = "Erreur HTTP $code.")
+                html.isBlank() -> SecureChatPage(error = "Page de messagerie vide.")
+                else -> SecureChatPage(html = html)
+            }
+        }.getOrElse {
+            SecureChatPage(error = "Messagerie Shizzi indisponible.")
+        }
+    }
+
+    private fun openSecureChat() {
+        requestedBaseUrl = SecureChatWebSupport.SECURE_BASE_URL
+        requestedLabel = "Messagerie Shizzi"
+        secureChatActive = true
+        installSecureChatBridge()
+
+        menu.visibility = View.GONE
+        webView.stopLoading()
+        webView.visibility = View.INVISIBLE
+        progress.visibility = View.VISIBLE
+        status.visibility = View.VISIBLE
+        status.text = "Ouverture de la messagerie sécurisée…"
+
+        if (!bindPortalToWifi()) {
+            deactivateSecureChat()
+            showNavigationFailure(
+                "Aucun réseau Wi-Fi Shizzi utilisable n'a été trouvé.",
+                "",
+            )
+            return
+        }
+
+        thread {
+            val page = fetchSecureChatPage()
+            runOnUiThread {
+                if (!secureChatActive) return@runOnUiThread
+                when {
+                    page.loginRequired -> {
+                        deactivateSecureChat()
+                        showNavigationFailure(
+                            "Compte Shizzi requis.",
+                            " Ouvre d'abord ta connexion compte sur cet appareil.",
+                        )
+                    }
+                    page.html == null -> {
+                        deactivateSecureChat()
+                        showNavigationFailure(
+                            "Impossible d'ouvrir la messagerie Shizzi.",
+                            page.error,
+                        )
+                    }
+                    else -> {
+                        webView.clearHistory()
+                        webView.loadDataWithBaseURL(
+                            SecureChatWebSupport.SECURE_BASE_URL,
+                            page.html,
+                            "text/html",
+                            "UTF-8",
+                            null,
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -514,6 +688,7 @@ class MainActivity : Activity() {
     }
 
     private fun openPortal(url: String, label: String = "Shizzi") {
+        deactivateSecureChat()
         requestedBaseUrl = url.substringBeforeLast('/', url) + "/"
         requestedLabel = label
 
@@ -622,6 +797,7 @@ class MainActivity : Activity() {
                 status.visibility = View.GONE
                 requestedBaseUrl = null
                 requestedLabel = "Shizzi"
+                deactivateSecureChat()
                 menu.visibility = View.VISIBLE
                 releaseWifiBinding()
                 detectMedia()
@@ -635,6 +811,7 @@ class MainActivity : Activity() {
         pendingWebPermissionRequest = null
         pendingWebPermissionResources = emptyArray()
         if (fullscreenView != null) exitVideoFullscreen()
+        deactivateSecureChat()
         unregisterLocalWifiCallback()
         releaseWifiBinding()
         webView.stopLoading()
@@ -650,6 +827,5 @@ class MainActivity : Activity() {
         const val REQUEST_CALL_PERMISSIONS = 4102
         const val PORTAL_URL = "http://192.0.2.1/"
         const val PORTAL_MEDIA_URL = "http://192.0.2.1/media/"
-        const val PORTAL_CHAT_URL = "http://192.0.2.1/chat/"
     }
 }
