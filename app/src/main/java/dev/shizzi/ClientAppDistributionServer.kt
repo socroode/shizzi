@@ -278,8 +278,8 @@ class ClientAppDistributionServer(private val context: Context) {
 
     companion object {
         const val PORT = 8091
-        const val CLIENT_VERSION = "0.2.6-test"
-        const val CLIENT_FILE_NAME = "Shizzi-Plus-0.2.6-test.apk"
+        const val CLIENT_VERSION = "0.2.7-test"
+        const val CLIENT_FILE_NAME = "Shizzi-Plus-0.2.7-test.apk"
         const val ASSET_PATH = "shizzi/Shizzi-Plus.apk"
     }
 }
