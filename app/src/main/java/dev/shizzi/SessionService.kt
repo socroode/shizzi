@@ -236,6 +236,9 @@ class SessionService : Service() {
                             pendingResults,
                             pendingAdminResults,
                             clientAppDistribution.info.takeIf { it.available },
+                            MediaPrefs.isEnabled(this@SessionService),
+                            MediaFolderStore.load(this@SessionService),
+                            MediaIndex.summary(applicationContext),
                         )
                         pushedRevision = revision
                         pushedEpoch = ledger.epoch
