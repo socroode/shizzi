@@ -19,6 +19,7 @@ import (
 const portalIP = "192.0.2.1"
 const clientAppBridgeAddress = "127.0.0.1:8091"
 const mediaBridgeAddress = "127.0.0.1:8088"
+const chatBridgeAddress = "127.0.0.1:8090"
 
 type PortalAccount struct {
 	Number                         string `json:"number"`
@@ -759,13 +760,16 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	path := request.URL.Path
 	isMediaRequest := (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
 		(path == "/media" || strings.HasPrefix(path, "/media/"))
-	mediaAuthenticated := false
-	mediaAccount := ""
-	if isMediaRequest {
-		mediaAuthenticated, mediaAccount = m.mediaAccountIdentity(clientIP)
+	isChatRequest := path == "/chat" || strings.HasPrefix(path, "/chat/")
+	localAuthenticated := false
+	localAccount := ""
+	if isMediaRequest || isChatRequest {
+		localAuthenticated, localAccount = m.mediaAccountIdentity(clientIP)
 	}
 	switch {
-	case isMediaRequest && !mediaAuthenticated:
+	case isChatRequest && !localAuthenticated:
+		m.writeChatLoginRequired(conn, request.Method)
+	case isMediaRequest && !localAuthenticated:
 		m.noteMediaDiagnostic(MediaDiagnostic{
 			ClientIP:             clientIP,
 			Path:                 path,
@@ -789,7 +793,9 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 		path == "/speedtest/download":
 		m.serveLocalSpeedtestDownload(conn, request)
 	case isMediaRequest:
-		m.serveMediaProxy(conn, request, clientIP, mediaAccount)
+		m.serveMediaProxy(conn, request, clientIP, localAccount)
+	case isChatRequest:
+		m.serveChatProxy(conn, request, localAccount)
 	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
 		path == "/download/shizzi-plus.apk":
 		m.serveClientAppDownload(conn, request.Method)
@@ -1161,6 +1167,118 @@ func (m *TrafficManager) serveMediaProxy(
 		event.Error = copyErr.Error()
 	}
 	m.noteMediaDiagnostic(event)
+}
+
+
+func chatProxyTarget(path, rawQuery string) string {
+	target := strings.TrimPrefix(path, "/chat")
+	if target == "" {
+		target = "/"
+	}
+	if !strings.HasPrefix(target, "/") {
+		target = "/" + target
+	}
+	if rawQuery != "" {
+		target += "?" + rawQuery
+	}
+	return target
+}
+
+func (m *TrafficManager) writeChatLoginRequired(conn net.Conn, method string) {
+	body := []byte(`<!doctype html><html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Compte Shizzi requis</title>
+<style>:root{color-scheme:dark;font-family:system-ui,sans-serif}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#07111f;color:#f8fafc}main{width:min(100%,460px);padding:24px;border:1px solid #ffffff18;border-radius:24px;background:#0f172a}a{display:block;margin-top:18px;padding:14px;border-radius:14px;text-align:center;text-decoration:none;background:#22d3ee;color:#06202a;font-weight:900}.note{color:#94a3b8;line-height:1.5}</style>
+</head><body><main><h1>Compte Shizzi requis</h1><p class="note">Ouvre d’abord ton compte Shizzi sur cet appareil pour utiliser la messagerie locale.</p><a href="/">Ouvrir ma connexion compte</a></main></body></html>`)
+	header := fmt.Sprintf(
+		"HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Content-Length: %d
+Cache-Control: no-store
+X-Shizzi-Chat-Auth: required
+Connection: close
+
+",
+		len(body),
+	)
+	_, _ = conn.Write([]byte(header))
+	if method != http.MethodHead {
+		_, _ = conn.Write(body)
+	}
+}
+
+func (m *TrafficManager) serveChatProxy(
+	conn net.Conn,
+	request *http.Request,
+	accountNumber string,
+) {
+	if request.Method != http.MethodGet &&
+		request.Method != http.MethodHead &&
+		request.Method != http.MethodPost {
+		writeJSONStatus(conn, "405 Method Not Allowed", map[string]any{
+			"ok": false, "message": "Méthode interdite.",
+		})
+		return
+	}
+
+	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+	target := chatProxyTarget(request.URL.Path, request.URL.RawQuery)
+	local, err := net.DialTimeout("tcp", chatBridgeAddress, 3*time.Second)
+	if err != nil {
+		writeJSONStatus(conn, "503 Service Unavailable", map[string]any{
+			"ok": false, "message": "Messagerie Shizzi indisponible.",
+		})
+		return
+	}
+	defer local.Close()
+	_ = local.SetDeadline(time.Now().Add(30 * time.Second))
+
+	var body []byte
+	if request.Method == http.MethodPost {
+		body, err = io.ReadAll(io.LimitReader(request.Body, 64*1024+1))
+		if err != nil || len(body) > 64*1024 {
+			writeJSONStatus(conn, "413 Payload Too Large", map[string]any{
+				"ok": false, "message": "Requête trop volumineuse.",
+			})
+			return
+		}
+	}
+
+	if _, err := fmt.Fprintf(
+		local,
+		"%s %s HTTP/1.1
+Host: localhost
+X-Shizzi-Chat-Account: %s
+",
+		request.Method,
+		target,
+		accountNumber,
+	); err != nil {
+		return
+	}
+	if value := request.Header.Get("Content-Type"); value != "" {
+		if _, err := fmt.Fprintf(local, "Content-Type: %s
+", value); err != nil {
+			return
+		}
+	}
+	if request.Method == http.MethodPost {
+		if _, err := fmt.Fprintf(local, "Content-Length: %d
+", len(body)); err != nil {
+			return
+		}
+	}
+	if _, err := io.WriteString(local, "Connection: close
+
+"); err != nil {
+		return
+	}
+	if len(body) > 0 {
+		if _, err := local.Write(body); err != nil {
+			return
+		}
+	}
+	_, _ = io.Copy(conn, local)
 }
 
 func (m *TrafficManager) serveClientAppDownload(conn net.Conn, method string) {
