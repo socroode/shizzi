@@ -26,6 +26,7 @@ class MessagingHttpServer(
     private val accountsProvider: () -> Map<String, MessagingAccount>,
 ) {
     private val store = MessagingStore(File(context.filesDir, STORE_FILE))
+    private val callHub = CallSignalingHub()
     private val presence = ConcurrentHashMap<String, Long>()
     private val running = AtomicBoolean(false)
     private val acceptExecutor = Executors.newSingleThreadExecutor()
@@ -186,6 +187,79 @@ class MessagingHttpServer(
                         nowMillis = now,
                     )
                     writeJson(output, if (result.optBoolean("ok")) 200 else 400, result)
+                }
+
+                method == "POST" && uri == "/api/call/start" -> {
+                    val payload = parseJson(body)
+                    val offer = payload.optJSONObject("offer")
+                    val result = callHub.start(
+                        callerRaw = account,
+                        calleeRaw = payload.optString("target"),
+                        kindRaw = payload.optString("kind"),
+                        offerTypeRaw = offer?.optString("type").orEmpty(),
+                        offerSdpRaw = offer?.optString("sdp").orEmpty(),
+                        accounts = accounts,
+                        nowMillis = now,
+                    )
+                    writeJson(output, if (result.optBoolean("ok")) 200 else 409, result)
+                }
+
+                method == "POST" && uri == "/api/call/answer" -> {
+                    val payload = parseJson(body)
+                    val answer = payload.optJSONObject("answer")
+                    val result = callHub.answer(
+                        accountRaw = account,
+                        callIdRaw = payload.optString("callId"),
+                        answerTypeRaw = answer?.optString("type").orEmpty(),
+                        answerSdpRaw = answer?.optString("sdp").orEmpty(),
+                        accounts = accounts,
+                        nowMillis = now,
+                    )
+                    writeJson(output, if (result.optBoolean("ok")) 200 else 409, result)
+                }
+
+                method == "POST" && uri == "/api/call/ice" -> {
+                    val payload = parseJson(body)
+                    val result = callHub.ice(
+                        accountRaw = account,
+                        callIdRaw = payload.optString("callId"),
+                        candidate = payload.optJSONObject("candidate"),
+                        accounts = accounts,
+                        nowMillis = now,
+                    )
+                    writeJson(output, if (result.optBoolean("ok")) 200 else 403, result)
+                }
+
+                method == "POST" && uri == "/api/call/reject" -> {
+                    val payload = parseJson(body)
+                    val result = callHub.reject(
+                        accountRaw = account,
+                        callIdRaw = payload.optString("callId"),
+                        accounts = accounts,
+                        nowMillis = now,
+                    )
+                    writeJson(output, if (result.optBoolean("ok")) 200 else 409, result)
+                }
+
+                method == "POST" && uri == "/api/call/end" -> {
+                    val payload = parseJson(body)
+                    val result = callHub.end(
+                        accountRaw = account,
+                        callIdRaw = payload.optString("callId"),
+                        accounts = accounts,
+                        nowMillis = now,
+                    )
+                    writeJson(output, if (result.optBoolean("ok")) 200 else 403, result)
+                }
+
+                method == "GET" && uri == "/api/call/poll" -> {
+                    val result = callHub.poll(
+                        accountRaw = account,
+                        afterSequence = query["after"]?.toLongOrNull() ?: 0L,
+                        accounts = accounts,
+                        nowMillis = now,
+                    )
+                    writeJson(output, if (result.optBoolean("ok")) 200 else 403, result)
                 }
 
                 method == "POST" && uri == "/api/heartbeat" -> {
