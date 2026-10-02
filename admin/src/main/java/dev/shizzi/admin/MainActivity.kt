@@ -96,7 +96,7 @@ class MainActivity : Activity() {
         root.removeAllViews()
         title("Shizzi Admin")
         info(
-            "Admin associé à Shizzi 0.4.3.1 Media. " +
+            "Administration distante Shizzi. " +
                 "Connectez ce téléphone au Wi-Fi Shizzi à administrer.",
         )
         if (message.isNotBlank()) info(message)
@@ -186,7 +186,10 @@ class MainActivity : Activity() {
             state.optJSONArray("vouchers") ?: JSONArray(),
         )
         renderDevices(traffic.optJSONArray("portalAuthorizations") ?: JSONArray())
-        renderMediaStatus()
+        renderMediaManagement(
+            state.optJSONObject("media") ?: JSONObject(),
+            state.optJSONArray("accounts") ?: JSONArray(),
+        )
         renderPortal(state.optJSONObject("portal") ?: JSONObject())
         renderAdminCredentials(state.optJSONObject("remoteAdmin") ?: JSONObject())
         renderDiagnostics(traffic)
@@ -396,61 +399,321 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun renderMediaStatus() {
-        section("Shizzi Media")
-        val mediaStatus = TextView(this).apply {
-            text = "Détection du serveur Media…"
-            textSize = 14f
-            setPadding(0, dp(4), 0, dp(8))
-        }
-        root.addView(mediaStatus, full())
 
-        fun probe() {
-            mediaStatus.text = "Détection du serveur Media…"
-            runNetwork {
-                val wifi = boundWifi ?: run {
-                    runOnUiThread { mediaStatus.text = "Aucun Wi-Fi Shizzi connecté." }
-                    return@runNetwork
-                }
-                val found = mediaCandidates(wifi).firstOrNull { base ->
-                    runCatching {
-                        val connection = wifi.openConnection(URL(base + "health")) as HttpURLConnection
-                        connection.connectTimeout = 1_000
-                        connection.readTimeout = 1_000
-                        connection.useCaches = false
-                        val ok = connection.responseCode == 200
-                        connection.disconnect()
-                        ok
-                    }.getOrDefault(false)
-                }
-                runOnUiThread {
-                    mediaStatus.text = if (found == null) {
-                        "Serveur Media indisponible ou désactivé sur le routeur."
-                    } else {
-                        "Serveur Media actif : $found"
-                    }
-                    if (found != null) {
-                        button("Ouvrir Shizzi Media") {
-                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(found)))
-                        }
-                    }
+    private fun renderMediaManagement(media: JSONObject, accounts: JSONArray) {
+        section("Shizzi Media")
+
+        val enabled = media.optBoolean("enabled", false)
+        val summary = media.optJSONObject("summary") ?: JSONObject()
+        val folders = media.optJSONArray("folders") ?: JSONArray()
+        val maxFolders = media.optInt("maxFolders", 10)
+
+        info(
+            (if (enabled) "Serveur Media : ACTIF" else "Serveur Media : ARRÊTÉ") +
+                "\nIndex : " + summary.optInt("total") + " fichier(s)" +
+                " · " + summary.optInt("films") + " films" +
+                " · " + summary.optInt("series") + " séries" +
+                " · " + summary.optInt("music") + " musiques" +
+                "\nDossiers : " + folders.length() + "/" + maxFolders,
+        )
+
+        val serverRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        serverRow.addView(
+            makeButton(if (enabled) "Désactiver Media" else "Activer Media") {
+                command("media.enable", JSONObject().put("enabled", !enabled))
+            },
+            weighted(),
+        )
+        serverRow.addView(
+            makeButton("Scanner Media") {
+                command("media.scan", JSONObject())
+            },
+            weighted(),
+        )
+        root.addView(serverRow)
+
+        if (folders.length() < maxFolders) {
+            button("Ajouter un dossier Media") {
+                prompt("Nom du dossier", "Dossier Media") { value ->
+                    command(
+                        "media.folder.create",
+                        JSONObject()
+                            .put("name", value)
+                            .put("kind", "films"),
+                    )
                 }
             }
         }
 
-        button("Tester Shizzi Media") { probe() }
-        info("Le choix des dossiers Films / Séries / Musique reste volontairement effectué sur le téléphone routeur.")
-        probe()
+        for (i in 0 until folders.length()) {
+            val folder = folders.optJSONObject(i) ?: continue
+            val id = folder.optString("id")
+            val name = folder.optString("name").ifBlank { "Dossier Media" }
+            val kind = folder.optString("kind", "films")
+            val folderEnabled = folder.optBoolean("enabled", true)
+            val allowed = folder.optJSONArray("allowedAccounts") ?: JSONArray()
+            val treeUri = folder.optString("treeUri")
+            val accessText = if (allowed.length() == 0) {
+                "Tous les comptes"
+            } else {
+                val labels = mutableListOf<String>()
+                for (index in 0 until allowed.length()) {
+                    val number = allowed.optString(index)
+                    labels += accountLabel(accounts, number)
+                }
+                labels.joinToString(", ")
+            }
+
+            info(
+                "$name — ${mediaKindLabel(kind)}" +
+                    "\n" + (if (folderEnabled) "Actif" else "Désactivé") +
+                    " · Accès : $accessText" +
+                    "\nSource : " + mediaSourceLabel(treeUri),
+            )
+
+            val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            row1.addView(
+                makeButton("Accès") { chooseMediaAccess(folder, accounts) },
+                weighted(),
+            )
+            row1.addView(
+                makeButton("Source") { browseMediaSource(folder, "") },
+                weighted(),
+            )
+            row1.addView(
+                makeButton(if (folderEnabled) "Désactiver" else "Activer") {
+                    command(
+                        "media.folder.update",
+                        mediaFolderUpdateParams(
+                            folder,
+                            enabled = !folderEnabled,
+                        ),
+                    )
+                },
+                weighted(),
+            )
+            root.addView(row1)
+
+            val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            row2.addView(
+                makeButton("Renommer") {
+                    prompt("Nouveau nom", name) { value ->
+                        command(
+                            "media.folder.update",
+                            mediaFolderUpdateParams(folder, name = value),
+                        )
+                    }
+                },
+                weighted(),
+            )
+            row2.addView(
+                makeButton("Type → ${mediaKindLabel(nextMediaKind(kind))}") {
+                    command(
+                        "media.folder.update",
+                        mediaFolderUpdateParams(folder, kind = nextMediaKind(kind)),
+                    )
+                },
+                weighted(),
+            )
+            row2.addView(
+                makeButton("Supprimer") {
+                    confirm("Supprimer le dossier $name ?") {
+                        command("media.folder.delete", JSONObject().put("id", id))
+                    }
+                },
+                weighted(),
+            )
+            root.addView(row2)
+            divider()
+        }
+
+        info(
+            "Les sources proposées ici sont les emplacements déjà autorisés par Android au routeur. " +
+                "Une nouvelle autorisation système SAF reste la seule opération qui peut exiger le téléphone routeur.",
+        )
     }
 
-    private fun mediaCandidates(network: Network): List<String> {
-        val routes = connectivity.getLinkProperties(network)?.routes.orEmpty()
-        return routes
-            .sortedByDescending { route -> route.isDefaultRoute }
-            .mapNotNull { route -> route.gateway as? Inet4Address }
-            .mapNotNull { gateway -> gateway.hostAddress }
-            .distinct()
-            .map { gateway -> "http://$gateway:8088/" }
+    private fun mediaFolderUpdateParams(
+        folder: JSONObject,
+        name: String = folder.optString("name"),
+        kind: String = folder.optString("kind", "films"),
+        enabled: Boolean = folder.optBoolean("enabled", true),
+        allowedAccounts: JSONArray = folder.optJSONArray("allowedAccounts") ?: JSONArray(),
+    ): JSONObject = JSONObject()
+        .put("id", folder.optString("id"))
+        .put("name", name)
+        .put("kind", kind)
+        .put("enabled", enabled)
+        .put("allowedAccounts", allowedAccounts)
+
+    private fun chooseMediaAccess(folder: JSONObject, accounts: JSONArray) {
+        val folderName = folder.optString("name").ifBlank { "Dossier Media" }
+        AlertDialog.Builder(this)
+            .setTitle("Accès · $folderName")
+            .setItems(arrayOf("Tous les comptes", "Choisir certains comptes…")) { _, which ->
+                if (which == 0) {
+                    command(
+                        "media.folder.update",
+                        mediaFolderUpdateParams(folder, allowedAccounts = JSONArray()),
+                    )
+                } else {
+                    chooseSpecificMediaAccounts(folder, accounts)
+                }
+            }
+            .setNegativeButton("Annuler", null)
+            .show()
+    }
+
+    private fun chooseSpecificMediaAccounts(folder: JSONObject, accounts: JSONArray) {
+        if (accounts.length() == 0) {
+            toast("Aucun compte Shizzi disponible.")
+            return
+        }
+
+        val allowed = folder.optJSONArray("allowedAccounts") ?: JSONArray()
+        val selectedNumbers = mutableSetOf<String>()
+        for (index in 0 until allowed.length()) {
+            allowed.optString(index).takeIf { it.isNotBlank() }?.let(selectedNumbers::add)
+        }
+
+        val numbers = mutableListOf<String>()
+        val labels = mutableListOf<String>()
+        for (index in 0 until accounts.length()) {
+            val account = accounts.optJSONObject(index) ?: continue
+            val number = account.optString("number")
+            if (number.isBlank()) continue
+            numbers += number
+            val suffix = if (account.optBoolean("enabled", true)) "" else " · suspendu"
+            labels += accountLabel(accounts, number) + suffix
+        }
+
+        val checked = BooleanArray(numbers.size) { numbers[it] in selectedNumbers }
+        AlertDialog.Builder(this)
+            .setTitle("Comptes autorisés")
+            .setMultiChoiceItems(labels.toTypedArray(), checked) { _, which, isChecked ->
+                checked[which] = isChecked
+            }
+            .setPositiveButton("Appliquer") { _, _ ->
+                val chosen = JSONArray()
+                numbers.indices
+                    .filter { checked[it] }
+                    .forEach { chosen.put(numbers[it]) }
+                if (chosen.length() == 0) {
+                    toast("Choisis au moins un compte, ou utilise « Tous les comptes ».")
+                } else {
+                    command(
+                        "media.folder.update",
+                        mediaFolderUpdateParams(folder, allowedAccounts = chosen),
+                    )
+                }
+            }
+            .setNegativeButton("Annuler", null)
+            .show()
+    }
+
+    private fun browseMediaSource(folder: JSONObject, parentUri: String) {
+        commandResult(
+            action = "media.browse",
+            params = JSONObject().put("parentUri", parentUri),
+            refreshOnSuccess = false,
+        ) { finished ->
+            val payload = finished.optJSONObject("payload") ?: JSONObject()
+            showMediaSourceDialog(folder, payload)
+        }
+    }
+
+    private fun showMediaSourceDialog(folder: JSONObject, payload: JSONObject) {
+        val currentUri = payload.optString("currentUri")
+        val currentName = payload.optString("currentName").ifBlank { "ce dossier" }
+        val entries = payload.optJSONArray("entries") ?: JSONArray()
+
+        val labels = mutableListOf<String>()
+        val uris = mutableListOf<String>()
+        if (currentUri.isNotBlank()) {
+            labels += "✓ Utiliser : $currentName"
+            uris += currentUri
+        }
+        for (index in 0 until entries.length()) {
+            val item = entries.optJSONObject(index) ?: continue
+            labels += "📁 " + item.optString("name").ifBlank { "Dossier" }
+            uris += item.optString("uri")
+        }
+
+        if (labels.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle("Source Media")
+                .setMessage(
+                    "Aucun emplacement Android autorisé n’est disponible. " +
+                        "Il faut autoriser au moins une fois un dossier depuis le téléphone routeur.",
+                )
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Choisir la source")
+            .setItems(labels.toTypedArray()) { _, which ->
+                val chosenUri = uris[which]
+                if (currentUri.isNotBlank() && which == 0) {
+                    command(
+                        "media.folder.source",
+                        JSONObject()
+                            .put("id", folder.optString("id"))
+                            .put("treeUri", chosenUri),
+                    )
+                } else {
+                    browseMediaSource(folder, chosenUri)
+                }
+            }
+            .setNegativeButton("Annuler", null)
+
+        if (folder.optString("treeUri").isNotBlank()) {
+            dialog.setNeutralButton("Retirer la source") { _, _ ->
+                val folderName = folder.optString("name")
+                confirm("Retirer la source de $folderName ?") {
+                    command(
+                        "media.folder.source",
+                        JSONObject()
+                            .put("id", folder.optString("id"))
+                            .put("treeUri", ""),
+                    )
+                }
+            }
+        }
+        dialog.show()
+    }
+
+    private fun accountLabel(accounts: JSONArray, number: String): String {
+        for (index in 0 until accounts.length()) {
+            val account = accounts.optJSONObject(index) ?: continue
+            if (account.optString("number") != number) continue
+            val name = account.optString("name")
+            return if (name.isBlank()) number else "$name · $number"
+        }
+        return "$number · compte introuvable"
+    }
+
+    private fun nextMediaKind(kind: String): String = when (kind.lowercase()) {
+        "films" -> "series"
+        "series" -> "music"
+        else -> "films"
+    }
+
+    private fun mediaKindLabel(kind: String): String = when (kind.lowercase()) {
+        "series" -> "Séries"
+        "music" -> "Musique"
+        else -> "Films"
+    }
+
+    private fun mediaSourceLabel(raw: String): String {
+        if (raw.isBlank() || raw == "null") return "Non configurée"
+        return runCatching {
+            Uri.parse(raw).lastPathSegment
+                ?.substringAfterLast(':')
+                ?.replace("%2F", "/")
+                ?.ifBlank { null }
+        }.getOrNull() ?: "Source Android autorisée"
     }
 
     private fun renderPortal(portal: JSONObject) {
@@ -553,6 +816,15 @@ class MainActivity : Activity() {
     }
 
     private fun command(action: String, params: JSONObject) {
+        commandResult(action, params, refreshOnSuccess = true)
+    }
+
+    private fun commandResult(
+        action: String,
+        params: JSONObject,
+        refreshOnSuccess: Boolean,
+        onSuccess: ((JSONObject) -> Unit)? = null,
+    ) {
         runNetwork {
             val start = request(
                 "POST",
@@ -562,7 +834,7 @@ class MainActivity : Activity() {
             if (!start.optBoolean("ok")) error(start.optString("message", "Commande refusée."))
             val id = start.getString("id")
             var result: JSONObject? = null
-            for (attempt in 0 until 20) {
+            for (attempt in 0 until 30) {
                 Thread.sleep(300)
                 val candidate = get("/result?id=" + URLEncoder.encode(id, "UTF-8"))
                 if (!candidate.optBoolean("pending", true)) {
@@ -571,11 +843,13 @@ class MainActivity : Activity() {
                 }
             }
             val finished = result ?: error("La commande est toujours en attente.")
+            val success = finished.optBoolean("success")
             val message = finished.optString("message")
             runOnUiThread {
-                toast(message.ifBlank { if (finished.optBoolean("success")) "OK" else "Échec" })
+                toast(message.ifBlank { if (success) "OK" else "Échec" })
+                if (success) onSuccess?.invoke(finished)
             }
-            if (finished.optBoolean("success")) {
+            if (success && refreshOnSuccess) {
                 Thread.sleep(250)
                 refresh()
             }

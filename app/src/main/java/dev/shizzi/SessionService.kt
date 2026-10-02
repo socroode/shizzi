@@ -208,7 +208,12 @@ class SessionService : Service() {
                     }
                     if (freshAdminCommands.isNotEmpty()) {
                         pendingAdminResults = pendingAdminResults + freshAdminCommands.map {
-                            processRemoteAdminCommand(it, store, now)
+                            processRemoteAdminCommand(
+                                it,
+                                store,
+                                now,
+                                this@SessionService,
+                            )
                         }
                     }
 
@@ -231,6 +236,9 @@ class SessionService : Service() {
                             pendingResults,
                             pendingAdminResults,
                             clientAppDistribution.info.takeIf { it.available },
+                            MediaPrefs.isEnabled(this@SessionService),
+                            MediaFolderStore.load(this@SessionService),
+                            MediaIndex.summary(applicationContext),
                         )
                         pushedRevision = revision
                         pushedEpoch = ledger.epoch

@@ -517,6 +517,34 @@ func adminProof(passwordHash, nonce string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+func adminActionAllowed(action string) bool {
+	switch action {
+	case "account.create",
+		"account.rename",
+		"account.pin",
+		"account.enable",
+		"account.delete",
+		"account.disconnect",
+		"session.disconnect",
+		"offer.upsert",
+		"offer.delete",
+		"voucher.generate",
+		"voucher.enable",
+		"portal.set",
+		"admin.credentials",
+		"media.enable",
+		"media.folder.create",
+		"media.folder.update",
+		"media.folder.delete",
+		"media.folder.source",
+		"media.scan",
+		"media.browse":
+		return true
+	default:
+		return false
+	}
+}
+
 func writeJSONStatus(conn net.Conn, status string, payload any) {
 	body, _ := json.Marshal(payload)
 	header := fmt.Sprintf(
@@ -657,22 +685,7 @@ func (m *TrafficManager) serveAdminAPI(conn net.Conn, request *http.Request, cli
 			writeJSONStatus(conn, "400 Bad Request", map[string]any{"ok": false, "message": "JSON invalide."})
 			return true
 		}
-		allowed := map[string]bool{
-			"account.create": true,
-			"account.rename": true,
-			"account.pin": true,
-			"account.enable": true,
-			"account.delete": true,
-			"account.disconnect": true,
-			"session.disconnect": true,
-			"offer.upsert": true,
-			"offer.delete": true,
-			"voucher.generate": true,
-			"voucher.enable": true,
-			"portal.set": true,
-			"admin.credentials": true,
-		}
-		if !allowed[payload.Action] {
+		if !adminActionAllowed(payload.Action) {
 			writeJSONStatus(conn, "403 Forbidden", map[string]any{
 				"ok": false, "message": "Commande interdite.",
 			})
@@ -1121,6 +1134,9 @@ func (m *TrafficManager) serveMediaProxy(
 				return
 			}
 		}
+	}
+	if _, err := fmt.Fprintf(local, "X-Shizzi-Media-Account: %s\r\n", accountNumber); err != nil {
+		return
 	}
 	if _, err := io.WriteString(local, "Connection: close\r\n\r\n"); err != nil {
 		return

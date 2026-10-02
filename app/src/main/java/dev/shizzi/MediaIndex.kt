@@ -18,7 +18,7 @@ data class MediaIndexSummary(
 
 object MediaIndex {
     private const val FILE_NAME = "shizzi-media-index.json"
-    private const val FORMAT_VERSION = 1
+    private const val FORMAT_VERSION = 2
 
     private data class Cache(
         val modifiedAt: Long,
@@ -32,6 +32,9 @@ object MediaIndex {
         val all = load(context).entries
         return if (kind == null) all else all.filter { it.kind == kind }
     }
+
+    fun entriesForFolder(context: Context, folderId: String): List<MediaEntry> =
+        load(context).entries.filter { it.folderId == folderId }
 
     fun find(context: Context, id: String?): MediaEntry? {
         if (id.isNullOrBlank()) return null
@@ -82,6 +85,12 @@ object MediaIndex {
         write(context, remaining)
     }
 
+    @Synchronized
+    fun removeFolder(context: Context, folderId: String) {
+        val remaining = load(context).entries.filterNot { it.folderId == folderId }
+        write(context, remaining)
+    }
+
     private fun load(context: Context): Cache {
         val file = indexFile(context)
         if (!file.isFile) return Cache(0L, emptyList(), 0L)
@@ -91,7 +100,8 @@ object MediaIndex {
 
         val parsed = runCatching {
             val root = JSONObject(file.readText())
-            if (root.optInt("version", 0) != FORMAT_VERSION) {
+            val version = root.optInt("version", 0)
+            if (version !in 1..FORMAT_VERSION) {
                 return@runCatching Cache(modified, emptyList(), 0L)
             }
             val indexedAt = root.optLong("indexedAt", 0L)
@@ -110,6 +120,10 @@ object MediaIndex {
                             uri = Uri.parse(uri),
                             mimeType = item.optString("mimeType", "application/octet-stream"),
                             size = item.optLong("size", 0L),
+                            folderId = item.optString("folderId")
+                                .ifBlank { "legacy-${kind.key}" },
+                            folderName = item.optString("folderName")
+                                .ifBlank { kind.label },
                         ),
                     )
                 }
@@ -141,6 +155,8 @@ object MediaIndex {
                                 put("uri", entry.uri.toString())
                                 put("mimeType", entry.mimeType)
                                 put("size", entry.size)
+                                put("folderId", entry.folderId)
+                                put("folderName", entry.folderName)
                             },
                         )
                     }

@@ -42,6 +42,8 @@ data class MediaEntry(
     val uri: Uri,
     val mimeType: String,
     val size: Long,
+    val folderId: String = "",
+    val folderName: String = "",
 )
 
 object MediaPrefs {
@@ -92,9 +94,51 @@ object MediaCatalog {
         kind: MediaKind? = null,
         onProgress: ((ScanProgress) -> Unit)? = null,
     ): List<MediaEntry> {
+        val configured = MediaFolderStore.load(context)
+            .filter { it.enabled && it.uri() != null && (kind == null || it.kind == kind) }
+
+        if (MediaFolderStore.isConfigured(context)) {
+            return configured.flatMap { scanFolder(context, it, onProgress) }
+                .sortedWith(
+                    compareBy<MediaEntry>(
+                        { it.folderName.lowercase() },
+                        { it.relativePath.lowercase() },
+                    ),
+                )
+        }
+
         val kinds = kind?.let(::listOf) ?: MediaKind.entries
         return kinds.flatMap { scanKind(context, it, onProgress) }
             .sortedWith(compareBy<MediaEntry>({ it.kind.ordinal }, { it.relativePath.lowercase() }))
+    }
+
+    private fun scanFolder(
+        context: Context,
+        folder: MediaFolderConfig,
+        onProgress: ((ScanProgress) -> Unit)?,
+    ): List<MediaEntry> {
+        val tree = folder.uri() ?: return emptyList()
+
+        val fast = runCatching {
+            scanWithDocumentsContract(
+                context = context,
+                kind = folder.kind,
+                treeUri = tree,
+                onProgress = onProgress,
+                folderId = folder.id,
+                folderName = folder.name,
+            )
+        }.getOrNull()
+        if (fast != null) return fast
+
+        return scanWithDocumentFile(
+            context = context,
+            kind = folder.kind,
+            treeUri = tree,
+            onProgress = onProgress,
+            folderId = folder.id,
+            folderName = folder.name,
+        )
     }
 
     private fun scanKind(
@@ -107,12 +151,26 @@ object MediaCatalog {
         // Fast path: query children in batches through Android's DocumentsProvider.
         // This avoids DocumentFile performing several binder calls for every file.
         val fast = runCatching {
-            scanWithDocumentsContract(context, kind, tree, onProgress)
+            scanWithDocumentsContract(
+                context = context,
+                kind = kind,
+                treeUri = tree,
+                onProgress = onProgress,
+                folderId = "legacy-${kind.key}",
+                folderName = kind.label,
+            )
         }.getOrNull()
         if (fast != null) return fast
 
         // Compatibility fallback for unusual OEM/cloud providers.
-        return scanWithDocumentFile(context, kind, tree, onProgress)
+        return scanWithDocumentFile(
+            context = context,
+            kind = kind,
+            treeUri = tree,
+            onProgress = onProgress,
+            folderId = "legacy-${kind.key}",
+            folderName = kind.label,
+        )
     }
 
     private data class PendingDirectory(
@@ -125,9 +183,12 @@ object MediaCatalog {
         kind: MediaKind,
         treeUri: Uri,
         onProgress: ((ScanProgress) -> Unit)?,
+        folderId: String,
+        folderName: String,
     ): List<MediaEntry> {
         val resolver = context.contentResolver
-        val rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
+        val rootDocumentId = runCatching { DocumentsContract.getDocumentId(treeUri) }
+            .getOrElse { DocumentsContract.getTreeDocumentId(treeUri) }
         val pending = ArrayDeque<PendingDirectory>()
         pending.add(PendingDirectory(rootDocumentId, ""))
 
@@ -185,6 +246,8 @@ object MediaCatalog {
                         uri = documentUri,
                         mimeType = mime ?: inferMime(name) ?: "application/octet-stream",
                         size = size,
+                        folderId = folderId,
+                        folderName = folderName,
                     )
 
                     if (out.size == 1 || out.size - lastProgressFiles >= PROGRESS_STEP) {
@@ -218,6 +281,8 @@ object MediaCatalog {
         kind: MediaKind,
         treeUri: Uri,
         onProgress: ((ScanProgress) -> Unit)?,
+        folderId: String,
+        folderName: String,
     ): List<MediaEntry> {
         val root = DocumentFile.fromTreeUri(context, treeUri) ?: return emptyList()
         if (!root.exists() || !root.isDirectory) return emptyList()
@@ -244,6 +309,8 @@ object MediaCatalog {
                             uri = child.uri,
                             mimeType = mime ?: "application/octet-stream",
                             size = child.length(),
+                            folderId = folderId,
+                            folderName = folderName,
                         )
                         if (out.size == 1 || out.size % PROGRESS_STEP == 0) {
                             onProgress?.invoke(

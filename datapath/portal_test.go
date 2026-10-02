@@ -239,3 +239,38 @@ func TestMediaAccessFollowsAccountSession(t *testing.T) {
 		t.Fatal("media still available after logout")
 	}
 }
+
+
+func TestAdminActionAllowlistKeepsRouterEngineLocal(t *testing.T) {
+	allowed := []string{
+		"account.create",
+		"voucher.generate",
+		"media.enable",
+		"media.folder.create",
+		"media.folder.update",
+		"media.folder.delete",
+		"media.folder.source",
+		"media.scan",
+		"media.browse",
+	}
+	for _, action := range allowed {
+		if !adminActionAllowed(action) {
+			t.Fatalf("expected admin action %q to be allowed", action)
+		}
+	}
+
+	forbidden := []string{
+		"hotspot.start",
+		"hotspot.stop",
+		"hotspot.band",
+		"shizzi.start",
+		"shizzi.stop",
+		"tun.restart",
+		"watchdog.configure",
+	}
+	for _, action := range forbidden {
+		if adminActionAllowed(action) {
+			t.Fatalf("router engine action %q must remain local-only", action)
+		}
+	}
+}
