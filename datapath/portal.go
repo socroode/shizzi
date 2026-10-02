@@ -671,6 +671,13 @@ func (m *TrafficManager) serveAdminAPI(conn net.Conn, request *http.Request, cli
 			"voucher.enable": true,
 			"portal.set": true,
 			"admin.credentials": true,
+			"media.enable": true,
+			"media.folder.create": true,
+			"media.folder.update": true,
+			"media.folder.delete": true,
+			"media.folder.source": true,
+			"media.scan": true,
+			"media.browse": true,
 		}
 		if !allowed[payload.Action] {
 			writeJSONStatus(conn, "403 Forbidden", map[string]any{
