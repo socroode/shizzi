@@ -72,6 +72,9 @@ jobs:
       - name: Messaging regression
         run: ./gradlew :app:testDebugUnitTest --tests dev.shizzi.MessagingStoreTest --no-daemon
 
+      - name: Offline Shizzi+ Media fullscreen regression
+        run: ./gradlew :conso:testDebugUnitTest --tests dev.shizzi.conso.LocalMediaWebSupportTest --no-daemon
+
       - name: Shizzi+ resumable download range tests
         run: ./gradlew :app:testDebugUnitTest --tests dev.shizzi.ClientAppDownloadRangeTest --no-daemon
 
@@ -117,8 +120,8 @@ jobs:
           CONSO_VERSION=$(echo "$CONSO_BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
           CONSO_CODE=$(echo "$CONSO_BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
           test "$CONSO_PACKAGE" = "dev.shizzi.conso"
-          test "$CONSO_VERSION" = "0.2.6-test"
-          test "$CONSO_CODE" = "10"
+          test "$CONSO_VERSION" = "0.2.7-test"
+          test "$CONSO_CODE" = "11"
           CONSO_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$CONSO" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
           test "$CONSO_CERT" = "$EXPECTED_NORM"
 
@@ -128,8 +131,8 @@ jobs:
           EMBEDDED_BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$EMBEDDED")
           EMBEDDED_VERSION=$(echo "$EMBEDDED_BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
           EMBEDDED_CODE=$(echo "$EMBEDDED_BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
-          test "$EMBEDDED_VERSION" = "0.2.6-test"
-          test "$EMBEDDED_CODE" = "10"
+          test "$EMBEDDED_VERSION" = "0.2.7-test"
+          test "$EMBEDDED_CODE" = "11"
           EMBEDDED_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$EMBEDDED" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
           test "$EMBEDDED_CERT" = "$EXPECTED_NORM"
 
@@ -137,9 +140,9 @@ jobs:
         run: |
           mkdir -p release-output
           cp app/build/outputs/apk/release/app-release.apk release-output/Shizzi-Hotspot-0.4.3.9-Calls-Test.apk
-          cp conso/build/outputs/apk/release/conso-release.apk release-output/Shizzi-Plus-0.2.6-Calls-Test.apk
+          cp conso/build/outputs/apk/release/conso-release.apk release-output/Shizzi-Plus-0.2.7-Media-Fullscreen-Test.apk
           cd release-output
-          sha256sum Shizzi-Hotspot-0.4.3.9-Calls-Test.apk Shizzi-Plus-0.2.6-Calls-Test.apk > SHA256SUMS.txt
+          sha256sum Shizzi-Hotspot-0.4.3.9-Calls-Test.apk Shizzi-Plus-0.2.7-Media-Fullscreen-Test.apk > SHA256SUMS.txt
 
       - name: Upload signed calls test APKs
         uses: actions/upload-artifact@v5
@@ -147,7 +150,7 @@ jobs:
           name: Shizzi-0.4.3-calls-test
           path: |
             release-output/Shizzi-Hotspot-0.4.3.9-Calls-Test.apk
-            release-output/Shizzi-Plus-0.2.6-Calls-Test.apk
+            release-output/Shizzi-Plus-0.2.7-Media-Fullscreen-Test.apk
             release-output/SHA256SUMS.txt
           if-no-files-found: error
 
