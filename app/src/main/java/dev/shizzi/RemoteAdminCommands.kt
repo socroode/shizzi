@@ -206,6 +206,68 @@ fun processRemoteAdminCommand(
                 }
             }
 
+
+            "media.folder.source" -> {
+                val id = params.optString("id")
+                val current = MediaFolderStore.byId(context, id)
+                val rawUri = params.optString("treeUri").trim()
+                if (current == null) {
+                    AdminCommandResult(command.id, false, "Dossier Media introuvable.")
+                } else if (rawUri.isBlank()) {
+                    MediaFolderStore.upsert(context, current.copy(treeUri = null))
+                    MediaIndex.removeFolder(context.applicationContext, id)
+                    MediaServerService.restart(context)
+                    AdminCommandResult(command.id, true, "Source Media retirée.")
+                } else {
+                    val uri = android.net.Uri.parse(rawUri)
+                    if (!MediaRemoteSources.isAllowed(context, uri)) {
+                        AdminCommandResult(
+                            command.id,
+                            false,
+                            "Cette source n’a pas été autorisée par Android sur le routeur.",
+                        )
+                    } else {
+                        MediaFolderStore.upsert(context, current.copy(treeUri = rawUri))
+                        MediaIndex.removeFolder(context.applicationContext, id)
+                        MediaServerService.restart(context)
+                        kotlin.concurrent.thread(name = "shizzi-media-admin-source-scan") {
+                            runCatching {
+                                MediaIndex.rebuild(context.applicationContext)
+                                if (MediaPrefs.isEnabled(context)) {
+                                    MediaServerService.restart(context.applicationContext)
+                                }
+                            }
+                        }
+                        AdminCommandResult(command.id, true, "Source Media appliquée. Scan lancé.")
+                    }
+                }
+            }
+
+            "media.scan" -> {
+                kotlin.concurrent.thread(name = "shizzi-media-admin-scan") {
+                    runCatching {
+                        MediaIndex.rebuild(context.applicationContext)
+                        if (MediaPrefs.isEnabled(context)) {
+                            MediaServerService.restart(context.applicationContext)
+                        }
+                    }
+                }
+                AdminCommandResult(command.id, true, "Scan Media lancé.")
+            }
+
+            "media.browse" -> {
+                val payload = MediaRemoteSources.browse(
+                    context,
+                    params.optString("parentUri").takeIf { it.isNotBlank() },
+                )
+                AdminCommandResult(
+                    command.id,
+                    true,
+                    "Sources Media disponibles.",
+                    payload.toString(),
+                )
+            }
+
             else -> AdminCommandResult(
                 command.id,
                 false,
