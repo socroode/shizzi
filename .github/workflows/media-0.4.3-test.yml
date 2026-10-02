@@ -66,6 +66,9 @@ jobs:
       - name: Virtual Android router loopback test
         run: ./gradlew :app:testDebugUnitTest --tests dev.shizzi.MediaLoopbackTest --no-daemon
 
+      - name: Virtual automatic hotspot startup test
+        run: ./gradlew :app:testDebugUnitTest --tests dev.shizzi.DownstreamStartupTest --no-daemon
+
       - name: Virtual Media access test from 1 to 8 Android clients
         run: ./gradlew :app:testDebugUnitTest --tests dev.shizzi.MediaFolderAccessTest --no-daemon
 
