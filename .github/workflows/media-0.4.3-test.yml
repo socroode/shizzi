@@ -2,7 +2,7 @@ name: Shizzi 0.4.3 Media test
 
 on:
   push:
-    branches: [feature/media-0.4.3]
+    branches: [feature/media-0.4.3, test/media-folders-access-0.4.3.9]
   workflow_dispatch:
 
 permissions:
@@ -65,6 +65,9 @@ jobs:
 
       - name: Virtual Android router loopback test
         run: ./gradlew :app:testDebugUnitTest --tests dev.shizzi.MediaLoopbackTest --no-daemon
+
+      - name: Virtual Media access test from 1 to 8 Android clients
+        run: ./gradlew :app:testDebugUnitTest --tests dev.shizzi.MediaFolderAccessTest --no-daemon
 
       - name: Virtual Android client through secured Media proxy
         run: cd datapath && go test -run '^TestAuthenticatedMediaRequestReachesLoopbackBackend$' ./...
