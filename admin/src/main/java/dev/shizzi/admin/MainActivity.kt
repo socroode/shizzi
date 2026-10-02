@@ -96,7 +96,7 @@ class MainActivity : Activity() {
         root.removeAllViews()
         title("Shizzi Admin")
         info(
-            "Admin associé à Shizzi 0.4.3.1 Media. " +
+            "Administration distante Shizzi. " +
                 "Connectez ce téléphone au Wi-Fi Shizzi à administrer.",
         )
         if (message.isNotBlank()) info(message)
