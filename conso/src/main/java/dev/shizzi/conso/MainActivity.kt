@@ -9,7 +9,13 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.media.AudioManager
+import android.media.Ringtone
+import android.media.RingtoneManager
+import android.media.ToneGenerator
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -53,6 +59,24 @@ class MainActivity : Activity() {
     @Volatile private var secureChatActive = false
     private var chatBridgeInstalled = false
     private val chatBridge = ShizziNativeChatBridge()
+    private val callToneHandler = Handler(Looper.getMainLooper())
+    private var incomingRingtone: Ringtone? = null
+    private var outgoingTone: ToneGenerator? = null
+    private var ringbackPhaseOn = false
+    private val ringbackLoop = object : Runnable {
+        override fun run() {
+            val tone = outgoingTone ?: return
+            if (ringbackPhaseOn) {
+                tone.stopTone()
+                ringbackPhaseOn = false
+                callToneHandler.postDelayed(this, 2_500L)
+            } else {
+                tone.startTone(ToneGenerator.TONE_SUP_RINGTONE, 1_000)
+                ringbackPhaseOn = true
+                callToneHandler.postDelayed(this, 1_200L)
+            }
+        }
+    }
     private var wifiCallbackRegistered = false
     private val wifiNetworkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
@@ -376,6 +400,21 @@ class MainActivity : Activity() {
 
     private inner class ShizziNativeChatBridge {
         @JavascriptInterface
+        fun startIncomingRingtone() {
+            runOnUiThread { startIncomingCallAlert() }
+        }
+
+        @JavascriptInterface
+        fun startOutgoingRingback() {
+            runOnUiThread { startOutgoingCallTone() }
+        }
+
+        @JavascriptInterface
+        fun stopCallTone() {
+            runOnUiThread { stopAllCallTones() }
+        }
+
+        @JavascriptInterface
         fun request(path: String, method: String, body: String): String {
             if (!secureChatActive) {
                 return bridgeError("Messagerie Shizzi+ inactive.")
@@ -426,6 +465,39 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun startIncomingCallAlert() {
+        stopAllCallTones()
+        val uri = RingtoneManager.getActualDefaultRingtoneUri(this, RingtoneManager.TYPE_RINGTONE)
+            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+        incomingRingtone = RingtoneManager.getRingtone(this, uri)?.apply {
+            audioAttributes = android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            isLooping = true
+            play()
+        }
+    }
+
+    private fun startOutgoingCallTone() {
+        stopAllCallTones()
+        outgoingTone = ToneGenerator(AudioManager.STREAM_MUSIC, 72)
+        ringbackPhaseOn = false
+        callToneHandler.post(ringbackLoop)
+    }
+
+    private fun stopAllCallTones() {
+        callToneHandler.removeCallbacks(ringbackLoop)
+        ringbackPhaseOn = false
+
+        runCatching { incomingRingtone?.stop() }
+        incomingRingtone = null
+
+        runCatching { outgoingTone?.stopTone() }
+        runCatching { outgoingTone?.release() }
+        outgoingTone = null
+    }
+
     private fun bridgeError(message: String): String =
         JSONObject()
             .put("ok", false)
@@ -439,6 +511,7 @@ class MainActivity : Activity() {
     }
 
     private fun deactivateSecureChat() {
+        stopAllCallTones()
         secureChatActive = false
         if (chatBridgeInstalled && ::webView.isInitialized) {
             webView.removeJavascriptInterface("ShizziNativeBridge")
