@@ -73,7 +73,8 @@ class CallSignalingHub {
         val kind = ShizziCallKind.from(kindRaw)
             ?: return error("Type d'appel invalide.")
         val offerType = offerTypeRaw.trim().lowercase()
-        val offerSdp = offerSdpRaw.trim()
+        // SDP is syntax-sensitive: preserve it exactly as produced by WebRTC.
+        val offerSdp = offerSdpRaw
         if (offerType != "offer" || offerSdp.isBlank() || offerSdp.length > MAX_SDP_CHARS) {
             return error("Offre WebRTC invalide.")
         }
@@ -129,7 +130,8 @@ class CallSignalingHub {
         if (call.status != ShizziCallStatus.RINGING) return error("Cet appel n'est plus disponible.")
 
         val answerType = answerTypeRaw.trim().lowercase()
-        val answerSdp = answerSdpRaw.trim()
+        // Keep CRLF and the final line ending intact for Android WebRTC/WebView.
+        val answerSdp = answerSdpRaw
         if (answerType != "answer" || answerSdp.isBlank() || answerSdp.length > MAX_SDP_CHARS) {
             return error("Réponse WebRTC invalide.")
         }
