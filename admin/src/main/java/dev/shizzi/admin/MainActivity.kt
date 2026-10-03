@@ -9,6 +9,8 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
@@ -36,17 +38,37 @@ class MainActivity : Activity() {
 
     private lateinit var connectivity: ConnectivityManager
     private lateinit var root: LinearLayout
+    private lateinit var scroll: ScrollView
 
     private var boundWifi: Network? = null
     private var token: String = ""
     private var routerName: String = "Shizzi"
     private var lastState: JSONObject? = null
+    private var lastRenderedStateJson: String = ""
+    private var activityResumed = false
+    @Volatile private var refreshInFlight = false
+    private val refreshHandler = Handler(Looper.getMainLooper())
+    private val autoRefreshRunnable = object : Runnable {
+        override fun run() {
+            if (
+                AdminRefreshPolicy.shouldPoll(
+                    activityResumed = activityResumed,
+                    hasToken = token.isNotBlank(),
+                    hasWindowFocus = hasWindowFocus(),
+                    refreshInFlight = refreshInFlight,
+                )
+            ) {
+                refresh(manual = false)
+            }
+            scheduleAutoRefresh()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         connectivity = getSystemService(ConnectivityManager::class.java)
 
-        val scroll = ScrollView(this)
+        scroll = ScrollView(this)
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(20), dp(16), dp(40))
@@ -60,10 +82,26 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        activityResumed = true
         bindToWifi()
+        if (token.isNotBlank()) scheduleAutoRefresh(immediate = true)
+    }
+
+    override fun onPause() {
+        activityResumed = false
+        stopAutoRefresh()
+        super.onPause()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && activityResumed && token.isNotBlank()) {
+            scheduleAutoRefresh(immediate = true)
+        }
     }
 
     override fun onDestroy() {
+        stopAutoRefresh()
         if (boundWifi != null) {
             connectivity.bindProcessToNetwork(null)
             boundWifi = null
@@ -93,6 +131,8 @@ class MainActivity : Activity() {
     }
 
     private fun showLogin(message: String = "") {
+        stopAutoRefresh()
+        lastRenderedStateJson = ""
         root.removeAllViews()
         title("Shizzi Admin")
         info(
@@ -147,16 +187,56 @@ class MainActivity : Activity() {
             token = result.getString("token")
             routerName = result.optString("routerName", "Shizzi")
             refresh()
+            runOnUiThread { scheduleAutoRefresh() }
         }
     }
 
-    private fun refresh() {
-        runNetwork {
-            val response = get("/state")
-            if (!response.optBoolean("ok")) error("Session Admin expirée.")
-            lastState = response
-            runOnUiThread { showDashboard(response) }
+    private fun refresh(manual: Boolean = true) {
+        if (refreshInFlight) return
+        refreshInFlight = true
+        thread {
+            try {
+                val response = get("/state")
+                if (!response.optBoolean("ok")) {
+                    token = ""
+                    runOnUiThread { showLogin("Session Admin expirée.") }
+                    return@thread
+                }
+                lastState = response
+                val snapshot = response.toString()
+                runOnUiThread {
+                    val shouldRender = snapshot != lastRenderedStateJson &&
+                        (manual || hasWindowFocus())
+                    if (shouldRender) {
+                        val oldScrollY = scroll.scrollY
+                        showDashboard(response)
+                        lastRenderedStateJson = snapshot
+                        scroll.post { scroll.scrollTo(0, oldScrollY) }
+                    }
+                }
+            } catch (failure: Throwable) {
+                if (manual) {
+                    runOnUiThread {
+                        toast(failure.message ?: failure.javaClass.simpleName)
+                    }
+                }
+            } finally {
+                refreshInFlight = false
+            }
         }
+    }
+
+    private fun scheduleAutoRefresh(immediate: Boolean = false) {
+        refreshHandler.removeCallbacks(autoRefreshRunnable)
+        if (!activityResumed || token.isBlank()) return
+        refreshHandler.postDelayed(
+            autoRefreshRunnable,
+            if (immediate) 0L else AdminRefreshPolicy.INTERVAL_MS,
+        )
+    }
+
+    private fun stopAutoRefresh() {
+        refreshHandler.removeCallbacks(autoRefreshRunnable)
     }
 
     private fun showDashboard(response: JSONObject) {
@@ -864,7 +944,10 @@ class MainActivity : Activity() {
         runNetwork {
             runCatching { request("POST", "/logout", "") }
             token = ""
-            runOnUiThread { showLogin("Session Admin fermée.") }
+            runOnUiThread {
+                stopAutoRefresh()
+                showLogin("Session Admin fermée.")
+            }
         }
     }
 
