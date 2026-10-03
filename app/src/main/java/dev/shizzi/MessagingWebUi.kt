@@ -146,6 +146,21 @@ internal object MessagingWebUi {
           }
 
 
+          function validatedRemoteDescription(value,expectedType){
+            if(!value||typeof value!=="object"){
+              throw new Error("description SDP absente");
+            }
+            var type=String(value.type||"").toLowerCase();
+            var sdp=typeof value.sdp==="string"?value.sdp:"";
+            if(type!==expectedType){
+              throw new Error("type SDP invalide: "+(type||"absent"));
+            }
+            if(!sdp||sdp.indexOf("v=0")!==0){
+              throw new Error("contenu SDP invalide");
+            }
+            return {type:type,sdp:sdp};
+          }
+
           async function api(path,method,payload){
             if(nativeBridgeAvailable()){
               try{
@@ -408,13 +423,20 @@ internal object MessagingWebUi {
             callStatus.textContent=currentCall.kind==="video"?"Ouverture de la caméra…":"Ouverture du micro…";
             stopCallTone();
             if(navigator.vibrate)navigator.vibrate(0);
+            var acceptStage="accès micro/caméra";
             try{
               await acquireLocal(currentCall.kind);
+              acceptStage="création de la connexion WebRTC";
               makePeerConnection();
-              await pc.setRemoteDescription(event.description);
+              acceptStage="lecture de l'offre SDP";
+              var remoteOffer=validatedRemoteDescription(event.description,"offer");
+              await pc.setRemoteDescription(remoteOffer);
+              acceptStage="candidats réseau";
               await flushRemoteCandidates(currentCall.id);
+              acceptStage="création de la réponse WebRTC";
               var answer=await pc.createAnswer();
               await pc.setLocalDescription(answer);
+              acceptStage="envoi de la réponse SDP";
               var result=await api("call/answer","POST",{
                 callId:currentCall.id,
                 answer:{type:pc.localDescription.type,sdp:pc.localDescription.sdp}
@@ -425,7 +447,8 @@ internal object MessagingWebUi {
             }catch(error){
               var id=currentCall&&currentCall.id;
               if(id)api("call/end","POST",{callId:id}).catch(function(){});
-              var message=error&&error.message?error.message:"Impossible de décrocher.";
+              var detail=error&&error.message?error.message:"erreur inconnue";
+              var message="Erreur au décroché ("+acceptStage+") : "+detail;
               closeCallUi();alert(message);
             }
           }
@@ -477,11 +500,13 @@ internal object MessagingWebUi {
             if(event.type==="answer"&&currentCall&&currentCall.id===event.callId&&pc){
               stopCallTone();
               try{
-                await pc.setRemoteDescription(event.description);
+                var remoteAnswer=validatedRemoteDescription(event.description,"answer");
+                await pc.setRemoteDescription(remoteAnswer);
                 await flushRemoteCandidates(event.callId);
                 callStatus.textContent="Connexion locale…";
-              }catch(_){
-                endCurrentCall(true,"La connexion de l'appel a échoué.");
+              }catch(error){
+                var detail=error&&error.message?error.message:"erreur SDP inconnue";
+                endCurrentCall(true,"Erreur SDP après décroché : "+detail);
               }
               return;
             }
