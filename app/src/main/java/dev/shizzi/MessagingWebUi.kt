@@ -127,6 +127,24 @@ internal object MessagingWebUi {
           function nativeBridgeAvailable(){
             return Boolean(window.ShizziNativeBridge&&typeof window.ShizziNativeBridge.request==="function");
           }
+          function startIncomingRingtone(){
+            if(window.ShizziNativeBridge&&typeof window.ShizziNativeBridge.startIncomingRingtone==="function"){
+              try{window.ShizziNativeBridge.startIncomingRingtone()}catch(_){}
+            }
+          }
+
+          function startOutgoingRingback(){
+            if(window.ShizziNativeBridge&&typeof window.ShizziNativeBridge.startOutgoingRingback==="function"){
+              try{window.ShizziNativeBridge.startOutgoingRingback()}catch(_){}
+            }
+          }
+
+          function stopCallTone(){
+            if(window.ShizziNativeBridge&&typeof window.ShizziNativeBridge.stopCallTone==="function"){
+              try{window.ShizziNativeBridge.stopCallTone()}catch(_){}
+            }
+          }
+
 
           async function api(path,method,payload){
             if(nativeBridgeAvailable()){
@@ -356,6 +374,7 @@ internal object MessagingWebUi {
               if(!result.ok)throw new Error(result.message||"Appel impossible.");
               currentCall.id=result.callId;
               callStatus.textContent="Appel de "+peer.name+"…";
+              startOutgoingRingback();
               await flushLocalCandidates();
             }catch(error){
               var message=error&&error.message?error.message:"Impossible de démarrer l'appel.";
@@ -371,7 +390,8 @@ internal object MessagingWebUi {
             }
             incomingCall=event;
             showCall(event.kind,event.fromName||event.from,true);
-            if(navigator.vibrate)navigator.vibrate([250,150,250,150,450]);
+            startIncomingRingtone();
+            if(navigator.vibrate)navigator.vibrate([250,150,250,150,450,150,450]);
           }
 
           async function acceptIncoming(){
@@ -386,6 +406,7 @@ internal object MessagingWebUi {
             };
             showCall(currentCall.kind,currentCall.peerName,false);
             callStatus.textContent=currentCall.kind==="video"?"Ouverture de la caméra…":"Ouverture du micro…";
+            stopCallTone();
             if(navigator.vibrate)navigator.vibrate(0);
             try{
               await acquireLocal(currentCall.kind);
@@ -413,6 +434,7 @@ internal object MessagingWebUi {
             if(!incomingCall)return;
             var id=incomingCall.callId;
             incomingCall=null;
+            stopCallTone();
             if(navigator.vibrate)navigator.vibrate(0);
             await api("call/reject","POST",{callId:id}).catch(function(){});
             closeCallUi();
@@ -428,6 +450,7 @@ internal object MessagingWebUi {
           }
 
           function closeCallUi(){
+            stopCallTone();
             if(navigator.vibrate)navigator.vibrate(0);
             if(pc){try{pc.ontrack=null;pc.onicecandidate=null;pc.close()}catch(_){}}
             pc=null;
@@ -452,6 +475,7 @@ internal object MessagingWebUi {
               return;
             }
             if(event.type==="answer"&&currentCall&&currentCall.id===event.callId&&pc){
+              stopCallTone();
               try{
                 await pc.setRemoteDescription(event.description);
                 await flushRemoteCandidates(event.callId);
