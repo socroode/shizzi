@@ -104,8 +104,8 @@ jobs:
       - name: Secured Media proxy regression
         run: cd datapath && go test -run '^TestAuthenticatedMediaRequestReachesLoopbackBackend$' ./...
 
-      - name: Build signed Shizzi router and embedded Shizzi+
-        run: ./gradlew :app:assembleRelease --no-daemon
+      - name: Build signed Shizzi router, embedded Shizzi+ and Admin
+        run: ./gradlew :app:assembleRelease :admin:assembleRelease --no-daemon
 
       - name: Verify versions and permanent certificate
         env:
@@ -136,6 +136,17 @@ jobs:
           CONSO_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$CONSO" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
           test "$CONSO_CERT" = "$EXPECTED_NORM"
 
+          ADMIN=admin/build/outputs/apk/release/admin-release.apk
+          ADMIN_BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$ADMIN")
+          ADMIN_PACKAGE=$(echo "$ADMIN_BADGING" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
+          ADMIN_VERSION=$(echo "$ADMIN_BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
+          ADMIN_CODE=$(echo "$ADMIN_BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
+          test "$ADMIN_PACKAGE" = "dev.shizzi.admin"
+          test "$ADMIN_VERSION" = "0.2.5-test"
+          test "$ADMIN_CODE" = "7"
+          ADMIN_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$ADMIN" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
+          test "$ADMIN_CERT" = "$EXPECTED_NORM"
+
           EMBEDDED=/tmp/shizzi-plus-embedded.apk
           unzip -p "$APK" assets/shizzi/Shizzi-Plus.apk > "$EMBEDDED"
           test -s "$EMBEDDED"
@@ -152,8 +163,9 @@ jobs:
           mkdir -p release-output
           cp app/build/outputs/apk/release/app-release.apk release-output/Shizzi-Hotspot-0.4.3.9-Calls-Test.apk
           cp conso/build/outputs/apk/release/conso-release.apk release-output/Shizzi-Plus-0.2.9-Calls-Ringtone-Test.apk
+          cp admin/build/outputs/apk/release/admin-release.apk release-output/Shizzi-Admin-0.2.5-Test.apk
           cd release-output
-          sha256sum Shizzi-Hotspot-0.4.3.9-Calls-Test.apk Shizzi-Plus-0.2.9-Calls-Ringtone-Test.apk > SHA256SUMS.txt
+          sha256sum Shizzi-Hotspot-0.4.3.9-Calls-Test.apk Shizzi-Plus-0.2.9-Calls-Ringtone-Test.apk Shizzi-Admin-0.2.5-Test.apk > SHA256SUMS.txt
 
       - name: Upload signed calls test APKs
         uses: actions/upload-artifact@v5
@@ -162,6 +174,7 @@ jobs:
           path: |
             release-output/Shizzi-Hotspot-0.4.3.9-Calls-Test.apk
             release-output/Shizzi-Plus-0.2.9-Calls-Ringtone-Test.apk
+            release-output/Shizzi-Admin-0.2.5-Test.apk
             release-output/SHA256SUMS.txt
           if-no-files-found: error
 
