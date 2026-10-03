@@ -44,6 +44,8 @@ class CallSignalingHubTest {
         assertEquals("incoming", events.getJSONObject(0).getString("type"))
         assertEquals(callId, events.getJSONObject(0).getString("callId"))
         assertEquals("1001", events.getJSONObject(0).getString("from"))
+        assertEquals(offer(), events.getJSONObject(0).getJSONObject("description").getString("sdp"))
+        assertTrue(events.getJSONObject(0).getJSONObject("description").getString("sdp").endsWith("\r\n"))
 
         for (index in 3..8) {
             val outsider = hub.poll("100$index", 0L, directory, 1_100L)
@@ -65,6 +67,8 @@ class CallSignalingHubTest {
         assertEquals("answer", event.getString("type"))
         assertEquals("video", event.getString("kind"))
         assertEquals("answer", event.getJSONObject("description").getString("type"))
+        assertEquals(answer(), event.getJSONObject("description").getString("sdp"))
+        assertTrue(event.getJSONObject("description").getString("sdp").endsWith("\r\n"))
 
         val outsider = hub.poll("1003", 0L, directory, 1_300L)
         assertEquals(0, outsider.getJSONArray("events").length())
