@@ -30,4 +30,18 @@ class SecureChatWebSupportTest {
         assertNull(SecureChatWebSupport.apiUrl("https://example.com/"))
         assertNull(SecureChatWebSupport.apiUrl(""))
     }
+
+    @Test
+    fun callRoutesRemainRecognizableDuringChatUiTransitions() {
+        assertTrue(SecureChatWebSupport.isCallApiPath("call/start"))
+        assertTrue(SecureChatWebSupport.isCallApiPath("call/answer"))
+        assertTrue(SecureChatWebSupport.isCallApiPath("call/ice"))
+        assertTrue(SecureChatWebSupport.isCallApiPath("call/poll?after=42"))
+        assertTrue(SecureChatWebSupport.isCallApiPath("call/reject"))
+        assertTrue(SecureChatWebSupport.isCallApiPath("call/end"))
+
+        assertFalse(SecureChatWebSupport.isCallApiPath("send"))
+        assertFalse(SecureChatWebSupport.isCallApiPath("snapshot"))
+        assertFalse(SecureChatWebSupport.isCallApiPath("../call/answer"))
+    }
 }
