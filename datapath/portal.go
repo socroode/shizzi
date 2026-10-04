@@ -761,6 +761,7 @@ func (m *TrafficManager) serveAdminAPI(conn net.Conn, request *http.Request, cli
 }
 
 func (m *TrafficManager) serveAdminFileProxy(conn net.Conn, request *http.Request) {
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Minute))
 	local, err := net.DialTimeout("tcp", adminFileBridgeAddress, 3*time.Second)
 	if err != nil {
 		writeJSONStatus(conn, "503 Service Unavailable", map[string]any{
