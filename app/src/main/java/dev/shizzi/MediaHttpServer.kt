@@ -159,6 +159,12 @@ class MediaHttpServer(
                     method == "HEAD",
                 )
                 "/play" -> servePlayer(output, query["id"], accountNumber, method == "HEAD")
+                "/thumbnail" -> serveThumbnail(
+                    output,
+                    query["id"],
+                    accountNumber,
+                    method == "HEAD",
+                )
                 "/stream" -> serveStream(
                     output,
                     query["id"],
@@ -179,20 +185,50 @@ class MediaHttpServer(
     ) {
         val folders = MediaFolderStore.visibleFromSnapshot(folderSnapshot, accountNumber)
             .filter { it.uri() != null }
-        val cards = if (folders.isEmpty()) {
-            "<p>Aucun dossier Media n'est autorisé pour ce compte.</p>"
+        val allowedFolderIds = folders.map { it.id }.toSet()
+        val entries = MediaIndex.entries(context)
+            .filter { it.folderId in allowedFolderIds }
+            .take(HOME_ENTRY_LIMIT)
+
+        val mediaCards = if (entries.isEmpty()) {
+            "<p class=\"empty\">Aucun média indexé pour ce compte.</p>"
+        } else {
+            entries.joinToString("")(::mediaCard)
+        }
+
+        val folderCards = if (folders.isEmpty()) {
+            "<p class=\"empty\">Aucun dossier Media autorisé.</p>"
         } else {
             folders.joinToString("") { folder ->
-                "<a class=\"card\" href=\"library?folder=${folder.id}\"><strong>${escape(folder.name)}</strong><span>Ouvrir</span></a>"
+                """
+                <a class="folder-card" href="library?folder=${folder.id}">
+                  <span class="folder-icon">▣</span>
+                  <strong>${escape(folder.name)}</strong>
+                  <small>${escape(folder.kind.label)}</small>
+                </a>
+                """.trimIndent()
             }
         }
+
         val html = page(
             "Shizzi Media",
             """
-            <h1>Shizzi Media</h1>
-            <p class="lead">Contenus disponibles pour le compte ${escape(accountNumber.ifBlank { "local" })}.</p>
-            <div class="grid">$cards</div>
-            <p class="hint">Seuls les dossiers autorisés pour ce compte sont affichés.</p>
+            <section class="hero">
+              <div>
+                <span class="eyebrow">BIBLIOTHÈQUE LOCALE</span>
+                <h1>Shizzi <em>Media</em></h1>
+                <p class="lead">Films, séries et musique disponibles directement sur le routeur Shizzi.</p>
+              </div>
+            </section>
+            <section>
+              <div class="section-head"><h2>Vignettes</h2><span>${entries.size} média(s)</span></div>
+              <div class="poster-grid">$mediaCards</div>
+            </section>
+            <section>
+              <div class="section-head"><h2>Dossiers</h2><span>${folders.size}</span></div>
+              <div class="folder-grid">$folderCards</div>
+            </section>
+            <p class="hint">Les miniatures vidéo sont générées automatiquement sur le routeur et mises en cache.</p>
             """.trimIndent(),
         )
         writeText(output, 200, "OK", "text/html; charset=utf-8", html, headOnly)
@@ -205,38 +241,40 @@ class MediaHttpServer(
         accountNumber: String,
         headOnly: Boolean,
     ) {
-        val folder = folderId
-            ?.let { wanted -> folderSnapshot.firstOrNull { it.id == wanted } }
-            ?: MediaKind.fromKey(rawKind)?.let { kind ->
-                MediaFolderStore.visibleFromSnapshot(folderSnapshot, accountNumber)
-                    .firstOrNull { it.kind == kind }
-            }
+        val visibleFolders = MediaFolderStore.visibleFromSnapshot(folderSnapshot, accountNumber)
+            .filter { it.uri() != null }
+        val selectedFolder = folderId
+            ?.let { wanted -> visibleFolders.firstOrNull { it.id == wanted } }
+        val selectedKind = if (folderId.isNullOrBlank()) MediaKind.fromKey(rawKind) else null
 
-        if (folder == null || !MediaFolderStore.canAccessSnapshot(folderSnapshot, folder.id, accountNumber)) {
+        val selectedFolders = when {
+            selectedFolder != null -> listOf(selectedFolder)
+            selectedKind != null -> visibleFolders.filter { it.kind == selectedKind }
+            else -> emptyList()
+        }
+
+        if (selectedFolders.isEmpty()) {
             writeText(output, 404, "Not Found", "text/plain; charset=utf-8", "Dossier introuvable", headOnly)
             return
         }
 
-        val entries = MediaIndex.entriesForFolder(context, folder.id)
-        val rows = if (entries.isEmpty()) {
-            "<p>Aucun fichier trouvé dans ${escape(folder.name)}.</p>"
+        val title = selectedFolder?.name ?: selectedKind?.label ?: "Media"
+        val entries = selectedFolders
+            .flatMap { folder -> MediaIndex.entriesForFolder(context, folder.id) }
+            .sortedBy { MediaThumbnailPolicy.displayTitle(it.name).lowercase(Locale.getDefault()) }
+
+        val cards = if (entries.isEmpty()) {
+            "<p class=\"empty\">Aucun fichier trouvé dans ${escape(title)}.</p>"
         } else {
-            entries.joinToString("") { entry ->
-                val size = if (entry.size > 0) humanBytes(entry.size) else "taille inconnue"
-                """
-                <a class="item" href="play?id=${entry.id}">
-                  <strong>${escape(entry.name)}</strong>
-                  <span>${escape(entry.relativePath)} · $size</span>
-                </a>
-                """.trimIndent()
-            }
+            entries.joinToString("")(::mediaCard)
         }
+
         val html = page(
-            folder.name,
+            title,
             """
-            <a class="back" href="./">← Shizzi Media</a>
-            <h1>${escape(folder.name)}</h1>
-            <div class="list">$rows</div>
+            <a class="back" href="./">← Accueil Media</a>
+            <div class="section-head"><h1>${escape(title)}</h1><span>${entries.size} média(s)</span></div>
+            <div class="poster-grid">$cards</div>
             """.trimIndent(),
         )
         writeText(output, 200, "OK", "text/html; charset=utf-8", html, headOnly)
@@ -256,19 +294,83 @@ class MediaHttpServer(
         val mediaTag = if (entry.kind == MediaKind.MUSIC) {
             "<audio controls autoplay preload=\"metadata\" src=\"stream?id=${entry.id}\"></audio>"
         } else {
-            "<video controls autoplay playsinline preload=\"metadata\" src=\"stream?id=${entry.id}\"></video>"
+            "<video controls autoplay playsinline preload=\"metadata\" poster=\"thumbnail?id=${entry.id}&v=${entry.size}\" src=\"stream?id=${entry.id}\"></video>"
         }
         val html = page(
             entry.name,
             """
             <a class="back" href="library?folder=${entry.folderId}">← ${escape(entry.folderName.ifBlank { entry.kind.label })}</a>
-            <h1>${escape(entry.name)}</h1>
+            <h1>${escape(MediaThumbnailPolicy.displayTitle(entry.name))}</h1>
             <p>${escape(entry.relativePath)}</p>
             <div class="player">$mediaTag</div>
             <p class="hint">Lecture locale via le hotspot Shizzi.</p>
             """.trimIndent(),
         )
         writeText(output, 200, "OK", "text/html; charset=utf-8", html, headOnly)
+    }
+
+    private fun serveThumbnail(
+        output: BufferedOutputStream,
+        id: String?,
+        accountNumber: String,
+        headOnly: Boolean,
+    ) {
+        val entry = MediaIndex.find(context, id)
+        if (entry == null || !entryAllowed(entry, accountNumber)) {
+            writeText(output, 404, "Not Found", "text/plain; charset=utf-8", "Miniature introuvable", headOnly)
+            return
+        }
+
+        val thumbnail = MediaThumbnailStore.thumbnailFile(context, entry)
+        if (thumbnail != null && thumbnail.isFile) {
+            writeBinary(
+                output = output,
+                contentType = "image/jpeg",
+                bytes = thumbnail.readBytes(),
+                headOnly = headOnly,
+                cacheControl = "private, max-age=86400",
+            )
+            return
+        }
+
+        val label = escape(MediaThumbnailPolicy.displayTitle(entry.name)).take(50)
+        val icon = if (entry.kind == MediaKind.MUSIC) "♫" else "▶"
+        val svg = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="480" height="270" viewBox="0 0 480 270">
+              <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#28145d"/><stop offset="1" stop-color="#07111f"/></linearGradient></defs>
+              <rect width="480" height="270" rx="24" fill="url(#g)"/>
+              <text x="240" y="118" text-anchor="middle" fill="#a78bfa" font-size="48">$icon</text>
+              <text x="240" y="172" text-anchor="middle" fill="#f8fafc" font-family="sans-serif" font-size="22">$label</text>
+            </svg>
+        """.trimIndent().toByteArray(Charsets.UTF_8)
+        writeBinary(
+            output,
+            "image/svg+xml; charset=utf-8",
+            svg,
+            headOnly,
+            "private, max-age=600",
+        )
+    }
+
+    private fun mediaCard(entry: MediaEntry): String {
+        val title = escape(MediaThumbnailPolicy.displayTitle(entry.name))
+        val folder = escape(entry.folderName.ifBlank { entry.kind.label })
+        val badge = when (entry.kind) {
+            MediaKind.FILMS -> "Film"
+            MediaKind.SERIES -> "Série"
+            MediaKind.MUSIC -> "Musique"
+        }
+        val size = if (entry.size > 0L) humanBytes(entry.size) else "Local"
+        return """
+            <a class="poster" data-title="$title" href="play?id=${entry.id}">
+              <div class="poster-image">
+                <img loading="lazy" src="thumbnail?id=${entry.id}&v=${entry.size}" alt="$title">
+                <span class="badge">$badge</span>
+              </div>
+              <strong>$title</strong>
+              <small>$folder · $size</small>
+            </a>
+        """.trimIndent()
     }
 
     private fun serveStream(
@@ -428,25 +530,71 @@ class MediaHttpServer(
         output.flush()
     }
 
+    private fun writeBinary(
+        output: BufferedOutputStream,
+        contentType: String,
+        bytes: ByteArray,
+        headOnly: Boolean,
+        cacheControl: String,
+    ) {
+        val header = "HTTP/1.1 200 OK\r\n" +
+            "Content-Type: $contentType\r\n" +
+            "Content-Length: ${bytes.size}\r\n" +
+            "Cache-Control: $cacheControl\r\n" +
+            "Connection: close\r\n\r\n"
+        output.write(header.toByteArray())
+        if (!headOnly) output.write(bytes)
+        output.flush()
+    }
+
     private fun page(title: String, body: String): String = """
         <!doctype html>
         <html lang="fr">
         <head>
           <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width,initial-scale=1">
+          <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
           <title>${escape(title)} · Shizzi Media</title>
           <style>
-            :root{color-scheme:dark;background:#0b0e14;color:#f6f7fb;font-family:system-ui,sans-serif}
-            body{max-width:900px;margin:auto;padding:22px}
-            h1{font-size:2rem;margin:.4rem 0 1rem}.lead,.hint{color:#aeb7c7}
-            .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
-            .card,.item{display:flex;flex-direction:column;gap:6px;padding:18px;border:1px solid #293244;border-radius:16px;background:#131925;color:inherit;text-decoration:none}
-            .card span,.item span{color:#9eabba;font-size:.9rem}.list{display:grid;gap:10px}
-            .back{color:#8cb8ff;text-decoration:none}.player{margin-top:18px}
-            video{width:100%;max-height:70vh;background:#000;border-radius:16px}audio{width:100%}
+            :root{color-scheme:dark;background:#06101d;color:#f8fafc;font-family:Inter,system-ui,-apple-system,sans-serif}
+            *{box-sizing:border-box}body{max-width:1100px;margin:auto;padding:18px 16px 38px;background:radial-gradient(circle at 90% 0,#211044 0,transparent 34%),#06101d}
+            a{color:inherit}.top{position:sticky;top:0;z-index:10;padding:8px 0 14px;background:linear-gradient(#06101df7 80%,transparent)}
+            .brand{display:flex;align-items:center;gap:11px;font-size:1.55rem;font-weight:900;text-decoration:none}.logo{display:grid;place-items:center;width:38px;height:38px;border-radius:13px;background:linear-gradient(135deg,#7c3aed,#2563eb)}
+            .brand em,.hero em{font-style:normal;color:#8b5cf6}.search{width:100%;margin-top:14px;padding:14px 16px;border:1px solid #334155;border-radius:17px;background:#101a2b;color:#fff;font-size:1rem;outline:none}
+            .chips{display:flex;gap:8px;overflow-x:auto;padding:12px 0 2px;scrollbar-width:none}.chip{white-space:nowrap;text-decoration:none;padding:10px 14px;border:1px solid #334155;border-radius:999px;background:#0e1728;color:#dbeafe;font-weight:700}.chip:first-child{background:linear-gradient(90deg,#6d28d9,#7c3aed);border-color:#8b5cf6}
+            .hero{margin:14px 0 26px;padding:22px;border:1px solid #ffffff17;border-radius:24px;background:linear-gradient(135deg,#17122d,#0b1d33);box-shadow:0 16px 50px #0005}.hero h1{font-size:2.25rem;margin:5px 0 6px}.eyebrow{font-size:.72rem;letter-spacing:.13em;color:#a78bfa;font-weight:900}.lead,.hint,.empty{color:#94a3b8;line-height:1.5}
+            section{margin:24px 0}.section-head{display:flex;align-items:end;justify-content:space-between;gap:12px;margin:0 0 12px}.section-head h1,.section-head h2{margin:0}.section-head span{color:#94a3b8;font-size:.9rem}
+            .poster-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.poster{min-width:0;text-decoration:none}.poster-image{position:relative;aspect-ratio:16/10;overflow:hidden;border-radius:16px;background:#111827;border:1px solid #ffffff14}.poster img{width:100%;height:100%;display:block;object-fit:cover}.poster strong{display:block;margin:8px 3px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.poster small{display:block;margin:0 3px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.badge{position:absolute;top:8px;right:8px;padding:5px 8px;border-radius:9px;background:#050b15d9;color:#fff;font-size:.72rem;font-weight:900}
+            .folder-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.folder-card{display:flex;flex-direction:column;gap:4px;padding:16px;border:1px solid #334155;border-radius:17px;background:#0f1a2b;text-decoration:none}.folder-card small{color:#94a3b8}.folder-icon{color:#a78bfa;font-size:1.35rem}
+            .back{display:inline-block;margin:8px 0 20px;color:#c4b5fd;text-decoration:none;font-weight:800}.player{margin-top:18px}video{width:100%;max-height:70vh;background:#000;border-radius:18px}audio{width:100%}
+            @media(min-width:700px){.poster-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.folder-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
           </style>
         </head>
-        <body>$body</body>
+        <body>
+          <div class="top">
+            <a class="brand" href="./"><span class="logo">▶</span><span>Shizzi <em>Media</em></span></a>
+            <input id="media-search" class="search" type="search" placeholder="Rechercher un film, une série, une musique…" autocomplete="off">
+            <nav class="chips">
+              <a class="chip" href="./">Accueil</a>
+              <a class="chip" href="library?kind=films">Films</a>
+              <a class="chip" href="library?kind=series">Séries</a>
+              <a class="chip" href="library?kind=music">Musique</a>
+            </nav>
+          </div>
+          $body
+          <script>
+          (function(){
+            var input=document.getElementById('media-search');
+            if(!input)return;
+            input.addEventListener('input',function(){
+              var q=(input.value||'').trim().toLowerCase();
+              document.querySelectorAll('.poster').forEach(function(card){
+                var title=(card.getAttribute('data-title')||'').toLowerCase();
+                card.style.display=!q||title.indexOf(q)>=0?'':'none';
+              });
+            });
+          })();
+          </script>
+        </body>
         </html>
     """.trimIndent()
 
@@ -472,5 +620,6 @@ class MediaHttpServer(
     companion object {
         private const val TAG = "ShizziMedia"
         internal const val MAX_CLIENTS = 24
+        private const val HOME_ENTRY_LIMIT = 24
     }
 }
