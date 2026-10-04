@@ -916,7 +916,7 @@ button:disabled{opacity:.5;cursor:wait}
 <a href="/">← Portail Shizzi</a>
 <div class="eyebrow" style="margin-top:18px">RÉSEAU LOCAL</div>
 <h1>Test de débit local</h1>
-<p class="lead">Mesure le débit <strong>Reno9 → cet appareil</strong> sur le Wi-Fi Shizzi. Le test reste local : il ne télécharge rien depuis Starlink ou Internet.</p>
+<p class="lead">Mesure le débit <strong>routeur Shizzi → cet appareil</strong> sur le Wi-Fi Shizzi. Le test reste local : il ne télécharge rien depuis Starlink ou Internet.</p>
 <div class="controls">
 <select id="size" aria-label="Taille du test">
 <option value="10">Rapide · 10 Mo</option>
@@ -1003,7 +1003,7 @@ button:disabled{opacity:.5;cursor:wait}
       await receive("/speedtest/download?mb=10&warmup="+Date.now(),null);
 
       var mb=sizeSelect.value;
-      setStatus("Mesure du débit Reno9 → appareil…");
+      setStatus("Mesure du débit routeur Shizzi → appareil…");
       var result=await receive(
         "/speedtest/download?mb="+encodeURIComponent(mb)+"&ts="+Date.now(),
         function(progress){bar.style.width=Math.min(100,progress*100).toFixed(1)+"%";}
@@ -1550,7 +1550,7 @@ func (m *TrafficManager) writePortalHTML(
 
 	content += `<section class="speedtest-link"><div class="eyebrow">RÉSEAU LOCAL</div>
 <strong>Test de débit Shizzi</strong>
-<p>Mesurez la vitesse réelle du Reno9 vers cet appareil, sans utiliser Internet.</p>
+<p>Mesurez la vitesse réelle du routeur Shizzi vers cet appareil, sans utiliser Internet.</p>
 <a class="speedtest-button" href="/speedtest/">Tester le débit local</a>
 <div class="speedtest-note">Navigateur uniquement · aucun Termux nécessaire</div></section>`
 
