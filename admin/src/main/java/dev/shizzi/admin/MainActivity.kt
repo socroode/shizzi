@@ -763,6 +763,7 @@ class MainActivity : Activity() {
                         .put("mimeType", source.mimeType)
                         .put("sizeBytes", source.sizeBytes)
                         .toString(),
+                    readTimeoutMillis = 30_000,
                 )
                 if (!start.optBoolean("ok")) {
                     error(start.optString("message", "Le routeur a refusé le transfert."))
@@ -836,6 +837,7 @@ class MainActivity : Activity() {
                     path = "/files/upload/finish?id=" +
                         URLEncoder.encode(transferId, "UTF-8"),
                     body = JSONObject().put("sha256", sha256).toString(),
+                    readTimeoutMillis = 600_000,
                 )
                 if (!finish.optBoolean("ok")) {
                     error(finish.optString("message", "Finalisation refusée par le routeur."))
@@ -1317,11 +1319,12 @@ class MainActivity : Activity() {
         body: String? = null,
         contentType: String = "application/json",
         authenticated: Boolean = true,
+        readTimeoutMillis: Int = 8_000,
     ): JSONObject {
         val connection = URL(BASE_URL + path).openConnection() as HttpURLConnection
         connection.requestMethod = method
         connection.connectTimeout = 5_000
-        connection.readTimeout = 8_000
+        connection.readTimeout = readTimeoutMillis
         connection.useCaches = false
         connection.setRequestProperty("Accept", "application/json")
         if (authenticated && token.isNotBlank()) {
