@@ -190,7 +190,7 @@ class AdminFileTransferServer(private val context: Context) {
             )
             return
         }
-        if (!hasWritePermission(treeUri)) {
+        if (!MediaRemoteSources.isWritable(context, treeUri)) {
             writeJson(
                 output,
                 403,
@@ -447,18 +447,6 @@ class AdminFileTransferServer(private val context: Context) {
             DocumentsContract.deleteDocument(context.contentResolver, session.tempUri)
         }
         writeJson(output, 200, "OK", JSONObject().put("ok", true))
-    }
-
-    private fun hasWritePermission(uri: Uri): Boolean {
-        val authority = uri.authority ?: return false
-        val treeId = runCatching { DocumentsContract.getTreeDocumentId(uri) }.getOrNull()
-            ?: return false
-        return context.contentResolver.persistedUriPermissions.any { permission ->
-            if (!permission.isWritePermission) return@any false
-            val root = permission.uri
-            root.authority == authority &&
-                runCatching { DocumentsContract.getTreeDocumentId(root) }.getOrNull() == treeId
-        }
     }
 
     private fun sha256(uri: Uri): String {
