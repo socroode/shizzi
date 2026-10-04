@@ -20,4 +20,19 @@ internal object SecureChatWebSupport {
 
     fun apiUrl(raw: String): String? =
         normalizeApiPath(raw)?.let { PORTAL_CHAT_API_URL + it }
+
+    fun isCallApiPath(raw: String): Boolean {
+        val normalized = normalizeApiPath(raw) ?: return false
+        val route = normalized.substringBefore('?')
+        return route in CALL_API_ROUTES
+    }
+
+    private val CALL_API_ROUTES = setOf(
+        "call/start",
+        "call/answer",
+        "call/ice",
+        "call/poll",
+        "call/reject",
+        "call/end",
+    )
 }
