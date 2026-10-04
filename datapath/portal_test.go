@@ -2,6 +2,7 @@ package datapath
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -197,6 +198,26 @@ func TestMediaProxyTargetKeepsLocalPrefixOutOfUpstream(t *testing.T) {
 	}
 }
 
+
+func TestLocalSpeedtestUsesGenericShizziRouterWording(t *testing.T) {
+	source, err := os.ReadFile("portal.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	if strings.Contains(strings.ToLower(text), "reno9") {
+		t.Fatal("local speedtest wording must not be tied to Reno9")
+	}
+	for _, expected := range []string{
+		"routeur Shizzi → cet appareil",
+		"Mesure du débit routeur Shizzi → appareil",
+		"vitesse réelle du routeur Shizzi vers cet appareil",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("missing generic Shizzi router wording %q", expected)
+		}
+	}
+}
 
 func TestSpeedtestDownloadSizesAreBounded(t *testing.T) {
 	cases := map[string]int64{
