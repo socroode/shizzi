@@ -11,12 +11,14 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.OpenableColumns
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -28,6 +30,7 @@ import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.util.ArrayDeque
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.concurrent.thread
@@ -46,7 +49,11 @@ class MainActivity : Activity() {
     private var lastState: JSONObject? = null
     private var lastRenderedStateJson: String = ""
     private var activityResumed = false
+    private var pendingUploadFolderId: String? = null
+    private var pendingUploadFolderName: String? = null
+    private val recentUploads = ArrayDeque<String>()
     @Volatile private var refreshInFlight = false
+    @Volatile private var uploadCancelled = false
     private val refreshHandler = Handler(Looper.getMainLooper())
     private val autoRefreshRunnable = object : Runnable {
         override fun run() {
@@ -78,6 +85,30 @@ class MainActivity : Activity() {
 
         bindToWifi()
         showLogin()
+    }
+
+    @Deprecated("Legacy Activity result API kept for Android 11+ compatibility")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_PICK_UPLOAD_FILE || resultCode != RESULT_OK) return
+
+        val uri = data?.data ?: return
+        runCatching {
+            val flags = data.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION
+            if (flags != 0) {
+                contentResolver.takePersistableUriPermission(uri, flags)
+            }
+        }
+
+        val folderId = pendingUploadFolderId
+        val folderName = pendingUploadFolderName
+        pendingUploadFolderId = null
+        pendingUploadFolderName = null
+        if (folderId.isNullOrBlank()) {
+            toast("Dossier de destination perdu. Recommence le transfert.")
+            return
+        }
+        startAdminFileUpload(uri, folderId, folderName.orEmpty())
     }
 
     override fun onResume() {
@@ -522,6 +553,16 @@ class MainActivity : Activity() {
         )
         root.addView(serverRow)
 
+        button("Envoyer un fichier au routeur") {
+            chooseUploadDestination(folders)
+        }
+        if (recentUploads.isNotEmpty()) {
+            info(
+                "Transferts récents :\n" +
+                    recentUploads.joinToString("\n") { "• $it" },
+            )
+        }
+
         if (folders.length() < maxFolders) {
             button("Ajouter un dossier Media") {
                 prompt("Nom du dossier", "Dossier Media") { value ->
@@ -620,6 +661,306 @@ class MainActivity : Activity() {
         info(
             "Les sources proposées ici sont les emplacements déjà autorisés par Android au routeur. " +
                 "Une nouvelle autorisation système SAF reste la seule opération qui peut exiger le téléphone routeur.",
+        )
+    }
+
+    private data class UploadSourceInfo(
+        val name: String,
+        val mimeType: String,
+        val sizeBytes: Long,
+    )
+
+    private fun chooseUploadDestination(folders: JSONArray) {
+        val ids = mutableListOf<String>()
+        val names = mutableListOf<String>()
+        for (index in 0 until folders.length()) {
+            val folder = folders.optJSONObject(index) ?: continue
+            if (folder.optString("treeUri").isBlank()) continue
+            val id = folder.optString("id")
+            if (id.isBlank()) continue
+            ids += id
+            names += folder.optString("name").ifBlank { "Dossier Media" }
+        }
+        if (ids.isEmpty()) {
+            toast("Aucun dossier du routeur n'est encore autorisé en écriture.")
+            return
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Destination sur le routeur")
+            .setItems(names.toTypedArray()) { _, which ->
+                pendingUploadFolderId = ids[which]
+                pendingUploadFolderName = names[which]
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "*/*"
+                    addFlags(
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION,
+                    )
+                }
+                startActivityForResult(intent, REQUEST_PICK_UPLOAD_FILE)
+            }
+            .setNegativeButton("Annuler", null)
+            .show()
+    }
+
+    private fun startAdminFileUpload(uri: Uri, folderId: String, folderName: String) {
+        val source = runCatching { uploadSourceInfo(uri) }
+            .getOrElse {
+                toast("Impossible de lire ce fichier.")
+                return
+            }
+
+        uploadCancelled = false
+        stopAutoRefresh()
+
+        val progressText = TextView(this).apply {
+            text = "Préparation du transfert…"
+            setPadding(0, dp(8), 0, dp(8))
+        }
+        val progressBar = ProgressBar(
+            this,
+            null,
+            android.R.attr.progressBarStyleHorizontal,
+        ).apply {
+            max = 100
+            progress = 0
+            isIndeterminate = source.sizeBytes <= 0L
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(4), dp(20), 0)
+            addView(progressText, full())
+            addView(progressBar, full())
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Envoi vers $folderName")
+            .setView(content)
+            .setNegativeButton("Annuler") { _, _ ->
+                uploadCancelled = true
+            }
+            .setCancelable(false)
+            .create()
+        dialog.show()
+
+        thread(name = "shizzi-admin-file-upload") {
+            var transferId = ""
+            try {
+                bindToWifi()
+                val start = request(
+                    method = "POST",
+                    path = "/files/upload/start",
+                    body = JSONObject()
+                        .put("folderId", folderId)
+                        .put("fileName", source.name)
+                        .put("mimeType", source.mimeType)
+                        .put("sizeBytes", source.sizeBytes)
+                        .toString(),
+                )
+                if (!start.optBoolean("ok")) {
+                    error(start.optString("message", "Le routeur a refusé le transfert."))
+                }
+                transferId = start.getString("id")
+                val chunkBytes = start.optInt("chunkBytes", 1024 * 1024)
+                    .coerceIn(64 * 1024, 1024 * 1024)
+                val buffer = ByteArray(chunkBytes)
+                val digest = MessageDigest.getInstance("SHA-256")
+                var offset = start.optLong("receivedBytes", 0L)
+                if (offset != 0L) error("Le nouveau transfert n'a pas commencé à zéro.")
+
+                val startedNanos = System.nanoTime()
+                contentResolver.openInputStream(uri).use { input ->
+                    requireNotNull(input) { "Fichier source inaccessible." }
+                    while (true) {
+                        if (uploadCancelled) throw InterruptedException("Transfert annulé.")
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        if (count == 0) continue
+
+                        digest.update(buffer, 0, count)
+                        offset = sendUploadChunkWithRetry(
+                            transferId = transferId,
+                            offset = offset,
+                            bytes = buffer.copyOf(count),
+                            progressText = progressText,
+                        )
+
+                        val elapsedSeconds =
+                            ((System.nanoTime() - startedNanos) / 1_000_000_000.0)
+                                .coerceAtLeast(0.001)
+                        val mbps = (offset * 8.0 / elapsedSeconds) / 1_000_000.0
+                        val percent = if (source.sizeBytes > 0L) {
+                            ((offset * 100L) / source.sizeBytes)
+                                .coerceIn(0L, 100L)
+                                .toInt()
+                        } else {
+                            0
+                        }
+                        runOnUiThread {
+                            if (source.sizeBytes > 0L) {
+                                progressBar.isIndeterminate = false
+                                progressBar.progress = percent
+                                progressText.text =
+                                    "$percent % · " +
+                                        String.format("%.1f Mbps", mbps) +
+                                        "\n" + formatBytes(offset) +
+                                        " / " + formatBytes(source.sizeBytes)
+                            } else {
+                                progressText.text =
+                                    formatBytes(offset) +
+                                        " envoyés · " +
+                                        String.format("%.1f Mbps", mbps)
+                            }
+                        }
+                    }
+                }
+
+                if (source.sizeBytes >= 0L && offset != source.sizeBytes) {
+                    error(
+                        "Taille envoyée incorrecte : " +
+                            formatBytes(offset) + " / " + formatBytes(source.sizeBytes),
+                    )
+                }
+                val sha256 = digest.digest().joinToString("") { "%02x".format(it) }
+                runOnUiThread { progressText.text = "Vérification SHA-256 sur le routeur…" }
+
+                val finish = request(
+                    method = "POST",
+                    path = "/files/upload/finish?id=" +
+                        URLEncoder.encode(transferId, "UTF-8"),
+                    body = JSONObject().put("sha256", sha256).toString(),
+                )
+                if (!finish.optBoolean("ok")) {
+                    error(finish.optString("message", "Finalisation refusée par le routeur."))
+                }
+
+                val savedName = finish.optString("fileName", source.name)
+                runOnUiThread {
+                    if (recentUploads.size >= 5) recentUploads.removeLast()
+                    recentUploads.addFirst(
+                        savedName + " · " + formatBytes(offset) + " · " + folderName,
+                    )
+                    dialog.dismiss()
+                    toast("Fichier reçu par le routeur. Scan Media lancé.")
+                    scheduleAutoRefresh(immediate = true)
+                }
+            } catch (cancelled: InterruptedException) {
+                if (transferId.isNotBlank()) {
+                    runCatching {
+                        request(
+                            "DELETE",
+                            "/files/upload?id=" +
+                                URLEncoder.encode(transferId, "UTF-8"),
+                        )
+                    }
+                }
+                runOnUiThread {
+                    dialog.dismiss()
+                    toast("Transfert annulé.")
+                    scheduleAutoRefresh(immediate = true)
+                }
+            } catch (failure: Throwable) {
+                if (transferId.isNotBlank()) {
+                    runCatching {
+                        request(
+                            "DELETE",
+                            "/files/upload?id=" +
+                                URLEncoder.encode(transferId, "UTF-8"),
+                        )
+                    }
+                }
+                runOnUiThread {
+                    dialog.dismiss()
+                    toast(failure.message ?: "Échec du transfert.")
+                    scheduleAutoRefresh(immediate = true)
+                }
+            }
+        }
+    }
+
+    private fun sendUploadChunkWithRetry(
+        transferId: String,
+        offset: Long,
+        bytes: ByteArray,
+        progressText: TextView,
+    ): Long {
+        val expectedNext = offset + bytes.size
+        var lastFailure: Throwable? = null
+
+        for (attempt in 1..UPLOAD_RETRY_COUNT) {
+            if (uploadCancelled) throw InterruptedException("Transfert annulé.")
+            try {
+                bindToWifi()
+                val response = requestBytes(
+                    method = "PUT",
+                    path = "/files/upload/chunk?id=" +
+                        URLEncoder.encode(transferId, "UTF-8") +
+                        "&offset=$offset",
+                    body = bytes,
+                    contentType = "application/octet-stream",
+                )
+                val remote = response.optLong("receivedBytes", -1L)
+                if (response.optBoolean("ok") && remote == expectedNext) {
+                    return remote
+                }
+                if (remote == expectedNext) return remote
+                if (remote != offset && remote >= 0L) {
+                    error("Position de reprise incohérente sur le routeur : $remote.")
+                }
+                error(response.optString("message", "Bloc refusé par le routeur."))
+            } catch (failure: Throwable) {
+                lastFailure = failure
+                if (uploadCancelled) throw InterruptedException("Transfert annulé.")
+
+                val remote = runCatching {
+                    bindToWifi()
+                    get(
+                        "/files/upload/status?id=" +
+                            URLEncoder.encode(transferId, "UTF-8"),
+                    ).optLong("receivedBytes", -1L)
+                }.getOrDefault(-1L)
+                if (remote == expectedNext) return remote
+                if (remote != -1L && remote != offset) {
+                    error("Position de reprise incohérente sur le routeur : $remote.")
+                }
+
+                runOnUiThread {
+                    progressText.text =
+                        "Wi-Fi interrompu · reprise automatique " +
+                            "($attempt/$UPLOAD_RETRY_COUNT)…"
+                }
+                Thread.sleep(1_000L)
+            }
+        }
+        throw lastFailure ?: IllegalStateException("Transfert interrompu.")
+    }
+
+    private fun uploadSourceInfo(uri: Uri): UploadSourceInfo {
+        var name = "fichier"
+        var size = -1L
+        contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (nameIndex >= 0 && !cursor.isNull(nameIndex)) {
+                    name = cursor.getString(nameIndex).orEmpty().ifBlank { "fichier" }
+                }
+                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) {
+                    size = cursor.getLong(sizeIndex)
+                }
+            }
+        }
+        return UploadSourceInfo(
+            name = name,
+            mimeType = contentResolver.getType(uri) ?: "application/octet-stream",
+            sizeBytes = size,
         )
     }
 
@@ -997,6 +1338,36 @@ class MainActivity : Activity() {
         return JSONObject(text.ifBlank { "{}" })
     }
 
+    private fun requestBytes(
+        method: String,
+        path: String,
+        body: ByteArray,
+        contentType: String,
+    ): JSONObject {
+        val connection = URL(BASE_URL + path).openConnection() as HttpURLConnection
+        connection.requestMethod = method
+        connection.connectTimeout = 8_000
+        connection.readTimeout = 90_000
+        connection.useCaches = false
+        connection.setRequestProperty("Accept", "application/json")
+        if (token.isNotBlank()) {
+            connection.setRequestProperty("X-Shizzi-Admin-Token", token)
+        }
+        connection.doOutput = true
+        connection.setRequestProperty("Content-Type", contentType)
+        connection.setFixedLengthStreamingMode(body.size)
+        connection.outputStream.use { it.write(body) }
+
+        val stream = if (connection.responseCode in 200..299) {
+            connection.inputStream
+        } else {
+            connection.errorStream ?: connection.inputStream
+        }
+        val text = BufferedReader(InputStreamReader(stream)).use { it.readText() }
+        connection.disconnect()
+        return JSONObject(text.ifBlank { "{}" })
+    }
+
     private fun sha256Hex(value: String): String =
         MessageDigest.getInstance("SHA-256")
             .digest(value.toByteArray(StandardCharsets.UTF_8))
@@ -1141,5 +1512,7 @@ class MainActivity : Activity() {
 
     private companion object {
         const val BASE_URL = "http://192.0.2.1/api/v1/admin"
+        const val REQUEST_PICK_UPLOAD_FILE = 4408
+        const val UPLOAD_RETRY_COUNT = 60
     }
 }
