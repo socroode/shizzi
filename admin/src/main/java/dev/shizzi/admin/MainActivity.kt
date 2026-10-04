@@ -595,11 +595,13 @@ class MainActivity : Activity() {
                 labels.joinToString(", ")
             }
 
+            val writable = folder.optBoolean("writable", false)
             info(
                 "$name — ${mediaKindLabel(kind)}" +
                     "\n" + (if (folderEnabled) "Actif" else "Désactivé") +
                     " · Accès : $accessText" +
-                    "\nSource : " + mediaSourceLabel(treeUri),
+                    "\nSource : " + mediaSourceLabel(treeUri) +
+                    "\nÉcriture Admin : " + if (writable) "OUI" else "NON",
             )
 
             val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -676,13 +678,17 @@ class MainActivity : Activity() {
         for (index in 0 until folders.length()) {
             val folder = folders.optJSONObject(index) ?: continue
             if (folder.optString("treeUri").isBlank()) continue
+            if (!folder.optBoolean("writable", false)) continue
             val id = folder.optString("id")
             if (id.isBlank()) continue
             ids += id
             names += folder.optString("name").ifBlank { "Dossier Media" }
         }
         if (ids.isEmpty()) {
-            toast("Aucun dossier du routeur n'est encore autorisé en écriture.")
+            toast(
+                "Aucun dossier n'est autorisé en écriture. " +
+                    "Sur le routeur, ouvre Shizzi Media et réautorise une fois la source.",
+            )
             return
         }
 
