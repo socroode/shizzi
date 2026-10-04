@@ -188,25 +188,15 @@ class MediaHttpServer(
         val allowedFolderIds = folders.map { it.id }.toSet()
         val entries = MediaIndex.entries(context)
             .filter { it.folderId in allowedFolderIds }
-            .take(HOME_ENTRY_LIMIT)
-
-        val mediaCards = if (entries.isEmpty()) {
-            "<p class=\"empty\">Aucun média indexé pour ce compte.</p>"
-        } else {
-            entries.joinToString("") { entry -> mediaCard(entry) }
-        }
 
         val folderCards = if (folders.isEmpty()) {
             "<p class=\"empty\">Aucun dossier Media autorisé.</p>"
         } else {
             folders.joinToString("") { folder ->
-                """
-                <a class="folder-card" href="library?folder=${folder.id}">
-                  <span class="folder-icon">▣</span>
-                  <strong>${escape(folder.name)}</strong>
-                  <small>${escape(folder.kind.label)}</small>
-                </a>
-                """.trimIndent()
+                folderCard(
+                    folder = folder,
+                    entries = entries,
+                )
             }
         }
 
@@ -217,18 +207,14 @@ class MediaHttpServer(
               <div>
                 <span class="eyebrow">BIBLIOTHÈQUE LOCALE</span>
                 <h1>Shizzi <em>Media</em></h1>
-                <p class="lead">Films, séries et musique disponibles directement sur le routeur Shizzi.</p>
+                <p class="lead">Choisis un dossier pour ouvrir ses films, séries ou musiques.</p>
               </div>
             </section>
             <section>
-              <div class="section-head"><h2>Vignettes</h2><span>${entries.size} média(s)</span></div>
-              <div class="poster-grid">$mediaCards</div>
-            </section>
-            <section>
-              <div class="section-head"><h2>Dossiers</h2><span>${folders.size}</span></div>
+              <div class="section-head"><h2>Mes dossiers</h2><span>${folders.size}</span></div>
               <div class="folder-grid">$folderCards</div>
             </section>
-            <p class="hint">Les miniatures vidéo sont générées automatiquement sur le routeur et mises en cache.</p>
+            <p class="hint">Chaque dossier utilise automatiquement une miniature provenant de son propre contenu.</p>
             """.trimIndent(),
         )
         writeText(output, 200, "OK", "text/html; charset=utf-8", html, headOnly)
@@ -352,6 +338,48 @@ class MediaHttpServer(
         )
     }
 
+    private fun folderCard(
+        folder: MediaFolderConfig,
+        entries: List<MediaEntry>,
+    ): String {
+        val candidates = entries.map { entry ->
+            MediaFolderCoverCandidate(
+                id = entry.id,
+                folderId = entry.folderId,
+                title = MediaThumbnailPolicy.displayTitle(entry.name),
+            )
+        }
+        val coverId = MediaFolderCoverPolicy.select(folder.id, candidates)?.id
+        val coverEntry = coverId?.let { id -> entries.firstOrNull { it.id == id } }
+        val count = entries.count { it.folderId == folder.id }
+        val folderName = escape(folder.name)
+        val kindLabel = escape(folder.kind.label)
+
+        val visual = if (coverEntry != null) {
+            """
+            <div class="folder-image">
+              <img loading="lazy" src="thumbnail?id=${coverEntry.id}&v=${coverEntry.size}" alt="$folderName">
+              <span class="badge">$kindLabel</span>
+            </div>
+            """.trimIndent()
+        } else {
+            """
+            <div class="folder-image folder-placeholder">
+              <span class="folder-glyph">▣</span>
+              <span class="badge">$kindLabel</span>
+            </div>
+            """.trimIndent()
+        }
+
+        return """
+            <a class="folder-card catalog-card" data-title="$folderName" href="library?folder=${folder.id}">
+              $visual
+              <strong>$folderName</strong>
+              <small>$count contenu${if (count > 1) "s" else ""}</small>
+            </a>
+        """.trimIndent()
+    }
+
     private fun mediaCard(entry: MediaEntry): String {
         val title = escape(MediaThumbnailPolicy.displayTitle(entry.name))
         val folder = escape(entry.folderName.ifBlank { entry.kind.label })
@@ -362,7 +390,7 @@ class MediaHttpServer(
         }
         val size = if (entry.size > 0L) humanBytes(entry.size) else "Local"
         return """
-            <a class="poster" data-title="$title" href="play?id=${entry.id}">
+            <a class="poster catalog-card" data-title="$title" href="play?id=${entry.id}">
               <div class="poster-image">
                 <img loading="lazy" src="thumbnail?id=${entry.id}&v=${entry.size}" alt="$title">
                 <span class="badge">$badge</span>
@@ -564,7 +592,7 @@ class MediaHttpServer(
             .hero{margin:14px 0 26px;padding:22px;border:1px solid #ffffff17;border-radius:24px;background:linear-gradient(135deg,#17122d,#0b1d33);box-shadow:0 16px 50px #0005}.hero h1{font-size:2.25rem;margin:5px 0 6px}.eyebrow{font-size:.72rem;letter-spacing:.13em;color:#a78bfa;font-weight:900}.lead,.hint,.empty{color:#94a3b8;line-height:1.5}
             section{margin:24px 0}.section-head{display:flex;align-items:end;justify-content:space-between;gap:12px;margin:0 0 12px}.section-head h1,.section-head h2{margin:0}.section-head span{color:#94a3b8;font-size:.9rem}
             .poster-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.poster{min-width:0;text-decoration:none}.poster-image{position:relative;aspect-ratio:16/10;overflow:hidden;border-radius:16px;background:#111827;border:1px solid #ffffff14}.poster img{width:100%;height:100%;display:block;object-fit:cover}.poster strong{display:block;margin:8px 3px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.poster small{display:block;margin:0 3px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.badge{position:absolute;top:8px;right:8px;padding:5px 8px;border-radius:9px;background:#050b15d9;color:#fff;font-size:.72rem;font-weight:900}
-            .folder-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.folder-card{display:flex;flex-direction:column;gap:4px;padding:16px;border:1px solid #334155;border-radius:17px;background:#0f1a2b;text-decoration:none}.folder-card small{color:#94a3b8}.folder-icon{color:#a78bfa;font-size:1.35rem}
+            .folder-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.folder-card{min-width:0;text-decoration:none}.folder-image{position:relative;aspect-ratio:16/10;overflow:hidden;border-radius:16px;background:#111827;border:1px solid #ffffff14}.folder-image img{width:100%;height:100%;display:block;object-fit:cover}.folder-placeholder{display:grid;place-items:center;background:linear-gradient(135deg,#28145d,#07111f)}.folder-glyph{font-size:2.4rem;color:#a78bfa}.folder-card strong{display:block;margin:8px 3px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.folder-card small{display:block;margin:0 3px;color:#94a3b8}
             .back{display:inline-block;margin:8px 0 20px;color:#c4b5fd;text-decoration:none;font-weight:800}.player{margin-top:18px}video{width:100%;max-height:70vh;background:#000;border-radius:18px}audio{width:100%}
             @media(min-width:700px){.poster-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.folder-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
           </style>
@@ -587,7 +615,7 @@ class MediaHttpServer(
             if(!input)return;
             input.addEventListener('input',function(){
               var q=(input.value||'').trim().toLowerCase();
-              document.querySelectorAll('.poster').forEach(function(card){
+              document.querySelectorAll('.catalog-card').forEach(function(card){
                 var title=(card.getAttribute('data-title')||'').toLowerCase();
                 card.style.display=!q||title.indexOf(q)>=0?'':'none';
               });
@@ -620,6 +648,5 @@ class MediaHttpServer(
     companion object {
         private const val TAG = "ShizziMedia"
         internal const val MAX_CLIENTS = 24
-        private const val HOME_ENTRY_LIMIT = 24
     }
 }
