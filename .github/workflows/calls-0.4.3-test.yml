@@ -118,6 +118,12 @@ jobs:
           ./gradlew :app:testDebugUnitTest --tests dev.shizzi.RouterBatteryStateTest --tests dev.shizzi.CybercafeTrafficBridgeTest --no-daemon
           ./gradlew :admin:testDebugUnitTest --tests dev.shizzi.admin.AdminBatteryLabelTest --no-daemon
 
+      - name: Virtual Admin Wi-Fi file transfer and portal regressions
+        run: |
+          ./gradlew :app:testDebugUnitTest --tests dev.shizzi.AdminFileTransferProtocolTest --no-daemon
+          cd datapath
+          go test -run '^(TestAdminFileProxyRequiresAuthenticatedAdminSession|TestAdminFileProxyForwardsAuthenticatedRequestToLoopbackBackend|TestPortalServedWhenRuleAppearsAfterHandshake|TestPortalLoginAuthorizesOnlyResolvedClient|TestSameAccountIsRefusedOnSecondActiveClient)$' ./...
+
       - name: Build signed Shizzi router, embedded Shizzi+ and Admin
         run: ./gradlew :app:assembleRelease :admin:assembleRelease --no-daemon
 
@@ -156,8 +162,8 @@ jobs:
           ADMIN_VERSION=$(echo "$ADMIN_BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
           ADMIN_CODE=$(echo "$ADMIN_BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
           test "$ADMIN_PACKAGE" = "dev.shizzi.admin"
-          test "$ADMIN_VERSION" = "0.2.7-test"
-          test "$ADMIN_CODE" = "9"
+          test "$ADMIN_VERSION" = "0.2.8-test"
+          test "$ADMIN_CODE" = "10"
           ADMIN_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$ADMIN" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
           test "$ADMIN_CERT" = "$EXPECTED_NORM"
 
@@ -177,9 +183,9 @@ jobs:
           mkdir -p release-output
           cp app/build/outputs/apk/release/app-release.apk release-output/Shizzi-Hotspot-0.4.3.9-Calls-Test.apk
           cp conso/build/outputs/apk/release/conso-release.apk release-output/Shizzi-Plus-0.2.10-Calls-Lifecycle-Test.apk
-          cp admin/build/outputs/apk/release/admin-release.apk release-output/Shizzi-Admin-0.2.7-Battery-Test.apk
+          cp admin/build/outputs/apk/release/admin-release.apk release-output/Shizzi-Admin-0.2.8-FileTransfer-Test.apk
           cd release-output
-          sha256sum Shizzi-Hotspot-0.4.3.9-Calls-Test.apk Shizzi-Plus-0.2.10-Calls-Lifecycle-Test.apk Shizzi-Admin-0.2.7-Battery-Test.apk > SHA256SUMS.txt
+          sha256sum Shizzi-Hotspot-0.4.3.9-Calls-Test.apk Shizzi-Plus-0.2.10-Calls-Lifecycle-Test.apk Shizzi-Admin-0.2.8-FileTransfer-Test.apk > SHA256SUMS.txt
 
       - name: Upload signed calls test APKs
         uses: actions/upload-artifact@v5
@@ -188,7 +194,7 @@ jobs:
           path: |
             release-output/Shizzi-Hotspot-0.4.3.9-Calls-Test.apk
             release-output/Shizzi-Plus-0.2.10-Calls-Lifecycle-Test.apk
-            release-output/Shizzi-Admin-0.2.7-Battery-Test.apk
+            release-output/Shizzi-Admin-0.2.8-FileTransfer-Test.apk
             release-output/SHA256SUMS.txt
           if-no-files-found: error
 
