@@ -120,9 +120,11 @@ jobs:
 
       - name: Virtual Admin Wi-Fi file transfer and portal regressions
         run: |
-          ./gradlew :app:testDebugUnitTest --tests dev.shizzi.AdminFileTransferProtocolTest --no-daemon
+          ./gradlew :app:testDebugUnitTest --tests dev.shizzi.AdminFileTransferProtocolTest --tests dev.shizzi.CybercafeTrafficBridgeTest --no-daemon
+          grep -q 'FLAG_GRANT_WRITE_URI_PERMISSION' app/src/main/java/dev/shizzi/MediaActivity.kt
+          grep -q 'fun isWritable' app/src/main/java/dev/shizzi/MediaRemoteAdmin.kt
           cd datapath
-          go test -run '^(TestAdminFileProxyRequiresAuthenticatedAdminSession|TestAdminFileProxyForwardsAuthenticatedRequestToLoopbackBackend|TestPortalServedWhenRuleAppearsAfterHandshake|TestPortalLoginAuthorizesOnlyResolvedClient|TestSameAccountIsRefusedOnSecondActiveClient)$' ./...
+          go test -run '^(TestAdminFileProxyRequiresAuthenticatedAdminSession|TestAdminFileProxyForwardsAuthenticatedRequestToLoopbackBackend|TestAdminFileProxyPreservesChunkLengthAndBody|TestPortalServedWhenRuleAppearsAfterHandshake|TestPortalLoginAuthorizesOnlyResolvedClient|TestSameAccountIsRefusedOnSecondActiveClient)$' ./...
 
       - name: Build signed Shizzi router, embedded Shizzi+ and Admin
         run: ./gradlew :app:assembleRelease :admin:assembleRelease --no-daemon
