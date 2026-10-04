@@ -19,6 +19,8 @@ class MessagingCallWebUiTest {
             "startIncomingRingtone",
             "startOutgoingRingback",
             "stopCallTone",
+            "markCallTransportActive",
+            "markCallTransportIdle",
             "validatedRemoteDescription",
             "Erreur au décroché",
             "Erreur SDP après décroché",
