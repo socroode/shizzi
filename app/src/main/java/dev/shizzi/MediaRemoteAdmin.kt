@@ -59,6 +59,21 @@ object MediaRemoteSources {
         }
     }
 
+    fun isWritable(context: Context, uri: Uri): Boolean {
+        val authority = uri.authority ?: return false
+        val treeId = runCatching { DocumentsContract.getTreeDocumentId(uri) }.getOrNull()
+            ?: return false
+
+        return context.contentResolver.persistedUriPermissions.any { permission ->
+            if (!permission.isWritePermission) return@any false
+            val root = permission.uri
+            val rootAuthority = root.authority ?: return@any false
+            val rootId = runCatching { DocumentsContract.getTreeDocumentId(root) }.getOrNull()
+                ?: return@any false
+            rootAuthority == authority && rootId == treeId
+        }
+    }
+
     fun displayName(context: Context, uri: Uri): String {
         val projection = arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
         return runCatching {
