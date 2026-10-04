@@ -788,12 +788,16 @@ func (m *TrafficManager) serveAdminFileProxy(conn net.Conn, request *http.Reques
 		writeJSONStatus(conn, "502 Bad Gateway", map[string]any{"ok": false})
 		return
 	}
-	for _, name := range []string{"Content-Type", "Content-Length"} {
-		for _, value := range request.Header.Values(name) {
-			if _, err := fmt.Fprintf(local, "%s: %s\r\n", name, value); err != nil {
-				writeJSONStatus(conn, "502 Bad Gateway", map[string]any{"ok": false})
-				return
-			}
+	if contentType := strings.TrimSpace(request.Header.Get("Content-Type")); contentType != "" {
+		if _, err := fmt.Fprintf(local, "Content-Type: %s\r\n", contentType); err != nil {
+			writeJSONStatus(conn, "502 Bad Gateway", map[string]any{"ok": false})
+			return
+		}
+	}
+	if request.ContentLength >= 0 {
+		if _, err := fmt.Fprintf(local, "Content-Length: %d\r\n", request.ContentLength); err != nil {
+			writeJSONStatus(conn, "502 Bad Gateway", map[string]any{"ok": false})
+			return
 		}
 	}
 	if _, err := io.WriteString(local, "Connection: close\r\n\r\n"); err != nil {
