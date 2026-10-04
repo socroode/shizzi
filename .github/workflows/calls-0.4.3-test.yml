@@ -77,6 +77,9 @@ jobs:
           grep -q 'fun startIncomingRingtone' conso/src/main/java/dev/shizzi/conso/MainActivity.kt
           grep -q 'fun startOutgoingRingback' conso/src/main/java/dev/shizzi/conso/MainActivity.kt
           grep -q 'fun stopCallTone' conso/src/main/java/dev/shizzi/conso/MainActivity.kt
+          grep -q 'fun markCallTransportActive' conso/src/main/java/dev/shizzi/conso/MainActivity.kt
+          grep -q 'fun markCallTransportIdle' conso/src/main/java/dev/shizzi/conso/MainActivity.kt
+          grep -q 'ensureCallWifiNetwork' conso/src/main/java/dev/shizzi/conso/MainActivity.kt
           grep -q 'RingtoneManager.TYPE_RINGTONE' conso/src/main/java/dev/shizzi/conso/MainActivity.kt
           grep -q 'ToneGenerator.TONE_SUP_RINGTONE' conso/src/main/java/dev/shizzi/conso/MainActivity.kt
 
@@ -134,8 +137,8 @@ jobs:
           CONSO_VERSION=$(echo "$CONSO_BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
           CONSO_CODE=$(echo "$CONSO_BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
           test "$CONSO_PACKAGE" = "dev.shizzi.conso"
-          test "$CONSO_VERSION" = "0.2.9-test"
-          test "$CONSO_CODE" = "13"
+          test "$CONSO_VERSION" = "0.2.10-test"
+          test "$CONSO_CODE" = "14"
           CONSO_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$CONSO" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
           test "$CONSO_CERT" = "$EXPECTED_NORM"
 
@@ -156,8 +159,8 @@ jobs:
           EMBEDDED_BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$EMBEDDED")
           EMBEDDED_VERSION=$(echo "$EMBEDDED_BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
           EMBEDDED_CODE=$(echo "$EMBEDDED_BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
-          test "$EMBEDDED_VERSION" = "0.2.9-test"
-          test "$EMBEDDED_CODE" = "13"
+          test "$EMBEDDED_VERSION" = "0.2.10-test"
+          test "$EMBEDDED_CODE" = "14"
           EMBEDDED_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$EMBEDDED" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
           test "$EMBEDDED_CERT" = "$EXPECTED_NORM"
 
@@ -165,10 +168,10 @@ jobs:
         run: |
           mkdir -p release-output
           cp app/build/outputs/apk/release/app-release.apk release-output/Shizzi-Hotspot-0.4.3.9-Calls-Test.apk
-          cp conso/build/outputs/apk/release/conso-release.apk release-output/Shizzi-Plus-0.2.9-Calls-Ringtone-Test.apk
+          cp conso/build/outputs/apk/release/conso-release.apk release-output/Shizzi-Plus-0.2.10-Calls-Lifecycle-Test.apk
           cp admin/build/outputs/apk/release/admin-release.apk release-output/Shizzi-Admin-0.2.6-AutoRefresh-Test.apk
           cd release-output
-          sha256sum Shizzi-Hotspot-0.4.3.9-Calls-Test.apk Shizzi-Plus-0.2.9-Calls-Ringtone-Test.apk Shizzi-Admin-0.2.6-AutoRefresh-Test.apk > SHA256SUMS.txt
+          sha256sum Shizzi-Hotspot-0.4.3.9-Calls-Test.apk Shizzi-Plus-0.2.10-Calls-Lifecycle-Test.apk Shizzi-Admin-0.2.6-AutoRefresh-Test.apk > SHA256SUMS.txt
 
       - name: Upload signed calls test APKs
         uses: actions/upload-artifact@v5
@@ -176,7 +179,7 @@ jobs:
           name: Shizzi-0.4.3-calls-test
           path: |
             release-output/Shizzi-Hotspot-0.4.3.9-Calls-Test.apk
-            release-output/Shizzi-Plus-0.2.9-Calls-Ringtone-Test.apk
+            release-output/Shizzi-Plus-0.2.10-Calls-Lifecycle-Test.apk
             release-output/Shizzi-Admin-0.2.6-AutoRefresh-Test.apk
             release-output/SHA256SUMS.txt
           if-no-files-found: error
