@@ -53,6 +53,7 @@ class CybercafeTrafficBridgeTest {
                 kind = MediaKind.FILMS,
                 treeUri = "content://test/tree/primary%3AMovies",
                 allowedAccounts = setOf("1001", "1003"),
+                writable = true,
             ),
             MediaFolderConfig(
                 id = "music",
@@ -90,6 +91,7 @@ class CybercafeTrafficBridgeTest {
         assertEquals("films-family", first.getString("id"))
         assertEquals("Films famille", first.getString("name"))
         assertEquals("films", first.getString("kind"))
+        assertTrue(first.getBoolean("writable"))
         assertEquals(2, first.getJSONArray("allowedAccounts").length())
     }
 
