@@ -95,6 +95,9 @@ jobs:
       - name: Direct 192.0.2.1 Shizzi+ download tests
         run: cd datapath && go test -run '^(TestClientAppDownloadUsesNativeBrowserStreaming|TestClientAppDownloadScriptIsNotInjectedWithoutDownloadLink|TestPortalShowsDirect192DownloadLink|TestShizziPlusDownloadPathVariants|TestTrailingSlashShizziPlusDownloadNeverFallsBackToPortalHTML|TestDirectShizziPlusAliasForwardsRangeAndStreamsResponse|TestClientAppDownloadProxyReturnsCompleteAPK)$' ./...
 
+      - name: Virtual generic local speedtest router wording
+        run: cd datapath && go test -run '^TestLocalSpeedtestUsesGenericShizziRouterWording$' ./...
+
       - name: Virtual automatic hotspot startup regression
         run: ./gradlew :app:testDebugUnitTest --tests dev.shizzi.DownstreamStartupTest --no-daemon
 
