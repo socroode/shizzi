@@ -93,4 +93,25 @@ class CybercafeTrafficBridgeTest {
         assertEquals(2, first.getJSONArray("allowedAccounts").length())
     }
 
+    @Test
+    fun adminStateContainsRouterBatteryTelemetry() {
+        val root = org.json.JSONObject(
+            CybercafeState().toPortalConfigJson(
+                routerBattery = RouterBatteryState(
+                    available = true,
+                    percent = 78,
+                    charging = true,
+                ),
+            ),
+        )
+
+        val battery = root
+            .getJSONObject("adminState")
+            .getJSONObject("battery")
+
+        assertTrue(battery.getBoolean("available"))
+        assertEquals(78, battery.getInt("percent"))
+        assertTrue(battery.getBoolean("charging"))
+    }
+
 }
