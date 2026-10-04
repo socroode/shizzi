@@ -263,6 +263,14 @@ class SessionService : Service() {
                 var pushFailed = false
                 if (due) {
                     try {
+                        val mediaFolders = MediaFolderStore.load(this@SessionService)
+                            .map { folder ->
+                                folder.copy(
+                                    writable = folder.uri()?.let { uri ->
+                                        MediaRemoteSources.isWritable(this@SessionService, uri)
+                                    } == true,
+                                )
+                            }
                         controller.applyCybercafePolicies(
                             store.state.value,
                             ledger.epoch,
@@ -271,7 +279,7 @@ class SessionService : Service() {
                             pendingAdminResults,
                             clientAppDistribution.info.takeIf { it.available },
                             MediaPrefs.isEnabled(this@SessionService),
-                            MediaFolderStore.load(this@SessionService),
+                            mediaFolders,
                             MediaIndex.summary(applicationContext),
                             latestBattery,
                         )
