@@ -380,6 +380,7 @@ fun CybercafeState.toPortalConfigJson(
                             put("kind", folder.kind.key)
                             put("treeUri", folder.treeUri ?: JSONObject.NULL)
                             put("enabled", folder.enabled)
+                            put("writable", folder.writable)
                             put("allowedAccounts", JSONArray(folder.allowedAccounts.toList()))
                         })
                     }
