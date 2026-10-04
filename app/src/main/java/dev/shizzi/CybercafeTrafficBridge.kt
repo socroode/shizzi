@@ -273,6 +273,7 @@ fun CybercafeState.toPortalConfigJson(
     mediaEnabled: Boolean = false,
     mediaFolders: List<MediaFolderConfig> = emptyList(),
     mediaSummary: MediaIndexSummary? = null,
+    routerBattery: RouterBatteryState = RouterBatteryState(),
 ): String =
     JSONObject().apply {
         put("clientApp", JSONObject().apply {
@@ -302,6 +303,11 @@ fun CybercafeState.toPortalConfigJson(
                 put("title", this@toPortalConfigJson.portal.title)
                 put("message", this@toPortalConfigJson.portal.message)
                 put("html", this@toPortalConfigJson.portal.html)
+            })
+            put("battery", JSONObject().apply {
+                put("available", routerBattery.available)
+                put("percent", routerBattery.percent)
+                put("charging", routerBattery.charging)
             })
             put("accounts", JSONArray().apply {
                 accounts.values.sortedBy(PrepaidAccount::number).forEach { account ->
@@ -469,6 +475,7 @@ suspend fun TetherClient.applyCybercafePolicies(
     mediaEnabled: Boolean = false,
     mediaFolders: List<MediaFolderConfig> = emptyList(),
     mediaSummary: MediaIndexSummary? = null,
+    routerBattery: RouterBatteryState = RouterBatteryState(),
 ) {
     val portalRequired = state.accounts.isNotEmpty() || state.remoteAdmin.enabled
 
@@ -487,6 +494,7 @@ suspend fun TetherClient.applyCybercafePolicies(
             mediaEnabled,
             mediaFolders,
             mediaSummary,
+            routerBattery,
         ),
     )
     if (!portalRequired) setRequireClientAttribution(false)
