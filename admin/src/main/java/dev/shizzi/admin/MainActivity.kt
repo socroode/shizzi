@@ -260,6 +260,16 @@ class MainActivity : Activity() {
         val state = response.optJSONObject("state") ?: JSONObject()
         val traffic = response.optJSONObject("traffic") ?: JSONObject()
 
+        val battery = state.optJSONObject("battery") ?: JSONObject()
+        section("État du routeur")
+        info(
+            AdminBatteryLabel.format(
+                available = battery.optBoolean("available", false),
+                percent = battery.optInt("percent", -1),
+                charging = battery.optBoolean("charging", false),
+            ),
+        )
+
         renderAccounts(state.optJSONArray("accounts") ?: JSONArray())
         renderOffersAndVouchers(
             state.optJSONArray("offers") ?: JSONArray(),
