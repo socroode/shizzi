@@ -18,6 +18,7 @@ import (
 
 const portalIP = "192.0.2.1"
 const clientAppBridgeAddress = "127.0.0.1:8091"
+const adminFileBridgeAddress = "127.0.0.1:8092"
 const mediaBridgeAddress = "127.0.0.1:8088"
 const chatBridgeAddress = "127.0.0.1:8090"
 
@@ -640,6 +641,22 @@ func (m *TrafficManager) serveAdminAPI(conn net.Conn, request *http.Request, cli
 		}
 		return true
 
+	case strings.HasPrefix(path, "/api/v1/admin/files/"):
+		m.mu.Lock()
+		_, ok := m.requireAdminTokenLocked(request, clientIP)
+		m.mu.Unlock()
+		if !ok {
+			writeJSONStatus(conn, "401 Unauthorized", map[string]any{"ok": false})
+			return true
+		}
+		switch request.Method {
+		case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete:
+			m.serveAdminFileProxy(conn, request)
+		default:
+			writeJSONStatus(conn, "405 Method Not Allowed", map[string]any{"ok": false})
+		}
+		return true
+
 	case request.Method == http.MethodGet && path == "/api/v1/admin/state":
 		m.mu.Lock()
 		_, ok := m.requireAdminTokenLocked(request, clientIP)
@@ -741,6 +758,62 @@ func (m *TrafficManager) serveAdminAPI(conn net.Conn, request *http.Request, cli
 
 	writeJSONStatus(conn, "404 Not Found", map[string]any{"ok": false})
 	return true
+}
+
+func (m *TrafficManager) serveAdminFileProxy(conn net.Conn, request *http.Request) {
+	local, err := net.DialTimeout("tcp", adminFileBridgeAddress, 3*time.Second)
+	if err != nil {
+		writeJSONStatus(conn, "503 Service Unavailable", map[string]any{
+			"ok": false, "message": "Transfert de fichiers Admin indisponible sur le routeur.",
+		})
+		return
+	}
+	defer local.Close()
+	_ = local.SetDeadline(time.Now().Add(10 * time.Minute))
+
+	target := strings.TrimPrefix(request.URL.Path, "/api/v1/admin/files")
+	if target == "" {
+		target = "/"
+	}
+	if request.URL.RawQuery != "" {
+		target += "?" + request.URL.RawQuery
+	}
+
+	if _, err := fmt.Fprintf(
+		local,
+		"%s %s HTTP/1.1\r\nHost: localhost\r\n",
+		request.Method,
+		target,
+	); err != nil {
+		writeJSONStatus(conn, "502 Bad Gateway", map[string]any{"ok": false})
+		return
+	}
+	for _, name := range []string{"Content-Type", "Content-Length"} {
+		for _, value := range request.Header.Values(name) {
+			if _, err := fmt.Fprintf(local, "%s: %s\r\n", name, value); err != nil {
+				writeJSONStatus(conn, "502 Bad Gateway", map[string]any{"ok": false})
+				return
+			}
+		}
+	}
+	if _, err := io.WriteString(local, "Connection: close\r\n\r\n"); err != nil {
+		writeJSONStatus(conn, "502 Bad Gateway", map[string]any{"ok": false})
+		return
+	}
+	if request.Body != nil {
+		if _, err := io.Copy(local, request.Body); err != nil {
+			writeJSONStatus(conn, "400 Bad Request", map[string]any{
+				"ok": false, "message": "Transfert interrompu avant le routeur.",
+			})
+			return
+		}
+	}
+	if tcp, ok := local.(*net.TCPConn); ok {
+		_ = tcp.CloseWrite()
+	}
+	if _, err := io.Copy(conn, local); err != nil {
+		return
+	}
 }
 
 func isClientAppDownloadPath(rawPath string) bool {
