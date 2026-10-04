@@ -166,9 +166,17 @@ class SessionService : Service() {
             var pendingAdminResults = emptyList<AdminCommandResult>()
             val handledAdminCommandIds = mutableSetOf<String>()
             var nextMediaHealthCheckMillis = 0L
+            var nextBatteryPollMillis = 0L
+            var latestBattery = RouterBatteryState()
+            var pushedBattery: RouterBatteryState? = null
 
             while (internalState.value.status == UiStatus.CONNECTED) {
                 val now = System.currentTimeMillis()
+
+                if (now >= nextBatteryPollMillis) {
+                    latestBattery = RouterBatteryReader.read(this@SessionService)
+                    nextBatteryPollMillis = now + BATTERY_POLL_MS
+                }
 
                 if (MediaPrefs.isEnabled(this@SessionService) && now >= nextMediaHealthCheckMillis) {
                     if (!MediaNetwork.backendReachable()) {
@@ -242,6 +250,7 @@ class SessionService : Service() {
                     ledger.epoch != pushedEpoch ||
                     pendingResults.isNotEmpty() ||
                     pendingAdminResults.isNotEmpty() ||
+                    latestBattery != pushedBattery ||
                     now - lastPushMillis >= CYBERCAFE_RESYNC_MS
                 var pushFailed = false
                 if (due) {
@@ -256,9 +265,11 @@ class SessionService : Service() {
                             MediaPrefs.isEnabled(this@SessionService),
                             MediaFolderStore.load(this@SessionService),
                             MediaIndex.summary(applicationContext),
+                            latestBattery,
                         )
                         pushedRevision = revision
                         pushedEpoch = ledger.epoch
+                        pushedBattery = latestBattery
                         lastPushMillis = now
                         pendingResults = emptyList()
                         pendingAdminResults = emptyList()
@@ -430,6 +441,7 @@ class SessionService : Service() {
     companion object {
         private const val NOTIFICATION_ID = 1
         private const val CYBERCAFE_POLL_MS = 1_000L
+        private const val BATTERY_POLL_MS = 5_000L
         private const val CYBERCAFE_RESYNC_MS = 60_000L
         private const val MEDIA_HEALTH_CHECK_MS = 5_000L
         const val ACTION_STOP = "dev.shizzi.STOP_SESSION"
