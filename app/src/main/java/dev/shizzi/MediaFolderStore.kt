@@ -14,6 +14,7 @@ data class MediaFolderConfig(
     val treeUri: String?,
     val enabled: Boolean = true,
     val allowedAccounts: Set<String> = emptySet(),
+    val writable: Boolean = false,
 ) {
     fun uri(): Uri? = treeUri?.takeIf { it.isNotBlank() }?.let(Uri::parse)
 
