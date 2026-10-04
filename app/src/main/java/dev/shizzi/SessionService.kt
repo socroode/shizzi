@@ -45,6 +45,7 @@ class SessionService : Service() {
                 }
         }
     }
+    private val adminFileTransferServer by lazy { AdminFileTransferServer(this) }
 
     private val internalState get() = sessionState
 
@@ -68,6 +69,13 @@ class SessionService : Service() {
             SessionLog.warn("messaging backend failed to start")
         } else {
             SessionLog.info("messaging backend ready on 127.0.0.1:${MessagingHttpServer.PORT}")
+        }
+        if (!adminFileTransferServer.start()) {
+            SessionLog.warn("admin file transfer backend failed to start")
+        } else {
+            SessionLog.info(
+                "admin file transfer backend ready on 127.0.0.1:${AdminFileTransferServer.PORT}",
+            )
         }
         liveService = this
     }
@@ -431,6 +439,7 @@ class SessionService : Service() {
         clearLiveSessions()
         (application as App).cybercafeStore.flushUsage(System.currentTimeMillis(), force = true)
         messagingServer.stop()
+        adminFileTransferServer.stop()
         clientAppDistribution.stop()
         controller.unbind()
         scope.cancel()
