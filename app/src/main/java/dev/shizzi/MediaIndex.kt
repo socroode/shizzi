@@ -76,6 +76,7 @@ object MediaIndex {
             .sortedWith(compareBy<MediaEntry>({ it.kind.ordinal }, { it.relativePath.lowercase() }))
 
         write(context, merged)
+        MediaThumbnailStore.warmAsync(context.applicationContext, merged)
         return summary(context)
     }
 
