@@ -57,6 +57,7 @@ class MainActivity : Activity() {
     private var pendingWebPermissionRequest: PermissionRequest? = null
     private var pendingWebPermissionResources: Array<String> = emptyArray()
     @Volatile private var secureChatActive = false
+    @Volatile private var callTransportActive = false
     private var chatBridgeInstalled = false
     private val chatBridge = ShizziNativeChatBridge()
     private val callToneHandler = Handler(Looper.getMainLooper())
@@ -401,11 +402,13 @@ class MainActivity : Activity() {
     private inner class ShizziNativeChatBridge {
         @JavascriptInterface
         fun startIncomingRingtone() {
+            callTransportActive = true
             runOnUiThread { startIncomingCallAlert() }
         }
 
         @JavascriptInterface
         fun startOutgoingRingback() {
+            callTransportActive = true
             runOnUiThread { startOutgoingCallTone() }
         }
 
@@ -415,9 +418,33 @@ class MainActivity : Activity() {
         }
 
         @JavascriptInterface
+        fun markCallTransportActive() {
+            callTransportActive = true
+        }
+
+        @JavascriptInterface
+        fun markCallTransportIdle() {
+            callTransportActive = false
+            runOnUiThread {
+                if (!secureChatActive) {
+                    stopAllCallTones()
+                    removeSecureChatBridge()
+                    if (webView.visibility != View.VISIBLE) {
+                        releaseWifiBinding()
+                    }
+                }
+            }
+        }
+
+        @JavascriptInterface
         fun request(path: String, method: String, body: String): String {
-            if (!secureChatActive) {
+            val callRequest = SecureChatWebSupport.isCallApiPath(path)
+            if (!secureChatActive && !callRequest) {
                 return bridgeError("Messagerie Shizzi+ inactive.")
+            }
+            if (callRequest) {
+                // An in-flight call must survive a UI state transition.
+                callTransportActive = true
             }
 
             val target = SecureChatWebSupport.apiUrl(path)
@@ -427,7 +454,7 @@ class MainActivity : Activity() {
                 return bridgeError("Méthode locale refusée.")
             }
 
-            val network = boundWifiNetwork ?: findWifiNetwork()
+            val network = ensureCallWifiNetwork()
                 ?: return bridgeError("Wi-Fi Shizzi indisponible.")
 
             return runCatching {
@@ -510,12 +537,18 @@ class MainActivity : Activity() {
         chatBridgeInstalled = true
     }
 
-    private fun deactivateSecureChat() {
-        stopAllCallTones()
+    private fun removeSecureChatBridge() {
+        if (!chatBridgeInstalled || !::webView.isInitialized) return
+        webView.removeJavascriptInterface("ShizziNativeBridge")
+        chatBridgeInstalled = false
+    }
+
+    private fun deactivateSecureChat(force: Boolean = false) {
         secureChatActive = false
-        if (chatBridgeInstalled && ::webView.isInitialized) {
-            webView.removeJavascriptInterface("ShizziNativeBridge")
-            chatBridgeInstalled = false
+        if (force || !callTransportActive) {
+            callTransportActive = false
+            stopAllCallTones()
+            removeSecureChatBridge()
         }
     }
 
@@ -567,7 +600,7 @@ class MainActivity : Activity() {
         status.text = "Ouverture de la messagerie sécurisée…"
 
         if (!bindPortalToWifi()) {
-            deactivateSecureChat()
+            deactivateSecureChat(force = true)
             showNavigationFailure(
                 "Aucun réseau Wi-Fi Shizzi utilisable n'a été trouvé.",
                 "",
@@ -581,14 +614,14 @@ class MainActivity : Activity() {
                 if (!secureChatActive) return@runOnUiThread
                 when {
                     page.loginRequired -> {
-                        deactivateSecureChat()
+                        deactivateSecureChat(force = true)
                         showNavigationFailure(
                             "Compte Shizzi requis.",
                             " Ouvre d'abord ta connexion compte sur cet appareil.",
                         )
                     }
                     page.html == null -> {
-                        deactivateSecureChat()
+                        deactivateSecureChat(force = true)
                         showNavigationFailure(
                             "Impossible d'ouvrir la messagerie Shizzi.",
                             page.error,
@@ -670,6 +703,26 @@ class MainActivity : Activity() {
             webView.setNetworkAvailable(true)
         }
         return true
+    }
+
+    @Synchronized
+    private fun ensureCallWifiNetwork(): Network? {
+        val current = boundWifiNetwork
+        if (current != null) {
+            val caps = connectivityManager.getNetworkCapabilities(current)
+            if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
+                return current
+            }
+            boundWifiNetwork = null
+        }
+
+        val wifi = findWifiNetwork() ?: return null
+        if (!connectivityManager.bindProcessToNetwork(wifi)) return null
+        boundWifiNetwork = wifi
+        runOnUiThread {
+            if (::webView.isInitialized) webView.setNetworkAvailable(true)
+        }
+        return wifi
     }
 
     private fun releaseWifiBinding() {
@@ -761,7 +814,7 @@ class MainActivity : Activity() {
     }
 
     private fun openPortal(url: String, label: String = "Shizzi") {
-        deactivateSecureChat()
+        deactivateSecureChat(force = true)
         requestedBaseUrl = url.substringBeforeLast('/', url) + "/"
         requestedLabel = label
 
@@ -872,7 +925,9 @@ class MainActivity : Activity() {
                 requestedLabel = "Shizzi"
                 deactivateSecureChat()
                 menu.visibility = View.VISIBLE
-                releaseWifiBinding()
+                if (!callTransportActive) {
+                    releaseWifiBinding()
+                }
                 detectMedia()
             }
             else -> super.onBackPressed()
@@ -884,7 +939,7 @@ class MainActivity : Activity() {
         pendingWebPermissionRequest = null
         pendingWebPermissionResources = emptyArray()
         if (fullscreenView != null) exitVideoFullscreen()
-        deactivateSecureChat()
+        deactivateSecureChat(force = true)
         unregisterLocalWifiCallback()
         releaseWifiBinding()
         webView.stopLoading()
