@@ -193,7 +193,7 @@ class MediaHttpServer(
         val mediaCards = if (entries.isEmpty()) {
             "<p class=\"empty\">Aucun média indexé pour ce compte.</p>"
         } else {
-            entries.joinToString("")(::mediaCard)
+            entries.joinToString("") { entry -> mediaCard(entry) }
         }
 
         val folderCards = if (folders.isEmpty()) {
@@ -266,7 +266,7 @@ class MediaHttpServer(
         val cards = if (entries.isEmpty()) {
             "<p class=\"empty\">Aucun fichier trouvé dans ${escape(title)}.</p>"
         } else {
-            entries.joinToString("")(::mediaCard)
+            entries.joinToString("") { entry -> mediaCard(entry) }
         }
 
         val html = page(
