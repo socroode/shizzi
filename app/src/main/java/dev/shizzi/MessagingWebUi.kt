@@ -145,6 +145,18 @@ internal object MessagingWebUi {
             }
           }
 
+          function markCallTransportActive(){
+            if(window.ShizziNativeBridge&&typeof window.ShizziNativeBridge.markCallTransportActive==="function"){
+              try{window.ShizziNativeBridge.markCallTransportActive()}catch(_){}
+            }
+          }
+
+          function markCallTransportIdle(){
+            if(window.ShizziNativeBridge&&typeof window.ShizziNativeBridge.markCallTransportIdle==="function"){
+              try{window.ShizziNativeBridge.markCallTransportIdle()}catch(_){}
+            }
+          }
+
 
           function validatedRemoteDescription(value,expectedType){
             if(!value||typeof value!=="object"){
@@ -373,6 +385,7 @@ internal object MessagingWebUi {
             if(currentCall||incomingCall)return;
             var peer=directPeer(currentConversation());
             if(!peer)return;
+            markCallTransportActive();
             currentCall={id:"",kind:kind,peer:peer.number,peerName:peer.name,outgoing:true};
             showCall(kind,peer.name,false);
             callStatus.textContent=kind==="video"?"Préparation de la caméra…":"Préparation du micro…";
@@ -403,6 +416,7 @@ internal object MessagingWebUi {
               api("call/reject","POST",{callId:event.callId}).catch(function(){});
               return;
             }
+            markCallTransportActive();
             incomingCall=event;
             showCall(event.kind,event.fromName||event.from,true);
             startIncomingRingtone();
@@ -483,6 +497,7 @@ internal object MessagingWebUi {
             currentCall=null;incomingCall=null;localCandidateQueue=[];remoteCandidateQueues={};
             muted=false;cameraEnabled=true;facingMode="user";
             callOverlay.hidden=true;incomingControls.hidden=true;activeControls.hidden=true;
+            markCallTransportIdle();
           }
 
           async function handleCallEvent(event){
