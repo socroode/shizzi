@@ -282,34 +282,40 @@ func TestDNSIsCarriedButNeverBilledWhenUnattributed(t *testing.T) {
 	}
 }
 
-// A phone that leaves must not hand its login to the next phone that gets
-// the same DHCP address.
-func TestDepartedClientSessionIsReleased(t *testing.T) {
+// A sleeping phone may disappear from Android's client list, but that absence
+// alone must not end its login. The session is released only when there is
+// positive identity evidence that the DHCP address belongs to another phone.
+func TestPortalSessionSurvivesAbsenceButNotDHCPReuse(t *testing.T) {
 	manager := newTrafficManager()
-	connected := "{/192.168.7.66=downstream: 41, /192.168.7.77=downstream: 41}"
-	manager.flowAttribution.dumpFn = func() (string, error) {
-		return "IPv4 Upstream:\nIPv4 Downstream:\n" + connected, nil
-	}
 	pushConfig(t, manager, accountForTest("9000", "pin1", 1_000_000))
+	const oldMAC = "aa:bb:cc:dd:ee:66"
+	const replacementMAC = "aa:bb:cc:dd:ee:77"
+
+	manager.flowAttribution.mu.Lock()
+	manager.flowAttribution.clientMACs[phoneA] = oldMAC
+	manager.flowAttribution.mu.Unlock()
 	manager.submitPortalAccountLogin(phoneA, "9000", "pin1")
 
-	manager.flowAttribution.refreshIfOlderThan(0)
 	manager.mu.Lock()
-	manager.pruneDepartedLocked(manager.flowAttribution.presence(), time.Now())
+	manager.pruneDepartedLocked(clientPresence{
+		clients:       map[string]struct{}{},
+		macs:          map[string]string{},
+		authoritative: true,
+	}, time.Now().Add(8*time.Hour))
 	manager.mu.Unlock()
 	if manager.portalRequiredFor(phoneA) {
-		t.Fatal("present client logged out")
+		t.Fatal("sleeping client was logged out because it disappeared from presence")
 	}
 
-	connected = "{/192.168.7.77=downstream: 41}"
-	manager.flowAttribution.refreshIfOlderThan(0)
-	now := time.Now()
 	manager.mu.Lock()
-	manager.pruneDepartedLocked(manager.flowAttribution.presence(), now)
-	manager.pruneDepartedLocked(manager.flowAttribution.presence(), now.Add(departedClientGrace))
+	manager.pruneDepartedLocked(clientPresence{
+		clients:       map[string]struct{}{phoneA: {}},
+		macs:          map[string]string{phoneA: replacementMAC},
+		authoritative: true,
+	}, time.Now())
 	manager.mu.Unlock()
 	if !manager.portalRequiredFor(phoneA) {
-		t.Fatal("departed client's session survived")
+		t.Fatal("different phone inherited the old session through DHCP IP reuse")
 	}
 }
 
