@@ -12,6 +12,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
 import java.net.URLDecoder
+import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -152,11 +153,13 @@ class MediaHttpServer(
             when (uri) {
                 "/", "/index.html" -> serveHome(output, accountNumber, method == "HEAD")
                 "/library" -> serveLibrary(
-                    output,
-                    query["folder"],
-                    query["kind"],
-                    accountNumber,
-                    method == "HEAD",
+                    output = output,
+                    folderId = query["folder"],
+                    rawKind = query["kind"],
+                    seriesKey = query["series"],
+                    seasonKey = query["season"],
+                    accountNumber = accountNumber,
+                    headOnly = method == "HEAD",
                 )
                 "/play" -> servePlayer(output, query["id"], accountNumber, method == "HEAD")
                 "/thumbnail" -> serveThumbnail(
@@ -224,6 +227,8 @@ class MediaHttpServer(
         output: BufferedOutputStream,
         folderId: String?,
         rawKind: String?,
+        seriesKey: String?,
+        seasonKey: String?,
         accountNumber: String,
         headOnly: Boolean,
     ) {
@@ -247,7 +252,19 @@ class MediaHttpServer(
         val title = selectedFolder?.name ?: selectedKind?.label ?: "Media"
         val entries = selectedFolders
             .flatMap { folder -> MediaIndex.entriesForFolder(context, folder.id) }
-            .sortedBy { MediaThumbnailPolicy.displayTitle(it.name).lowercase(Locale.getDefault()) }
+            .sortedBy { it.relativePath.lowercase(Locale.getDefault()) }
+
+        if (selectedFolder?.kind == MediaKind.SERIES) {
+            serveSeriesLibrary(
+                output = output,
+                folder = selectedFolder,
+                entries = entries,
+                seriesKey = seriesKey,
+                seasonKey = seasonKey,
+                headOnly = headOnly,
+            )
+            return
+        }
 
         val cards = if (entries.isEmpty()) {
             "<p class=\"empty\">Aucun fichier trouvé dans ${escape(title)}.</p>"
@@ -260,6 +277,145 @@ class MediaHttpServer(
             """
             <a class="back" href="./">← Accueil Media</a>
             <div class="section-head"><h1>${escape(title)}</h1><span>${entries.size} média(s)</span></div>
+            <div class="poster-grid">$cards</div>
+            """.trimIndent(),
+        )
+        writeText(output, 200, "OK", "text/html; charset=utf-8", html, headOnly)
+    }
+
+    private fun serveSeriesLibrary(
+        output: BufferedOutputStream,
+        folder: MediaFolderConfig,
+        entries: List<MediaEntry>,
+        seriesKey: String?,
+        seasonKey: String?,
+        headOnly: Boolean,
+    ) {
+        val byId = entries.associateBy(MediaEntry::id)
+        val catalog = MediaSeriesNavigationPolicy.build(
+            entries.map { entry ->
+                MediaSeriesPathCandidate(
+                    id = entry.id,
+                    relativePath = entry.relativePath,
+                    containerName = folder.name,
+                )
+            },
+        )
+
+        if (seriesKey.isNullOrBlank()) {
+            val seriesCards = if (catalog.series.isEmpty()) {
+                ""
+            } else {
+                catalog.series.joinToString("") { group ->
+                    seriesCard(folder.id, group, byId)
+                }
+            }
+            val looseEntries = catalog.rootEntryIds.mapNotNull(byId::get)
+            val loose = if (looseEntries.isEmpty()) {
+                ""
+            } else {
+                """
+                <section>
+                  <div class="section-head"><h2>Fichiers sans sous-dossier</h2><span>${looseEntries.size}</span></div>
+                  <div class="poster-grid">${looseEntries.joinToString("") { mediaCard(it) }}</div>
+                </section>
+                """.trimIndent()
+            }
+            val empty = if (catalog.series.isEmpty() && looseEntries.isEmpty()) {
+                "<p class=\"empty\">Aucune série trouvée dans ${escape(folder.name)}.</p>"
+            } else {
+                ""
+            }
+
+            val html = page(
+                folder.name,
+                """
+                <a class="back" href="./">← Accueil Media</a>
+                <div class="section-head"><h1>${escape(folder.name)}</h1><span>${catalog.series.size} série(s)</span></div>
+                <div class="folder-grid">$seriesCards</div>
+                $loose
+                $empty
+                """.trimIndent(),
+            )
+            writeText(output, 200, "OK", "text/html; charset=utf-8", html, headOnly)
+            return
+        }
+
+        val series = catalog.series.firstOrNull { it.key == seriesKey }
+        if (series == null) {
+            writeText(output, 404, "Not Found", "text/plain; charset=utf-8", "Série introuvable", headOnly)
+            return
+        }
+
+        val singleUnnumbered = series.seasons.singleOrNull()?.takeIf { it.number == null }
+        if (seasonKey.isNullOrBlank() && singleUnnumbered != null) {
+            val episodes = singleUnnumbered.entryIds.mapNotNull(byId::get)
+            writeSeriesEpisodesPage(
+                output = output,
+                folder = folder,
+                series = series,
+                season = null,
+                entries = episodes,
+                headOnly = headOnly,
+            )
+            return
+        }
+
+        if (seasonKey.isNullOrBlank()) {
+            val cards = series.seasons.joinToString("") { season ->
+                seasonCard(folder.id, series, season, byId)
+            }
+            val html = page(
+                series.title,
+                """
+                <a class="back" href="library?folder=${queryValue(folder.id)}">← ${escape(folder.name)}</a>
+                <div class="section-head"><h1>${escape(series.title)}</h1><span>${series.seasons.size} saison(s)</span></div>
+                <div class="folder-grid">$cards</div>
+                """.trimIndent(),
+            )
+            writeText(output, 200, "OK", "text/html; charset=utf-8", html, headOnly)
+            return
+        }
+
+        val season = series.seasons.firstOrNull { it.key == seasonKey }
+        if (season == null) {
+            writeText(output, 404, "Not Found", "text/plain; charset=utf-8", "Saison introuvable", headOnly)
+            return
+        }
+        writeSeriesEpisodesPage(
+            output = output,
+            folder = folder,
+            series = series,
+            season = season,
+            entries = season.entryIds.mapNotNull(byId::get),
+            headOnly = headOnly,
+        )
+    }
+
+    private fun writeSeriesEpisodesPage(
+        output: BufferedOutputStream,
+        folder: MediaFolderConfig,
+        series: MediaSeriesGroup,
+        season: MediaSeriesSeasonGroup?,
+        entries: List<MediaEntry>,
+        headOnly: Boolean,
+    ) {
+        val title = season?.let { "${series.title} · ${it.label}" } ?: series.title
+        val back = if (season == null) {
+            "library?folder=${queryValue(folder.id)}"
+        } else {
+            "library?folder=${queryValue(folder.id)}&series=${queryValue(series.key)}"
+        }
+        val cards = if (entries.isEmpty()) {
+            "<p class=\"empty\">Aucun épisode trouvé.</p>"
+        } else {
+            entries.joinToString("") { mediaCard(it) }
+        }
+        val html = page(
+            title,
+            """
+            <a class="back" href="$back">← ${escape(if (season == null) folder.name else series.title)}</a>
+            <div class="section-head"><h1>${escape(title)}</h1><span>${entries.size} épisode(s)</span></div>
             <div class="poster-grid">$cards</div>
             """.trimIndent(),
         )
@@ -376,6 +532,74 @@ class MediaHttpServer(
               $visual
               <strong>$folderName</strong>
               <small>$count contenu${if (count > 1) "s" else ""}</small>
+            </a>
+        """.trimIndent()
+    }
+
+    private fun seriesCard(
+        folderId: String,
+        series: MediaSeriesGroup,
+        byId: Map<String, MediaEntry>,
+    ): String {
+        val cover = series.entryIds.firstNotNullOfOrNull(byId::get)
+        val title = escape(series.title)
+        val subtitle = if (series.seasons.any { it.number != null }) {
+            series.seasons.size.toString() + " saison(s) · " + series.entryIds.size + " épisode(s)"
+        } else {
+            series.entryIds.size.toString() + " épisode(s)"
+        }
+        val visual = if (cover != null) {
+            """
+            <div class="folder-image">
+              <img loading="lazy" src="thumbnail?id=${cover.id}&v=${cover.size}" alt="$title">
+              <span class="badge">Série</span>
+            </div>
+            """.trimIndent()
+        } else {
+            """
+            <div class="folder-image folder-placeholder">
+              <span class="folder-glyph">▶</span>
+              <span class="badge">Série</span>
+            </div>
+            """.trimIndent()
+        }
+        return """
+            <a class="folder-card catalog-card" data-title="$title" href="library?folder=${queryValue(folderId)}&series=${queryValue(series.key)}">
+              $visual
+              <strong>$title</strong>
+              <small>$subtitle</small>
+            </a>
+        """.trimIndent()
+    }
+
+    private fun seasonCard(
+        folderId: String,
+        series: MediaSeriesGroup,
+        season: MediaSeriesSeasonGroup,
+        byId: Map<String, MediaEntry>,
+    ): String {
+        val cover = season.entryIds.firstNotNullOfOrNull(byId::get)
+        val label = escape(season.label)
+        val visual = if (cover != null) {
+            """
+            <div class="folder-image">
+              <img loading="lazy" src="thumbnail?id=${cover.id}&v=${cover.size}" alt="$label">
+              <span class="badge">$label</span>
+            </div>
+            """.trimIndent()
+        } else {
+            """
+            <div class="folder-image folder-placeholder">
+              <span class="folder-glyph">▣</span>
+              <span class="badge">$label</span>
+            </div>
+            """.trimIndent()
+        }
+        return """
+            <a class="folder-card catalog-card" data-title="$label" href="library?folder=${queryValue(folderId)}&series=${queryValue(series.key)}&season=${queryValue(season.key)}">
+              $visual
+              <strong>$label</strong>
+              <small>${season.entryIds.size} épisode(s)</small>
             </a>
         """.trimIndent()
     }
@@ -521,6 +745,9 @@ class MediaHttpServer(
 
     private fun decode(value: String): String =
         URLDecoder.decode(value, StandardCharsets.UTF_8.name())
+
+    private fun queryValue(value: String): String =
+        URLEncoder.encode(value, StandardCharsets.UTF_8.name())
 
     private fun readLine(input: BufferedInputStream): String? {
         val bytes = ArrayList<Byte>(128)
