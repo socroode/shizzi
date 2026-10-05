@@ -104,11 +104,12 @@ jobs:
       - name: Virtual Media access, vouchers and account regression from 1 to 8 clients
         run: ./gradlew :app:testDebugUnitTest --tests dev.shizzi.MediaFolderAccessTest --tests dev.shizzi.CybercafeModelTest --tests dev.shizzi.CybercafeTrafficBridgeTest --no-daemon
 
-      - name: Virtual Media vignette, folder cover and automatic thumbnail regression
+      - name: Virtual Media vignette, folder cover, Series subfolder and automatic thumbnail regression
         run: |
-          ./gradlew :app:testDebugUnitTest --tests dev.shizzi.MediaThumbnailPolicyTest --tests dev.shizzi.MediaFolderCoverPolicyTest --no-daemon
+          ./gradlew :app:testDebugUnitTest --tests dev.shizzi.MediaThumbnailPolicyTest --tests dev.shizzi.MediaFolderCoverPolicyTest --tests dev.shizzi.MediaSeriesNavigationPolicyTest --no-daemon
           grep -q 'Mes dossiers' app/src/main/java/dev/shizzi/MediaHttpServer.kt
           grep -q 'folderCard(' app/src/main/java/dev/shizzi/MediaHttpServer.kt
+          grep -q 'serveSeriesLibrary' app/src/main/java/dev/shizzi/MediaHttpServer.kt
           grep -q 'catalog-card' app/src/main/java/dev/shizzi/MediaHttpServer.kt
 
       - name: Secure messaging proxy tests
@@ -150,7 +151,7 @@ jobs:
           VERSION_CODE=$(echo "$BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
           test "$PACKAGE" = "dev.shizzi"
           test "$VERSION_NAME" = "0.4.3.9"
-          test "$VERSION_CODE" = "24"
+          test "$VERSION_CODE" = "25"
           ROUTER_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
           test "$ROUTER_CERT" = "$EXPECTED_NORM"
 
@@ -190,18 +191,18 @@ jobs:
       - name: Prepare test artifacts
         run: |
           mkdir -p release-output
-          cp app/build/outputs/apk/release/app-release.apk release-output/Shizzi-Hotspot-0.4.3.9-Media-Vouchers-Test.apk
+          cp app/build/outputs/apk/release/app-release.apk release-output/Shizzi-Hotspot-0.4.3.9-Series-Subfolders-Test.apk
           cp conso/build/outputs/apk/release/conso-release.apk release-output/Shizzi-Plus-0.2.10-Calls-Lifecycle-Test.apk
           cp admin/build/outputs/apk/release/admin-release.apk release-output/Shizzi-Admin-0.2.9-Media-Vouchers-Test.apk
           cd release-output
-          sha256sum Shizzi-Hotspot-0.4.3.9-Media-Vouchers-Test.apk Shizzi-Plus-0.2.10-Calls-Lifecycle-Test.apk Shizzi-Admin-0.2.9-Media-Vouchers-Test.apk > SHA256SUMS.txt
+          sha256sum Shizzi-Hotspot-0.4.3.9-Series-Subfolders-Test.apk Shizzi-Plus-0.2.10-Calls-Lifecycle-Test.apk Shizzi-Admin-0.2.9-Media-Vouchers-Test.apk > SHA256SUMS.txt
 
       - name: Upload signed calls test APKs
         uses: actions/upload-artifact@v5
         with:
           name: Shizzi-0.4.3-calls-test
           path: |
-            release-output/Shizzi-Hotspot-0.4.3.9-Media-Vouchers-Test.apk
+            release-output/Shizzi-Hotspot-0.4.3.9-Series-Subfolders-Test.apk
             release-output/Shizzi-Plus-0.2.10-Calls-Lifecycle-Test.apk
             release-output/Shizzi-Admin-0.2.9-Media-Vouchers-Test.apk
             release-output/SHA256SUMS.txt
