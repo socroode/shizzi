@@ -16,7 +16,9 @@ class TetherService : ITetherService.Stub {
     private val compatibility: CompatibilityCheck by lazy { CompatibilityCheck(shellContext) }
     private val apexInstaller: ApexInstaller by lazy { ApexInstaller() }
     private val clientAppDistribution: ClientAppDistributionServer by lazy {
-        ClientAppDistributionServer(appPackageContext())
+        ClientAppDistributionServer(
+            readClientAppAssetFromInstalledShizzi(context),
+        )
     }
 
     @Suppress("unused")
@@ -130,12 +132,6 @@ class TetherService : ITetherService.Stub {
         publish(
             runCatching { runner.run(attemptTethering, availabilityTimeoutMs) }
                 .getOrElse { failure -> errorReport("runProbes", failure) },
-        )
-
-    private fun appPackageContext(): Context =
-        context.createPackageContext(
-            BuildConfig.APPLICATION_ID,
-            Context.CONTEXT_IGNORE_SECURITY,
         )
 
     private fun ensureClientAppDistribution() {
