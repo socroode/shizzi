@@ -34,7 +34,7 @@ class ClientAppDistributionServer(private val context: Context) {
     private var serverSocket: ServerSocket? = null
 
     val info: ClientAppDistributionInfo by lazy {
-        runCatching { inspectAsset() }.getOrElse {
+        runCatching { inspectClientAppAsset(context) }.getOrElse {
             ClientAppDistributionInfo(
                 available = false,
                 version = CLIENT_VERSION,
@@ -222,28 +222,6 @@ class ClientAppDistributionServer(private val context: Context) {
         }
     }
 
-    private fun inspectAsset(): ClientAppDistributionInfo {
-        val digest = MessageDigest.getInstance("SHA-256")
-        var size = 0L
-        context.assets.open(ASSET_PATH).use { asset ->
-            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-            while (true) {
-                val read = asset.read(buffer)
-                if (read < 0) break
-                if (read == 0) continue
-                digest.update(buffer, 0, read)
-                size += read
-            }
-        }
-        return ClientAppDistributionInfo(
-            available = size > 0,
-            version = CLIENT_VERSION,
-            fileName = CLIENT_FILE_NAME,
-            sizeBytes = size,
-            sha256 = digest.digest().joinToString("") { "%02x".format(it) },
-        )
-    }
-
     private fun readLine(input: BufferedInputStream): String? {
         val bytes = ArrayList<Byte>(128)
         while (true) {
@@ -282,4 +260,27 @@ class ClientAppDistributionServer(private val context: Context) {
         const val CLIENT_FILE_NAME = "Shizzi-Plus-0.2.10-test.apk"
         const val ASSET_PATH = "shizzi/Shizzi-Plus.apk"
     }
+}
+
+
+internal fun inspectClientAppAsset(context: Context): ClientAppDistributionInfo {
+    val digest = MessageDigest.getInstance("SHA-256")
+    var size = 0L
+    context.assets.open(ClientAppDistributionServer.ASSET_PATH).use { asset ->
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            val read = asset.read(buffer)
+            if (read < 0) break
+            if (read == 0) continue
+            digest.update(buffer, 0, read)
+            size += read
+        }
+    }
+    return ClientAppDistributionInfo(
+        available = size > 0,
+        version = ClientAppDistributionServer.CLIENT_VERSION,
+        fileName = ClientAppDistributionServer.CLIENT_FILE_NAME,
+        sizeBytes = size,
+        sha256 = digest.digest().joinToString("") { "%02x".format(it) },
+    )
 }
