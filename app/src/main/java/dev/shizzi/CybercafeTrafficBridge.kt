@@ -323,6 +323,7 @@ fun CybercafeState.toPortalConfigJson(
                         put("unlimitedDownloadBps", account.unlimitedDownloadBps)
                         put("unlimitedUploadBps", account.unlimitedUploadBps)
                         put("unlimitedPlanName", account.unlimitedPlanName)
+                        put("mediaUntilMillis", account.mediaUntilMillis)
                         put("totalUpBytes", account.totalUpBytes)
                         put("totalDownBytes", account.totalDownBytes)
                     })
@@ -358,6 +359,32 @@ fun CybercafeState.toPortalConfigJson(
                         put("snapshotUploadBps", voucher.snapshotUploadBps)
                         put("snapshotQuotaBytes", voucher.snapshotQuotaBytes)
                         put("snapshotDurationDays", voucher.snapshotDurationDays)
+                        put("snapshotPriceXpf", voucher.snapshotPriceXpf)
+                    })
+                }
+            })
+            put("mediaOffers", JSONArray().apply {
+                mediaOffers.values.sortedBy(MediaOffer::name).forEach { offer ->
+                    put(JSONObject().apply {
+                        put("id", offer.id)
+                        put("name", offer.name)
+                        put("durationMinutes", offer.durationMinutes)
+                        put("priceXpf", offer.priceXpf)
+                    })
+                }
+            })
+            put("mediaVouchers", JSONArray().apply {
+                mediaVouchers.values.sortedByDescending(MediaVoucher::createdAtMillis).forEach { voucher ->
+                    put(JSONObject().apply {
+                        put("code", voucher.code)
+                        put("offerId", voucher.offerId)
+                        put("createdAtMillis", voucher.createdAtMillis)
+                        put("enabled", voucher.enabled)
+                        put("redeemedByAccount", voucher.redeemedByAccount)
+                        put("redeemedAtMillis", voucher.redeemedAtMillis)
+                        put("snapshotVersion", voucher.snapshotVersion)
+                        put("snapshotName", voucher.snapshotName)
+                        put("snapshotDurationMinutes", voucher.snapshotDurationMinutes)
                         put("snapshotPriceXpf", voucher.snapshotPriceXpf)
                     })
                 }
