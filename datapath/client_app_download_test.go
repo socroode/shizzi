@@ -12,12 +12,12 @@ import (
 
 func TestClientAppDownloadUsesNativeBrowserStreaming(t *testing.T) {
 	page := injectClientAppDownload(
-		`<html><body><a class="download-button" href="http://192.0.2.1/shizzi-plus.apk" download="Shizzi-Plus-0.2.7-test.apk">Télécharger</a><div id="shizzi-download-status"></div></body></html>`,
+		`<html><body><a class="download-button" href="http://192.0.2.1/shizzi-plus.apk" download="Shizzi-Plus-0.2.10-test.apk">Télécharger</a><div id="shizzi-download-status"></div></body></html>`,
 	)
 
 	for _, expected := range []string{
 		`href="http://192.0.2.1/shizzi-plus.apk"`,
-		`download="Shizzi-Plus-0.2.7-test.apk"`,
+		`download="Shizzi-Plus-0.2.10-test.apk"`,
 		`Téléchargement direct depuis le routeur Shizzi`,
 		`shizziNativeDownload`,
 	} {
@@ -52,8 +52,8 @@ func TestPortalShowsDirect192DownloadLink(t *testing.T) {
 	manager.mu.Lock()
 	manager.portalClientApp = portalClientApp{
 		Available: true,
-		Version:   "0.2.7-test",
-		FileName:  "Shizzi-Plus-0.2.7-test.apk",
+		Version:   "0.2.10-test",
+		FileName:  "Shizzi-Plus-0.2.10-test.apk",
 		SizeBytes: 123456,
 		SHA256:    "0123456789abcdef",
 	}
@@ -78,8 +78,8 @@ func TestPortalShowsDirect192DownloadLink(t *testing.T) {
 	page := string(response)
 	for _, expected := range []string{
 		`http://192.0.2.1/shizzi-plus.apk`,
-		`Shizzi+ 0.2.7-test`,
-		`Shizzi-Plus-0.2.7-test.apk`,
+		`Shizzi+ 0.2.10-test`,
+		`Shizzi-Plus-0.2.10-test.apk`,
 	} {
 		if !strings.Contains(page, expected) {
 			t.Fatalf("portal direct download missing %q: %s", expected, page)
@@ -150,7 +150,7 @@ func TestTrailingSlashShizziPlusDownloadNeverFallsBackToPortalHTML(t *testing.T)
 			conn,
 			"HTTP/1.1 200 OK\r\n"+
 				"Content-Type: application/vnd.android.package-archive\r\n"+
-				"Content-Disposition: attachment; filename=\"Shizzi-Plus-0.2.7-test.apk\"\r\n"+
+				"Content-Disposition: attachment; filename=\"Shizzi-Plus-0.2.10-test.apk\"\r\n"+
 				"Content-Length: %d\r\n"+
 				"Connection: close\r\n\r\n",
 			len(apk),
@@ -162,8 +162,8 @@ func TestTrailingSlashShizziPlusDownloadNeverFallsBackToPortalHTML(t *testing.T)
 	manager.mu.Lock()
 	manager.portalClientApp = portalClientApp{
 		Available: true,
-		Version:   "0.2.7-test",
-		FileName:  "Shizzi-Plus-0.2.7-test.apk",
+		Version:   "0.2.10-test",
+		FileName:  "Shizzi-Plus-0.2.10-test.apk",
 		SizeBytes: int64(len(apk)),
 		SHA256:    "virtual-apk-sha",
 	}
@@ -245,7 +245,7 @@ func TestDirectShizziPlusAliasForwardsRangeAndStreamsResponse(t *testing.T) {
 			conn,
 			"HTTP/1.1 206 Partial Content\r\n"+
 				"Content-Type: application/vnd.android.package-archive\r\n"+
-				"Content-Disposition: attachment; filename=\"Shizzi-Plus-0.2.7-test.apk\"\r\n"+
+				"Content-Disposition: attachment; filename=\"Shizzi-Plus-0.2.10-test.apk\"\r\n"+
 				"Accept-Ranges: bytes\r\n"+
 				"Content-Range: bytes 5-18/19\r\n"+
 				"Content-Length: %d\r\n"+
@@ -259,8 +259,8 @@ func TestDirectShizziPlusAliasForwardsRangeAndStreamsResponse(t *testing.T) {
 	manager.mu.Lock()
 	manager.portalClientApp = portalClientApp{
 		Available: true,
-		Version:   "0.2.7-test",
-		FileName:  "Shizzi-Plus-0.2.7-test.apk",
+		Version:   "0.2.10-test",
+		FileName:  "Shizzi-Plus-0.2.10-test.apk",
 		SizeBytes: 19,
 		SHA256:    "abc",
 	}
@@ -306,7 +306,7 @@ func TestDirectShizziPlusAliasForwardsRangeAndStreamsResponse(t *testing.T) {
 	for _, expected := range []string{
 		"206 Partial Content",
 		"application/vnd.android.package-archive",
-		`filename="Shizzi-Plus-0.2.7-test.apk"`,
+		`filename="Shizzi-Plus-0.2.10-test.apk"`,
 		"Accept-Ranges: bytes",
 		"APK-BYTES-5678",
 	} {
