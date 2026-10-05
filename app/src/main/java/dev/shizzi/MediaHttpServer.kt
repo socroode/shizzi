@@ -197,8 +197,7 @@ class MediaHttpServer(
         } else {
             folders.joinToString("") { folder ->
                 folderCard(
-                    scopeTitle = scopeTitle,
-                scopeQuery = scopeQuery,
+                    folder = folder,
                     entries = entries,
                 )
             }
@@ -399,7 +398,8 @@ class MediaHttpServer(
         }
         writeSeriesEpisodesPage(
             output = output,
-            folder = folder,
+            scopeTitle = scopeTitle,
+            scopeQuery = scopeQuery,
             series = series,
             season = season,
             entries = season.entryIds.mapNotNull(byId::get),
