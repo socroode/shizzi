@@ -36,6 +36,7 @@ type PortalAccount struct {
 	UnlimitedDownloadBitsPerSecond int64  `json:"unlimitedDownloadBps"`
 	UnlimitedUploadBitsPerSecond   int64  `json:"unlimitedUploadBps"`
 	UnlimitedPlanName              string `json:"unlimitedPlanName"`
+	MediaUntilMillis               int64  `json:"mediaUntilMillis"`
 	TotalUpBytes                   int64  `json:"totalUpBytes"`
 	TotalDownBytes                 int64  `json:"totalDownBytes"`
 
@@ -53,6 +54,10 @@ type PortalAccount struct {
 
 func (a PortalAccount) hasUnlimited(nowMillis int64) bool {
 	return a.Enabled && a.UnlimitedUntilMillis > nowMillis
+}
+
+func (a PortalAccount) hasMedia(nowMillis int64) bool {
+	return a.Enabled && a.MediaUntilMillis > nowMillis
 }
 
 // dataValid reports whether the stored Data allowance is usable by date. The
@@ -372,6 +377,21 @@ func (m *TrafficManager) mediaAccountAuthenticated(ip string) bool {
 	return authenticated
 }
 
+func (m *TrafficManager) mediaPassActive(ip string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	authorization := m.portalAuthorized[ip]
+	if authorization == nil {
+		return false
+	}
+	account, ok := m.portalAccounts[authorization.AccountNumber]
+	if !ok {
+		return false
+	}
+	return account.hasMedia(time.Now().UnixMilli())
+}
+
 func (m *TrafficManager) noteMediaDiagnostic(event MediaDiagnostic) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -532,6 +552,10 @@ func adminActionAllowed(action string) bool {
 		"offer.delete",
 		"voucher.generate",
 		"voucher.enable",
+		"media.offer.upsert",
+		"media.offer.delete",
+		"media.voucher.generate",
+		"media.voucher.enable",
 		"portal.set",
 		"admin.credentials",
 		"media.enable",
@@ -854,8 +878,12 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	isChatRequest := path == "/chat" || strings.HasPrefix(path, "/chat/")
 	localAuthenticated := false
 	localAccount := ""
+	mediaPassActive := false
 	if isMediaRequest || isChatRequest {
 		localAuthenticated, localAccount = m.mediaAccountIdentity(clientIP)
+	}
+	if isMediaRequest && localAuthenticated {
+		mediaPassActive = m.mediaPassActive(clientIP)
 	}
 	switch {
 	case isChatRequest && !localAuthenticated:
@@ -868,6 +896,15 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 			Result:               "account_required",
 		})
 		m.writeMediaLoginRequired(conn, request.Method)
+	case isMediaRequest && !mediaPassActive:
+		m.noteMediaDiagnostic(MediaDiagnostic{
+			ClientIP:             clientIP,
+			Path:                 path,
+			AccountAuthenticated: true,
+			AccountNumber:        localAccount,
+			Result:               "media_pass_required",
+		})
+		m.writeMediaPassRequired(conn, request.Method)
 	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
 		path == "/speedtest":
 		_, _ = io.WriteString(
@@ -1141,6 +1178,31 @@ a{display:block;margin-top:18px;padding:14px 16px;border-radius:14px;text-align:
 </main></body></html>`)
 	header := fmt.Sprintf(
 		"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nX-Shizzi-Media-Auth: required\r\nConnection: close\r\n\r\n",
+		len(body),
+	)
+	_, _ = conn.Write([]byte(header))
+	if method != http.MethodHead {
+		_, _ = conn.Write(body)
+	}
+}
+
+func (m *TrafficManager) writeMediaPassRequired(conn net.Conn, method string) {
+	body := []byte(`<!doctype html><html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pass Shizzi Media requis</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,system-ui,-apple-system,sans-serif}
+body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:#07111f;color:#f8fafc}
+main{width:min(100%,460px);padding:24px;border:1px solid #ffffff18;border-radius:24px;background:#0f172a}
+h1{margin:0 0 10px}.note{color:#94a3b8;line-height:1.5}
+a{display:block;margin-top:18px;padding:14px 16px;border-radius:14px;text-align:center;text-decoration:none;background:linear-gradient(90deg,#8b5cf6,#38bdf8);color:#fff;font-weight:900}
+</style></head><body><main>
+<h1>Pass Shizzi Media requis</h1>
+<p class="note">Votre compte est connecté, mais aucun pass Media actif n'est disponible. Rechargez avec un voucher Media depuis le portail Shizzi.</p>
+<a href="/">Revenir au compte et recharger</a>
+</main></body></html>`)
+	header := fmt.Sprintf(
+		"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nX-Shizzi-Media-Pass: required\r\nConnection: close\r\n\r\n",
 		len(body),
 	)
 	_, _ = conn.Write([]byte(header))
@@ -1438,6 +1500,8 @@ type portalStatusPayload struct {
 	UploadBps       int64  `json:"uploadBps"`
 	Unlimited       bool   `json:"unlimited"`
 	StoredDataBytes int64  `json:"storedDataBytes"`
+	MediaActive     bool   `json:"mediaActive"`
+	MediaUntilMillis int64 `json:"mediaUntilMillis"`
 	ClaimMessage    string `json:"claimMessage,omitempty"`
 	ClaimSuccess    bool   `json:"claimSuccess,omitempty"`
 	ClaimPending    bool   `json:"claimPending,omitempty"`
@@ -1504,6 +1568,8 @@ func (m *TrafficManager) portalStatus(ip string) portalStatusPayload {
 		UploadBps:       account.uploadBps(now),
 		Unlimited:       unlimited,
 		StoredDataBytes: remaining,
+		MediaActive:     account.hasMedia(now),
+		MediaUntilMillis: account.MediaUntilMillis,
 	}
 	for _, claim := range m.portalRechargeClaims {
 		if claim.IP == ip {
@@ -1614,11 +1680,19 @@ func (m *TrafficManager) writePortalHTML(
 	}
 
 	if status.Authenticated {
+	mediaAccess := `<div class="alert error">Pass Media inactif. Rechargez avec un voucher Media.</div>`
+	mediaButton := `<a class="media-button" href="/">Recharger le pass Media</a>`
+	if status.MediaActive {
+		mediaAccess = fmt.Sprintf(
+			`<div class="alert ok">Pass Media actif jusqu'au %s.</div>`,
+			html.EscapeString(formatPortalExpiry(status.MediaUntilMillis)),
+		)
+		mediaButton = `<a class="media-button" href="/media/">Ouvrir Shizzi Media</a>`
+	}
 	content += `<section class="media-link"><div class="eyebrow">MEDIA LOCAL</div>
 <strong>Shizzi Media</strong>
-<p>Films, séries et musique disponibles dans le navigateur sur ce Wi-Fi, sans utiliser Internet ni le quota Data.</p>
-<a class="media-button" href="/media/">Ouvrir Shizzi Media</a>
-<div class="media-note">Compatible PC, téléphone et tablette · lecture locale</div></section>
+<p>Films, séries et musique disponibles dans le navigateur sur ce Wi-Fi, sans utiliser Internet ni le quota Data.</p>` + mediaAccess + mediaButton + `
+<div class="media-note">Voucher Media indépendant du forfait Internet · lecture locale</div></section>
 <section class="media-link"><div class="eyebrow">MESSAGERIE LOCALE</div>
 <strong>Messagerie Shizzi</strong>
 <p>Messages privés et groupes entre comptes Shizzi connectés, avec historique stocké sur le routeur.</p>
