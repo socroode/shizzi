@@ -115,7 +115,7 @@ jobs:
         run: cd datapath && go test -run '^(TestAuthenticatedChatRequestReachesLoopbackBackend|TestUnauthenticatedChatNeverReachesBackend)$' ./...
 
       - name: Secured Media proxy and prepaid pass regression
-        run: cd datapath && go test -run '^(TestAuthenticatedMediaRequestReachesLoopbackBackend|TestMediaPassIsRequiredButInternetRemainsIndependent|TestMediaAccessFollowsAccountSession)
+        run: cd datapath && go test ./...
 
       - name: Virtual Shizzi Admin 5-second refresh policy
         run: ./gradlew :admin:testDebugUnitTest --tests dev.shizzi.admin.AdminRefreshPolicyTest --no-daemon
