@@ -106,4 +106,59 @@ class MediaSeriesNavigationPolicyTest {
         assertEquals("Dark", catalog.series.single().title)
         assertEquals("Épisodes", catalog.series.single().seasons.single().label)
     }
+
+    @Test
+    fun rootEpisodeFileNamesAreGroupedBySeriesAndSeason() {
+        val catalog = MediaSeriesNavigationPolicy.build(
+            listOf(
+                MediaSeriesPathCandidate(
+                    id = "e1",
+                    relativePath = "Entretien avec un vampire Saison 1 Episode 01.mp4",
+                    containerName = "Séries",
+                ),
+                MediaSeriesPathCandidate(
+                    id = "e2",
+                    relativePath = "Entretien avec un vampire S01E02.mp4",
+                    containerName = "Séries",
+                ),
+                MediaSeriesPathCandidate(
+                    id = "e3",
+                    relativePath = "Entretien avec un vampire Saison 2 Episode 01.mp4",
+                    containerName = "Séries",
+                ),
+            ),
+        )
+
+        assertEquals(1, catalog.series.size)
+        val show = catalog.series.single()
+        assertEquals("Entretien avec un vampire", show.title)
+        assertEquals(listOf(1, 2), show.seasons.map { it.number })
+        assertEquals(listOf(2, 1), show.seasons.map { it.entryIds.size })
+        assertTrue(catalog.rootEntryIds.isEmpty())
+    }
+
+    @Test
+    fun configuredSeasonFolderGroupsRootEpisodes() {
+        val catalog = MediaSeriesNavigationPolicy.build(
+            listOf(
+                MediaSeriesPathCandidate(
+                    id = "e1",
+                    relativePath = "Episode 01.mp4",
+                    containerName = "Entretien avec un vampire Saison 1",
+                ),
+                MediaSeriesPathCandidate(
+                    id = "e2",
+                    relativePath = "Episode 02.mp4",
+                    containerName = "Entretien avec un vampire Saison 1",
+                ),
+            ),
+        )
+
+        val show = catalog.series.single()
+        assertEquals("Entretien avec un vampire", show.title)
+        assertEquals(listOf(1), show.seasons.map { it.number })
+        assertEquals(2, show.entryIds.size)
+        assertTrue(catalog.rootEntryIds.isEmpty())
+    }
+
 }
