@@ -184,6 +184,13 @@ jobs:
           EMBEDDED=/tmp/shizzi-plus-embedded.apk
           unzip -p "$APK" assets/shizzi/Shizzi-Plus.apk > "$EMBEDDED"
           test -s "$EMBEDDED"
+          # Browser update safety: the router must embed the exact signed Shizzi+ APK,
+          # never a small HTML/error payload (the old ~5 Ko failure).
+          cmp "$CONSO" "$EMBEDDED"
+          test "$(stat -c%s "$EMBEDDED")" -gt 20000
+          unzip -t "$EMBEDDED" >/dev/null
+          grep -q 'const val CLIENT_VERSION = "'"$CONSO_VERSION"'"' app/src/main/java/dev/shizzi/ClientAppDistributionServer.kt
+          grep -q 'const val CLIENT_FILE_NAME = "Shizzi-Plus-'"$CONSO_VERSION"'.apk"' app/src/main/java/dev/shizzi/ClientAppDistributionServer.kt
           EMBEDDED_BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$EMBEDDED")
           EMBEDDED_VERSION=$(echo "$EMBEDDED_BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
           EMBEDDED_CODE=$(echo "$EMBEDDED_BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
