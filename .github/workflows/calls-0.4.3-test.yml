@@ -110,6 +110,8 @@ jobs:
           grep -q 'Mes dossiers' app/src/main/java/dev/shizzi/MediaHttpServer.kt
           grep -q 'folderCard(' app/src/main/java/dev/shizzi/MediaHttpServer.kt
           grep -q 'serveSeriesLibrary' app/src/main/java/dev/shizzi/MediaHttpServer.kt
+          grep -q 'seriesFolderGroupCard' app/src/main/java/dev/shizzi/MediaHttpServer.kt
+          grep -q 'describeConfiguredFolderName' app/src/main/java/dev/shizzi/MediaHttpServer.kt
           grep -Fq '(selectedFolder == null && selectedKind == MediaKind.SERIES)' app/src/main/java/dev/shizzi/MediaHttpServer.kt
           grep -Fq '"kind=${MediaKind.SERIES.key}"' app/src/main/java/dev/shizzi/MediaHttpServer.kt
           grep -q 'catalog-card' app/src/main/java/dev/shizzi/MediaHttpServer.kt
