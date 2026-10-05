@@ -104,12 +104,14 @@ jobs:
       - name: Virtual Media access, vouchers and account regression from 1 to 8 clients
         run: ./gradlew :app:testDebugUnitTest --tests dev.shizzi.MediaFolderAccessTest --tests dev.shizzi.CybercafeModelTest --tests dev.shizzi.CybercafeTrafficBridgeTest --no-daemon
 
-      - name: Virtual Media vignette, folder cover, Series subfolder and automatic thumbnail regression
+      - name: Virtual Media vignette, folder cover, Series navigation and automatic thumbnail regression
         run: |
           ./gradlew :app:testDebugUnitTest --tests dev.shizzi.MediaThumbnailPolicyTest --tests dev.shizzi.MediaFolderCoverPolicyTest --tests dev.shizzi.MediaSeriesNavigationPolicyTest --no-daemon
           grep -q 'Mes dossiers' app/src/main/java/dev/shizzi/MediaHttpServer.kt
           grep -q 'folderCard(' app/src/main/java/dev/shizzi/MediaHttpServer.kt
           grep -q 'serveSeriesLibrary' app/src/main/java/dev/shizzi/MediaHttpServer.kt
+          grep -Fq '(selectedFolder == null && selectedKind == MediaKind.SERIES)' app/src/main/java/dev/shizzi/MediaHttpServer.kt
+          grep -Fq '"kind=${MediaKind.SERIES.key}"' app/src/main/java/dev/shizzi/MediaHttpServer.kt
           grep -q 'catalog-card' app/src/main/java/dev/shizzi/MediaHttpServer.kt
 
       - name: Secure messaging proxy tests
