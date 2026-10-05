@@ -123,6 +123,46 @@ fun processRemoteAdminCommand(
             )
 
 
+            "media.offer.upsert" -> outcome(
+                store.upsertMediaOffer(
+                    MediaOffer(
+                        id = params.optString("id"),
+                        name = params.optString("name"),
+                        durationMinutes = params.optLong("durationMinutes"),
+                        priceXpf = params.optInt("priceXpf"),
+                    ),
+                ),
+            )
+
+            "media.offer.delete" -> outcome(
+                store.deleteMediaOffer(params.optString("id")),
+            )
+
+            "media.voucher.generate" -> {
+                val generated = store.generateMediaVouchers(
+                    params.optString("offerId"),
+                    params.optInt("count", 1).coerceIn(1, 100),
+                    nowMillis,
+                )
+                if (generated.isEmpty()) {
+                    AdminCommandResult(command.id, false, "Échec de génération Media.")
+                } else {
+                    AdminCommandResult(
+                        command.id,
+                        true,
+                        generated.size.toString() + " voucher(s) Media généré(s).",
+                        JSONArray(generated.map { it.code }).toString(),
+                    )
+                }
+            }
+
+            "media.voucher.enable" -> outcome(
+                store.setMediaVoucherEnabled(
+                    params.optString("code"),
+                    params.optBoolean("enabled", true),
+                ),
+            )
+
             "media.enable" -> {
                 val enabled = params.optBoolean("enabled", true)
                 MediaPrefs.setEnabled(context, enabled)
