@@ -168,15 +168,16 @@ type PortalClaimResult struct {
 	Message string `json:"message"`
 }
 
-// PortalAuthorization is one logged-in session: one physical client (IP as
-// resolved from Android's pre-NAT state) using one account. An account may
-// have only one active device session at a time, but remains portable after
-// logout, admin disconnect, or departed-client cleanup.
+// PortalAuthorization is one logged-in session: one physical client using one
+// account. The resolved IP is the map key; DeviceMAC, when Android exposes it,
+// keeps the same session attached to the same phone across sleep/reassociation
+// and prevents a different phone reusing the DHCP address from inheriting it.
 type PortalAuthorization struct {
 	AccountNumber   string
 	StartedAtMillis int64
 	UpBytes         int64
 	DownBytes       int64
+	DeviceMAC       string
 
 	missingSince time.Time
 }
@@ -423,6 +424,10 @@ func (m *TrafficManager) submitPortalAccountLogin(
 	}
 	number := normalizeAccountNumber(rawNumber)
 	now := time.Now().UnixMilli()
+	deviceMAC := ""
+	if m.flowAttribution != nil {
+		deviceMAC = m.flowAttribution.clientMAC(ip)
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -445,6 +450,7 @@ func (m *TrafficManager) submitPortalAccountLogin(
 	m.portalAuthorized[ip] = &PortalAuthorization{
 		AccountNumber:   number,
 		StartedAtMillis: now,
+		DeviceMAC:       deviceMAC,
 	}
 	delete(m.portalClaimResults, ip)
 	if !m.accountHasInternetLocked(account, now) {
