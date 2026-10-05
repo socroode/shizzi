@@ -114,6 +114,140 @@ func TestPortalLoginResolvesIdentityBeforeAuthorization(t *testing.T) {
 	}
 }
 
+func TestPortalLoginRemembersClientMAC(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portalConfigForTest(t))
+	const ip = "192.168.7.66"
+	const mac = "aa:bb:cc:dd:ee:66"
+
+	manager.flowAttribution.mu.Lock()
+	manager.flowAttribution.clientMACs[ip] = mac
+	manager.flowAttribution.mu.Unlock()
+
+	ok, message := manager.submitPortalAccountLogin(ip, "1001", "1234")
+	if !ok {
+		t.Fatalf("login failed: %s", message)
+	}
+	if got := manager.portalAuthorized[ip].DeviceMAC; got != mac {
+		t.Fatalf("stored MAC=%q, want %q", got, mac)
+	}
+}
+
+func TestSleepingPortalClientIsNotLoggedOutWhenAbsentFromPresence(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portalConfigForTest(t))
+	const ip = "192.168.7.66"
+	const mac = "aa:bb:cc:dd:ee:66"
+
+	manager.flowAttribution.mu.Lock()
+	manager.flowAttribution.clientMACs[ip] = mac
+	manager.flowAttribution.mu.Unlock()
+	ok, message := manager.submitPortalAccountLogin(ip, "1001", "1234")
+	if !ok {
+		t.Fatalf("login failed: %s", message)
+	}
+
+	manager.mu.Lock()
+	manager.pruneDepartedLocked(clientPresence{
+		clients:       map[string]struct{}{},
+		macs:          map[string]string{},
+		authoritative: true,
+	}, time.Now().Add(24*time.Hour))
+	_, stillAuthorized := manager.portalAuthorized[ip]
+	manager.mu.Unlock()
+
+	if !stillAuthorized {
+		t.Fatal("sleeping client was logged out only because it disappeared from presence")
+	}
+}
+
+func TestPortalSessionIsRevokedWhenDHCPIPBelongsToDifferentMAC(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portalConfigForTest(t))
+	const ip = "192.168.7.66"
+	const oldMAC = "aa:bb:cc:dd:ee:66"
+	const newMAC = "aa:bb:cc:dd:ee:77"
+
+	manager.portalAuthorized[ip] = &PortalAuthorization{
+		AccountNumber: "1001",
+		DeviceMAC:     oldMAC,
+	}
+
+	manager.mu.Lock()
+	manager.pruneDepartedLocked(clientPresence{
+		clients:       map[string]struct{}{ip: {}},
+		macs:          map[string]string{ip: newMAC},
+		authoritative: true,
+	}, time.Now())
+	_, inherited := manager.portalAuthorized[ip]
+	manager.mu.Unlock()
+
+	if inherited {
+		t.Fatal("different phone inherited authorization through DHCP IP reuse")
+	}
+}
+
+func TestPortalSessionFollowsSameMACToNewIP(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portalConfigForTest(t))
+	const oldIP = "192.168.7.66"
+	const newIP = "192.168.7.88"
+	const mac = "aa:bb:cc:dd:ee:66"
+
+	manager.portalAuthorized[oldIP] = &PortalAuthorization{
+		AccountNumber: "1001",
+		DeviceMAC:     mac,
+	}
+
+	manager.mu.Lock()
+	manager.pruneDepartedLocked(clientPresence{
+		clients:       map[string]struct{}{newIP: {}},
+		macs:          map[string]string{newIP: mac},
+		authoritative: true,
+	}, time.Now())
+	_, oldStillPresent := manager.portalAuthorized[oldIP]
+	moved := manager.portalAuthorized[newIP]
+	manager.mu.Unlock()
+
+	if oldStillPresent {
+		t.Fatal("old DHCP address still owns the session")
+	}
+	if moved == nil || moved.AccountNumber != "1001" {
+		t.Fatalf("same device did not keep its session on new IP: %+v", moved)
+	}
+}
+
+func TestOneSleepingClientSurvivesAmongSixHotspotClients(t *testing.T) {
+	manager := newTrafficManager()
+	presence := clientPresence{
+		clients:       make(map[string]struct{}),
+		macs:          make(map[string]string),
+		authoritative: true,
+	}
+	for i := 1; i <= 6; i++ {
+		ip := fmt.Sprintf("192.168.7.%d", 60+i)
+		mac := fmt.Sprintf("aa:bb:cc:dd:ee:%02x", i)
+		manager.portalAuthorized[ip] = &PortalAuthorization{
+			AccountNumber: fmt.Sprintf("10%02d", i),
+			DeviceMAC:     mac,
+		}
+		if i != 3 {
+			presence.clients[ip] = struct{}{}
+			presence.macs[ip] = mac
+		}
+	}
+
+	manager.mu.Lock()
+	manager.pruneDepartedLocked(presence, time.Now().Add(8*time.Hour))
+	count := len(manager.portalAuthorized)
+	_, sleeperStillAuthorized := manager.portalAuthorized["192.168.7.63"]
+	manager.mu.Unlock()
+
+	if count != 6 || !sleeperStillAuthorized {
+		t.Fatalf("sleep regression: sessions=%d sleeper=%v, want 6/true", count, sleeperStillAuthorized)
+	}
+}
+
 func TestPortalLoginAuthorizesOnlyResolvedClient(t *testing.T) {
 	manager := newTrafficManager()
 	manager.setPortalConfig(true, portalConfigForTest(t))
