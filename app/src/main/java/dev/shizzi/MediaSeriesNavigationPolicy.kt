@@ -9,6 +9,12 @@ data class MediaSeriesPathCandidate(
     val containerName: String,
 )
 
+data class MediaConfiguredSeriesFolder(
+    val seriesKey: String,
+    val seriesTitle: String,
+    val seasonNumber: Int,
+)
+
 data class MediaSeriesSeasonGroup(
     val key: String,
     val label: String,
@@ -29,6 +35,15 @@ data class MediaSeriesCatalog(
 )
 
 object MediaSeriesNavigationPolicy {
+
+    fun describeConfiguredFolderName(value: String): MediaConfiguredSeriesFolder? {
+        val parsed = parseSeriesAndSeason(value) ?: return null
+        return MediaConfiguredSeriesFolder(
+            seriesKey = slug(parsed.first),
+            seriesTitle = cleanTitle(parsed.first),
+            seasonNumber = parsed.second,
+        )
+    }
 
     fun build(candidates: List<MediaSeriesPathCandidate>): MediaSeriesCatalog {
         val rootEntries = mutableListOf<String>()
