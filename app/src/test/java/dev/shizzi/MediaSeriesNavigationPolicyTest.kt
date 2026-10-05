@@ -10,7 +10,7 @@ class MediaSeriesNavigationPolicyTest {
     fun configuredSeasonFoldersShareOneLogicalSeriesParent() {
         val folders = listOf(
             "Entretien avec un vampire saison 1",
-            "ENTRETIEN avec vampire saison 2",
+            "ENTRETIEN avec un vampire saison 2",
             "Entretien avec un vampire SAISON 3",
         ).mapNotNull(MediaSeriesNavigationPolicy::describeConfiguredFolderName)
 
