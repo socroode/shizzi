@@ -115,5 +115,55 @@ class CybercafeTrafficBridgeTest {
         assertEquals(78, battery.getInt("percent"))
         assertTrue(battery.getBoolean("charging"))
     }
+    @Test
+    fun adminAndPortalStateExposeIndependentMediaPass() {
+        val account = PrepaidAccount(
+            number = "1001",
+            name = "Client",
+            pinSalt = "salt",
+            pinHash = "hash",
+            mediaUntilMillis = 9_999_999L,
+        )
+        val offer = MediaOffer(
+            id = "media-12h",
+            name = "Media 12 heures",
+            durationMinutes = 12L * 60L,
+            priceXpf = 500,
+        )
+        val voucher = MediaVoucher(
+            code = "MEDIA12H",
+            offerId = offer.id,
+            createdAtMillis = 1L,
+            snapshotName = offer.name,
+            snapshotDurationMinutes = offer.durationMinutes,
+            snapshotPriceXpf = offer.priceXpf,
+        )
+        val root = org.json.JSONObject(
+            CybercafeState(
+                accounts = mapOf(account.number to account),
+                mediaOffers = mapOf(offer.id to offer),
+                mediaVouchers = mapOf(voucher.code to voucher),
+            ).toPortalConfigJson(),
+        )
+
+        val adminState = root.getJSONObject("adminState")
+        assertEquals(
+            9_999_999L,
+            adminState.getJSONArray("accounts").getJSONObject(0).getLong("mediaUntilMillis"),
+        )
+        assertEquals(
+            720L,
+            adminState.getJSONArray("mediaOffers").getJSONObject(0).getLong("durationMinutes"),
+        )
+        assertEquals(
+            "MEDIA12H",
+            adminState.getJSONArray("mediaVouchers").getJSONObject(0).getString("code"),
+        )
+        assertEquals(
+            9_999_999L,
+            root.getJSONArray("accounts").getJSONObject(0).getLong("mediaUntilMillis"),
+        )
+    }
+
 
 }
