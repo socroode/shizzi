@@ -22,10 +22,10 @@ data class ClientAppDistributionInfo(
 /**
  * Loopback-only bridge used by the privileged datapath portal.
  *
- * The captive portal itself runs in the Shizuku/shell process, which cannot
- * read this app's private assets directly. This tiny server stays bound to
- * 127.0.0.1 so only local processes can fetch the embedded Shizzi+ APK. The
- * Go captive portal proxies that response to the hotspot client.
+ * The bridge is hosted inside the Shizuku/shell user-service process, beside
+ * the Go captive portal. It opens the Shizzi+ APK embedded in the installed
+ * Shizzi package through a package Context, then streams it on 127.0.0.1.
+ * This avoids depending on the ordinary Android app process staying reachable.
  */
 class ClientAppDistributionServer(private val context: Context) {
     private val running = AtomicBoolean(false)
