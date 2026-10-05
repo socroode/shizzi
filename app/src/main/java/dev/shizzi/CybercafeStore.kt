@@ -135,7 +135,11 @@ class CybercafeStore(context: Context) {
                 var code: String
                 do {
                     code = newVoucherCode()
-                } while (current.vouchers.containsKey(code) || any { it.code == code })
+                } while (
+                    current.vouchers.containsKey(code) ||
+                        current.mediaVouchers.containsKey(code) ||
+                        any { it.code == code }
+                )
                 add(
                     Voucher(
                         code = code,
@@ -184,7 +188,7 @@ class CybercafeStore(context: Context) {
         nowMillis: Long,
     ): RuleOutcome {
         val number = CybercafeRules.normalizeAccountNumber(numberRaw)
-        return commit(CybercafeRules.redeemVoucher(state.value, number, codeRaw, nowMillis))
+        return commit(CybercafeRules.redeemAnyVoucher(state.value, number, codeRaw, nowMillis))
     }
 
     @Synchronized
@@ -200,7 +204,7 @@ class CybercafeStore(context: Context) {
         if (!CybercafeSecurity.verifyPin(account, pin)) {
             return RuleOutcome(state.value, false, "Code du compte incorrect.")
         }
-        return commit(CybercafeRules.redeemVoucher(state.value, number, codeRaw, nowMillis))
+        return commit(CybercafeRules.redeemAnyVoucher(state.value, number, codeRaw, nowMillis))
     }
 
     @Synchronized
@@ -315,6 +319,109 @@ class CybercafeStore(context: Context) {
                 state = state.value.copy(offers = state.value.offers - offerId),
                 success = true,
                 message = "Offre supprimée.",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun upsertMediaOffer(offer: MediaOffer): RuleOutcome {
+        val id = offer.id.trim().lowercase()
+        if (id.isBlank() || offer.name.isBlank()) {
+            return RuleOutcome(state.value, false, "Nom d'offre Media invalide.")
+        }
+        if (offer.durationMinutes <= 0L || offer.durationMinutes > MAX_MEDIA_DURATION_MINUTES) {
+            return RuleOutcome(state.value, false, "Durée Media invalide.")
+        }
+        if (offer.priceXpf < 0) {
+            return RuleOutcome(state.value, false, "Prix Media invalide.")
+        }
+        val normalized = offer.copy(
+            id = id,
+            name = offer.name.trim(),
+        )
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(
+                    mediaOffers = state.value.mediaOffers + (id to normalized),
+                ),
+                success = true,
+                message = "Offre Media enregistrée.",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun deleteMediaOffer(offerIdRaw: String): RuleOutcome {
+        val offerId = offerIdRaw.trim().lowercase()
+        if (!state.value.mediaOffers.containsKey(offerId)) {
+            return RuleOutcome(state.value, false, "Offre Media introuvable.")
+        }
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(mediaOffers = state.value.mediaOffers - offerId),
+                success = true,
+                message = "Offre Media supprimée.",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun generateMediaVouchers(
+        offerId: String,
+        count: Int,
+        nowMillis: Long,
+    ): List<MediaVoucher> {
+        val current = state.value
+        val offer = current.mediaOffers[offerId] ?: return emptyList()
+
+        val created = buildList<MediaVoucher> {
+            repeat(count.coerceIn(1, 100)) {
+                var code: String
+                do {
+                    code = newVoucherCode()
+                } while (
+                    current.vouchers.containsKey(code) ||
+                        current.mediaVouchers.containsKey(code) ||
+                        any { it.code == code }
+                )
+                add(
+                    MediaVoucher(
+                        code = code,
+                        offerId = offerId,
+                        createdAtMillis = nowMillis,
+                        snapshotVersion = 1,
+                        snapshotName = offer.name,
+                        snapshotDurationMinutes = offer.durationMinutes,
+                        snapshotPriceXpf = offer.priceXpf,
+                    ),
+                )
+            }
+        }
+
+        if (created.isNotEmpty()) {
+            persist(
+                current.copy(
+                    mediaVouchers = current.mediaVouchers +
+                        created.associateBy(MediaVoucher::code),
+                ),
+            )
+        }
+        return created
+    }
+
+    @Synchronized
+    fun setMediaVoucherEnabled(codeRaw: String, enabled: Boolean): RuleOutcome {
+        val code = codeRaw.trim().uppercase()
+        val voucher = state.value.mediaVouchers[code]
+            ?: return RuleOutcome(state.value, false, "Voucher Media introuvable.")
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(
+                    mediaVouchers = state.value.mediaVouchers +
+                        (code to voucher.copy(enabled = enabled)),
+                ),
+                success = true,
+                message = if (enabled) "Voucher Media activé." else "Voucher Media désactivé.",
             ),
         )
     }
@@ -439,6 +546,7 @@ class CybercafeStore(context: Context) {
 
     private companion object {
         const val KEY_STATE = "state"
+        private const val MAX_MEDIA_DURATION_MINUTES = 5_256_000L
         const val USAGE_FLUSH_MILLIS = 15_000L
         val random = SecureRandom()
     }
@@ -490,6 +598,7 @@ internal fun encodeCybercafeState(state: CybercafeState): String =
                     put("unlimitedDownloadBps", account.unlimitedDownloadBps)
                     put("unlimitedUploadBps", account.unlimitedUploadBps)
                     put("unlimitedPlanName", account.unlimitedPlanName)
+                    put("mediaUntilMillis", account.mediaUntilMillis)
                     put("totalUpBytes", account.totalUpBytes)
                     put("totalDownBytes", account.totalDownBytes)
                     put("createdAtMillis", account.createdAtMillis)
@@ -512,6 +621,32 @@ internal fun encodeCybercafeState(state: CybercafeState): String =
                     put("snapshotUploadBps", voucher.snapshotUploadBps)
                     put("snapshotQuotaBytes", voucher.snapshotQuotaBytes)
                     put("snapshotDurationDays", voucher.snapshotDurationDays)
+                    put("snapshotPriceXpf", voucher.snapshotPriceXpf)
+                })
+            }
+        })
+        put("mediaOffers", JSONArray().apply {
+            state.mediaOffers.values.sortedBy(MediaOffer::id).forEach { offer ->
+                put(JSONObject().apply {
+                    put("id", offer.id)
+                    put("name", offer.name)
+                    put("durationMinutes", offer.durationMinutes)
+                    put("priceXpf", offer.priceXpf)
+                })
+            }
+        })
+        put("mediaVouchers", JSONArray().apply {
+            state.mediaVouchers.values.sortedBy(MediaVoucher::code).forEach { voucher ->
+                put(JSONObject().apply {
+                    put("code", voucher.code)
+                    put("offerId", voucher.offerId)
+                    put("createdAtMillis", voucher.createdAtMillis)
+                    put("enabled", voucher.enabled)
+                    put("redeemedByAccount", voucher.redeemedByAccount)
+                    put("redeemedAtMillis", voucher.redeemedAtMillis)
+                    put("snapshotVersion", voucher.snapshotVersion)
+                    put("snapshotName", voucher.snapshotName)
+                    put("snapshotDurationMinutes", voucher.snapshotDurationMinutes)
                     put("snapshotPriceXpf", voucher.snapshotPriceXpf)
                 })
             }
@@ -569,6 +704,7 @@ internal fun decodeCybercafeState(raw: String?): CybercafeState {
             unlimitedDownloadBps = item.optLong("unlimitedDownloadBps"),
             unlimitedUploadBps = item.optLong("unlimitedUploadBps"),
             unlimitedPlanName = item.optString("unlimitedPlanName"),
+            mediaUntilMillis = item.optLong("mediaUntilMillis"),
             totalUpBytes = item.optLong("totalUpBytes"),
             totalDownBytes = item.optLong("totalDownBytes"),
             createdAtMillis = item.optLong("createdAtMillis"),
@@ -595,6 +731,36 @@ internal fun decodeCybercafeState(raw: String?): CybercafeState {
             snapshotUploadBps = item.optLong("snapshotUploadBps"),
             snapshotQuotaBytes = item.optLong("snapshotQuotaBytes"),
             snapshotDurationDays = item.optInt("snapshotDurationDays"),
+            snapshotPriceXpf = item.optInt("snapshotPriceXpf"),
+        )
+    }
+
+    val mediaOffers = linkedMapOf<String, MediaOffer>()
+    root.optJSONArray("mediaOffers")?.forEachObject { item ->
+        val id = item.optString("id").trim().lowercase()
+        if (id.isBlank()) return@forEachObject
+        mediaOffers[id] = MediaOffer(
+            id = id,
+            name = item.optString("name"),
+            durationMinutes = item.optLong("durationMinutes"),
+            priceXpf = item.optInt("priceXpf"),
+        )
+    }
+
+    val mediaVouchers = linkedMapOf<String, MediaVoucher>()
+    root.optJSONArray("mediaVouchers")?.forEachObject { item ->
+        val code = item.optString("code").trim().uppercase()
+        if (code.isBlank()) return@forEachObject
+        mediaVouchers[code] = MediaVoucher(
+            code = code,
+            offerId = item.optString("offerId"),
+            createdAtMillis = item.optLong("createdAtMillis"),
+            enabled = item.optBoolean("enabled", true),
+            redeemedByAccount = item.optString("redeemedByAccount"),
+            redeemedAtMillis = item.optLong("redeemedAtMillis"),
+            snapshotVersion = item.optInt("snapshotVersion", 1),
+            snapshotName = item.optString("snapshotName"),
+            snapshotDurationMinutes = item.optLong("snapshotDurationMinutes"),
             snapshotPriceXpf = item.optInt("snapshotPriceXpf"),
         )
     }
@@ -645,10 +811,12 @@ internal fun decodeCybercafeState(raw: String?): CybercafeState {
     }
 
     return CybercafeState(
-        schemaVersion = 4,
+        schemaVersion = 5,
         offers = if (offers.isEmpty()) defaultOffers() else offers,
         accounts = accounts,
         vouchers = vouchers,
+        mediaOffers = mediaOffers,
+        mediaVouchers = mediaVouchers,
         devices = devices,
         portal = portal,
         remoteAdmin = remoteAdmin,
