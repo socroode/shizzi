@@ -5,6 +5,7 @@ import java.security.SecureRandom
 import kotlin.math.max
 
 private const val DAY_MILLIS = 86_400_000L
+private const val MINUTE_MILLIS = 60_000L
 private const val GB = 1_000_000_000L
 
 enum class VoucherKind {
@@ -23,6 +24,26 @@ data class Offer(
     val priceXpf: Int,
 )
 
+data class MediaOffer(
+    val id: String,
+    val name: String,
+    val durationMinutes: Long,
+    val priceXpf: Int,
+)
+
+data class MediaVoucher(
+    val code: String,
+    val offerId: String,
+    val createdAtMillis: Long,
+    val enabled: Boolean = true,
+    val redeemedByAccount: String = "",
+    val redeemedAtMillis: Long = 0L,
+    val snapshotVersion: Int = 1,
+    val snapshotName: String = "",
+    val snapshotDurationMinutes: Long = 0L,
+    val snapshotPriceXpf: Int = 0,
+)
+
 data class PrepaidAccount(
     val number: String,
     val name: String,
@@ -37,6 +58,7 @@ data class PrepaidAccount(
     val unlimitedDownloadBps: Long = 0L,
     val unlimitedUploadBps: Long = 0L,
     val unlimitedPlanName: String = "",
+    val mediaUntilMillis: Long = 0L,
     val totalUpBytes: Long = 0L,
     val totalDownBytes: Long = 0L,
     val createdAtMillis: Long = 0L,
@@ -51,6 +73,9 @@ data class PrepaidAccount(
 
     fun hasInternet(nowMillis: Long): Boolean =
         hasUnlimited(nowMillis) || hasData(nowMillis)
+
+    fun hasMedia(nowMillis: Long): Boolean =
+        enabled && mediaUntilMillis > nowMillis
 
     fun currentDownloadBps(nowMillis: Long): Long = when {
         hasUnlimited(nowMillis) -> unlimitedDownloadBps
@@ -106,10 +131,12 @@ data class RemoteAdminConfig(
 )
 
 data class CybercafeState(
-    val schemaVersion: Int = 4,
+    val schemaVersion: Int = 5,
     val offers: Map<String, Offer> = defaultOffers(),
     val accounts: Map<String, PrepaidAccount> = emptyMap(),
     val vouchers: Map<String, Voucher> = emptyMap(),
+    val mediaOffers: Map<String, MediaOffer> = emptyMap(),
+    val mediaVouchers: Map<String, MediaVoucher> = emptyMap(),
     val devices: Map<String, DeviceBinding> = emptyMap(),
     val portal: PortalCustomization = PortalCustomization(),
     val remoteAdmin: RemoteAdminConfig = RemoteAdminConfig(),
@@ -255,6 +282,88 @@ object CybercafeRules {
             success = true,
             message = "Recharge appliquée.",
         )
+    }
+
+    fun redeemMediaVoucher(
+        state: CybercafeState,
+        accountNumber: String,
+        rawCode: String,
+        nowMillis: Long,
+    ): RuleOutcome {
+        val number = normalizeAccountNumber(accountNumber)
+        val code = rawCode.trim().uppercase()
+        val account = state.accounts[number]
+            ?: return RuleOutcome(state, false, "Compte introuvable.")
+        if (!account.enabled) {
+            return RuleOutcome(state, false, "Compte suspendu.")
+        }
+
+        val voucher = state.mediaVouchers[code]
+            ?: return RuleOutcome(state, false, "Voucher invalide.")
+        if (!voucher.enabled) {
+            return RuleOutcome(state, false, "Voucher Media désactivé.")
+        }
+        if (voucher.redeemedByAccount.isNotBlank()) {
+            return RuleOutcome(state, false, "Voucher Media déjà utilisé.")
+        }
+
+        val offer = if (voucher.snapshotVersion >= 1) {
+            MediaOffer(
+                id = voucher.offerId,
+                name = voucher.snapshotName,
+                durationMinutes = voucher.snapshotDurationMinutes,
+                priceXpf = voucher.snapshotPriceXpf,
+            )
+        } else {
+            state.mediaOffers[voucher.offerId]
+                ?: return RuleOutcome(state, false, "Offre Media du voucher introuvable.")
+        }
+
+        if (offer.durationMinutes <= 0L) {
+            return RuleOutcome(state, false, "Durée du voucher Media invalide.")
+        }
+        val durationMillis = runCatching {
+            Math.multiplyExact(offer.durationMinutes, MINUTE_MILLIS)
+        }.getOrElse {
+            return RuleOutcome(state, false, "Durée du voucher Media trop grande.")
+        }
+        val start = max(nowMillis, account.mediaUntilMillis)
+        val updatedAccount = account.copy(
+            mediaUntilMillis = runCatching {
+                Math.addExact(start, durationMillis)
+            }.getOrElse {
+                return RuleOutcome(state, false, "Durée du voucher Media trop grande.")
+            },
+        )
+        val updatedVoucher = voucher.copy(
+            redeemedByAccount = number,
+            redeemedAtMillis = nowMillis,
+        )
+
+        return RuleOutcome(
+            state = state.copy(
+                accounts = state.accounts + (number to updatedAccount),
+                mediaVouchers = state.mediaVouchers + (code to updatedVoucher),
+            ),
+            success = true,
+            message = "Recharge Media appliquée.",
+        )
+    }
+
+    fun redeemAnyVoucher(
+        state: CybercafeState,
+        accountNumber: String,
+        rawCode: String,
+        nowMillis: Long,
+    ): RuleOutcome {
+        val code = rawCode.trim().uppercase()
+        return when {
+            state.vouchers.containsKey(code) ->
+                redeemVoucher(state, accountNumber, code, nowMillis)
+            state.mediaVouchers.containsKey(code) ->
+                redeemMediaVoucher(state, accountNumber, code, nowMillis)
+            else -> RuleOutcome(state, false, "Voucher invalide.")
+        }
     }
 
     fun bindDevice(
