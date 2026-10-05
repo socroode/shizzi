@@ -318,6 +318,16 @@ func (m *TrafficManager) portalRequiredFor(ip string) bool {
 		!m.adminAuthorizedLocked(ip)
 }
 
+// portalEnabled reports whether Shizzi is currently gating client Internet
+// behind the captive portal. It deliberately does not require a client
+// identity: the first Android connectivity probe may arrive before Android
+// has published the NAT tuple for that phone.
+func (m *TrafficManager) portalEnabled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.portalRequired
+}
+
 // remainingDataLocked is the account's live Data balance, shared by all of
 // its sessions.
 func (m *TrafficManager) remainingDataLocked(account PortalAccount) int64 {
@@ -859,6 +869,18 @@ func isClientAppDownloadPath(rawPath string) bool {
 }
 
 func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
+	m.servePortalWithResolver(conn, clientIP, nil)
+}
+
+// servePortalWithResolver lets a brand-new client see the captive page before
+// its physical IP has been resolved. The resolver is invoked only when a
+// request can change or access identity-bound state; merely displaying the
+// login page never waits for the normal multi-client attribution window.
+func (m *TrafficManager) servePortalWithResolver(
+	conn net.Conn,
+	clientIP string,
+	resolveClient func() string,
+) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
 
@@ -868,11 +890,22 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	}
 	defer request.Body.Close()
 
+	path := request.URL.Path
+	identityBoundRequest :=
+		request.Method != http.MethodGet &&
+		request.Method != http.MethodHead ||
+		strings.HasPrefix(path, "/api/v1/admin/") ||
+		path == "/status.json" ||
+		path == "/media" || strings.HasPrefix(path, "/media/") ||
+		path == "/chat" || strings.HasPrefix(path, "/chat/")
+	if clientIP == "" && resolveClient != nil && identityBoundRequest {
+		clientIP = resolveClient()
+	}
+
 	if m.serveAdminAPI(conn, request, clientIP) {
 		return
 	}
 
-	path := request.URL.Path
 	isMediaRequest := (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
 		(path == "/media" || strings.HasPrefix(path, "/media/"))
 	isChatRequest := path == "/chat" || strings.HasPrefix(path, "/chat/")
