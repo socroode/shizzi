@@ -161,4 +161,26 @@ class MediaSeriesNavigationPolicyTest {
         assertTrue(catalog.rootEntryIds.isEmpty())
     }
 
+
+    @Test
+    fun separateConfiguredSeriesFoldersStaySeparateFromGlobalSeriesTab() {
+        val catalog = MediaSeriesNavigationPolicy.build(
+            listOf(
+                MediaSeriesPathCandidate(
+                    id = "dark-e1",
+                    relativePath = "Episode 01.mp4",
+                    containerName = "Dark",
+                ),
+                MediaSeriesPathCandidate(
+                    id = "vikings-e1",
+                    relativePath = "Episode 01.mp4",
+                    containerName = "Vikings",
+                ),
+            ),
+        )
+
+        assertEquals(listOf("Dark", "Vikings"), catalog.series.map { it.title })
+        assertTrue(catalog.rootEntryIds.isEmpty())
+    }
+
 }
