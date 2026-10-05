@@ -192,14 +192,44 @@ class MediaHttpServer(
         val entries = MediaIndex.entries(context)
             .filter { it.folderId in allowedFolderIds }
 
+        val configuredSeriesSeasons = folders
+            .filter { it.kind == MediaKind.SERIES }
+            .mapNotNull { folder ->
+                MediaSeriesNavigationPolicy.describeConfiguredFolderName(folder.name)
+                    ?.let { descriptor -> folder.id to descriptor }
+            }
+            .toMap()
+        val groupedSeriesSeasons = configuredSeriesSeasons.entries
+            .groupBy { it.value.seriesKey }
+            .filterValues { grouped -> grouped.size >= 2 }
+        val groupedPhysicalFolderCount = groupedSeriesSeasons.values.sumOf { it.size }
+        val displayFolderCount =
+            folders.size - groupedPhysicalFolderCount + groupedSeriesSeasons.size
+        val emittedSeriesKeys = mutableSetOf<String>()
+
         val folderCards = if (folders.isEmpty()) {
             "<p class=\"empty\">Aucun dossier Media autorisé.</p>"
         } else {
             folders.joinToString("") { folder ->
-                folderCard(
-                    folder = folder,
-                    entries = entries,
-                )
+                val descriptor = configuredSeriesSeasons[folder.id]
+                val grouped = descriptor?.seriesKey?.let(groupedSeriesSeasons::get)
+                if (descriptor != null && grouped != null) {
+                    if (!emittedSeriesKeys.add(descriptor.seriesKey)) {
+                        ""
+                    } else {
+                        seriesFolderGroupCard(
+                            descriptor = descriptor,
+                            folderIds = grouped.map { it.key }.toSet(),
+                            seasonCount = grouped.map { it.value.seasonNumber }.distinct().size,
+                            entries = entries,
+                        )
+                    }
+                } else {
+                    folderCard(
+                        folder = folder,
+                        entries = entries,
+                    )
+                }
             }
         }
 
@@ -214,7 +244,7 @@ class MediaHttpServer(
               </div>
             </section>
             <section>
-              <div class="section-head"><h2>Mes dossiers</h2><span>${folders.size}</span></div>
+              <div class="section-head"><h2>Mes dossiers</h2><span>${displayFolderCount}</span></div>
               <div class="folder-grid">$folderCards</div>
             </section>
             <p class="hint">Chaque dossier utilise automatiquement une miniature provenant de son propre contenu.</p>
@@ -548,6 +578,46 @@ class MediaHttpServer(
               $visual
               <strong>$folderName</strong>
               <small>$count contenu${if (count > 1) "s" else ""}</small>
+            </a>
+        """.trimIndent()
+    }
+
+    private fun seriesFolderGroupCard(
+        descriptor: MediaConfiguredSeriesFolder,
+        folderIds: Set<String>,
+        seasonCount: Int,
+        entries: List<MediaEntry>,
+    ): String {
+        val groupEntries = entries
+            .filter { it.folderId in folderIds }
+            .sortedBy { it.relativePath.lowercase(Locale.getDefault()) }
+        val coverEntry = groupEntries.firstOrNull()
+        val title = escape(descriptor.seriesTitle)
+        val seasonLabel = if (seasonCount > 1) "saisons" else "saison"
+        val episodeLabel = if (groupEntries.size > 1) "épisodes" else "épisode"
+        val subtitle = "$seasonCount $seasonLabel · \${groupEntries.size} $episodeLabel"
+
+        val visual = if (coverEntry != null) {
+            """
+            <div class="folder-image">
+              <img loading="lazy" src="thumbnail?id=\${coverEntry.id}&v=\${coverEntry.size}" alt="$title">
+              <span class="badge">Série</span>
+            </div>
+            """.trimIndent()
+        } else {
+            """
+            <div class="folder-image folder-placeholder">
+              <span class="folder-glyph">▶</span>
+              <span class="badge">Série</span>
+            </div>
+            """.trimIndent()
+        }
+
+        return """
+            <a class="folder-card catalog-card" data-title="$title" href="library?kind=\${MediaKind.SERIES.key}&series=\${queryValue(descriptor.seriesKey)}">
+              $visual
+              <strong>$title</strong>
+              <small>$subtitle</small>
             </a>
         """.trimIndent()
     }
