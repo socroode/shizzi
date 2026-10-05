@@ -2,6 +2,8 @@ package datapath
 
 import (
 	"encoding/json"
+	"io"
+	"net"
 	"os"
 	"strings"
 	"testing"
@@ -24,6 +26,7 @@ func portalConfigForTest(t *testing.T) string {
 			DataValidUntilMillis:      time.Now().Add(time.Hour).UnixMilli(),
 			DataDownloadBitsPerSecond: 2_000_000,
 			DataUploadBitsPerSecond:   1_000_000,
+			MediaUntilMillis:          time.Now().Add(24 * time.Hour).UnixMilli(),
 		}},
 	})
 	if err != nil {
@@ -262,10 +265,65 @@ func TestMediaAccessFollowsAccountSession(t *testing.T) {
 }
 
 
+func TestMediaPassIsRequiredButInternetRemainsIndependent(t *testing.T) {
+	var config portalConfig
+	if err := json.Unmarshal([]byte(portalConfigForTest(t)), &config); err != nil {
+		t.Fatal(err)
+	}
+	config.Accounts[0].MediaUntilMillis = 0
+	raw, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, string(raw))
+	ip := "192.168.7.66"
+	ok, message := manager.submitPortalAccountLogin(ip, "1001", "1234")
+	if !ok {
+		t.Fatalf("login failed: %s", message)
+	}
+	if !manager.portalAuthorizedLocked(ip, time.Now().UnixMilli()) {
+		t.Fatal("Internet should remain active without a Media pass")
+	}
+	if manager.mediaPassActive(ip) {
+		t.Fatal("Media pass unexpectedly active")
+	}
+
+	server, client := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		manager.servePortal(server, ip)
+	}()
+	_ = client.SetDeadline(time.Now().Add(3 * time.Second))
+	_, _ = client.Write([]byte(
+		"GET /media/ HTTP/1.1\r\nHost: 192.0.2.1\r\nConnection: close\r\n\r\n",
+	))
+	response, readErr := io.ReadAll(client)
+	_ = client.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	<-done
+
+	text := string(response)
+	if !strings.Contains(text, "Pass Shizzi Media requis") {
+		t.Fatalf("missing Media pass page: %q", text)
+	}
+	if !strings.Contains(text, "X-Shizzi-Media-Pass: required") {
+		t.Fatalf("missing Media pass response marker: %q", text)
+	}
+}
+
 func TestAdminActionAllowlistKeepsRouterEngineLocal(t *testing.T) {
 	allowed := []string{
 		"account.create",
 		"voucher.generate",
+		"media.offer.upsert",
+		"media.offer.delete",
+		"media.voucher.generate",
+		"media.voucher.enable",
 		"media.enable",
 		"media.folder.create",
 		"media.folder.update",
