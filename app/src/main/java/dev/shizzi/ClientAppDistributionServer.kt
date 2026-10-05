@@ -57,7 +57,7 @@ class ClientAppDistributionServer(private val context: Context) {
                 reuseAddress = true
                 bind(
                     InetSocketAddress(
-                        InetAddress.getLoopbackAddress(),
+                        InetAddress.getByName(LOOPBACK_HOST),
                         PORT,
                     ),
                 )
@@ -255,6 +255,7 @@ class ClientAppDistributionServer(private val context: Context) {
     }
 
     companion object {
+        const val LOOPBACK_HOST = "127.0.0.1"
         const val PORT = 8091
         const val CLIENT_VERSION = "0.2.10-test"
         const val CLIENT_FILE_NAME = "Shizzi-Plus-0.2.10-test.apk"
