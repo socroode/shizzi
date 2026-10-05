@@ -35,6 +35,85 @@ func portalConfigForTest(t *testing.T) string {
 	return string(raw)
 }
 
+func TestPortalPageDoesNotWaitForClientIdentity(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portalConfigForTest(t))
+
+	resolverCalls := 0
+	server, client := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		manager.servePortalWithResolver(server, "", func() string {
+			resolverCalls++
+			return "192.168.7.66"
+		})
+	}()
+
+	_ = client.SetDeadline(time.Now().Add(3 * time.Second))
+	_, _ = client.Write([]byte(
+		"GET / HTTP/1.1\r\nHost: connectivitycheck.gstatic.com\r\nConnection: close\r\n\r\n",
+	))
+	response, readErr := io.ReadAll(client)
+	_ = client.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	<-done
+
+	if resolverCalls != 0 {
+		t.Fatalf("portal display waited for client identity: resolver calls=%d", resolverCalls)
+	}
+	if !strings.Contains(string(response), "Ouvrir la connexion compte") {
+		t.Fatalf("login page was not rendered for unidentified client: %q", string(response))
+	}
+}
+
+func TestPortalLoginResolvesIdentityBeforeAuthorization(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portalConfigForTest(t))
+
+	const resolvedIP = "192.168.7.66"
+	resolverCalls := 0
+	server, client := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		manager.servePortalWithResolver(server, "", func() string {
+			resolverCalls++
+			return resolvedIP
+		})
+	}()
+
+	body := "account=1001&pin=1234"
+	request := "POST /login HTTP/1.1\r\n" +
+		"Host: 192.0.2.1\r\n" +
+		"Content-Type: application/x-www-form-urlencoded\r\n" +
+		"Content-Length: 21\r\n" +
+		"Connection: close\r\n\r\n" + body
+	_ = client.SetDeadline(time.Now().Add(3 * time.Second))
+	_, _ = client.Write([]byte(request))
+	response, readErr := io.ReadAll(client)
+	_ = client.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	<-done
+
+	if resolverCalls != 1 {
+		t.Fatalf("login identity resolver calls=%d, want 1", resolverCalls)
+	}
+	if manager.portalRequiredFor(resolvedIP) {
+		t.Fatal("resolved client was not authorized after login")
+	}
+	if _, exists := manager.portalAuthorized[""]; exists {
+		t.Fatal("login was incorrectly attached to an unidentified client")
+	}
+	if !strings.Contains(string(response), "Connexion autorisée.") {
+		t.Fatalf("unexpected login response: %q", string(response))
+	}
+}
+
 func TestPortalLoginAuthorizesOnlyResolvedClient(t *testing.T) {
 	manager := newTrafficManager()
 	manager.setPortalConfig(true, portalConfigForTest(t))
