@@ -93,7 +93,15 @@ jobs:
         run: ./gradlew :app:testDebugUnitTest --tests dev.shizzi.ClientAppDownloadRangeTest --no-daemon
 
       - name: Direct 192.0.2.1 Shizzi+ download tests
-        run: cd datapath && go test -run '^(TestClientAppDownloadUsesNativeBrowserStreaming|TestClientAppDownloadScriptIsNotInjectedWithoutDownloadLink|TestPortalShowsDirect192DownloadLink|TestShizziPlusDownloadPathVariants|TestTrailingSlashShizziPlusDownloadNeverFallsBackToPortalHTML|TestDirectShizziPlusAliasForwardsRangeAndStreamsResponse|TestClientAppDownloadProxyReturnsCompleteAPK)      - name: Virtual generic local speedtest router wording
+        run: cd datapath && go test -run '^(TestClientAppDownloadUsesNativeBrowserStreaming|TestClientAppDownloadScriptIsNotInjectedWithoutDownloadLink|TestPortalShowsDirect192DownloadLink|TestShizziPlusDownloadPathVariants|TestTrailingSlashShizziPlusDownloadNeverFallsBackToPortalHTML|TestDirectShizziPlusAliasForwardsRangeAndStreamsResponse|TestClientAppDownloadProxyReturnsCompleteAPK)$' ./...
+
+      - name: Verify Shizzi+ bridge uses the same IPv4 loopback as the portal
+        run: |
+          grep -Fq 'const val LOOPBACK_HOST = "127.0.0.1"' app/src/main/java/dev/shizzi/ClientAppDistributionServer.kt
+          grep -Fq 'InetAddress.getByName(LOOPBACK_HOST)' app/src/main/java/dev/shizzi/ClientAppDistributionServer.kt
+          grep -Fq 'const clientAppBridgeAddress = "127.0.0.1:8091"' datapath/portal.go
+
+      - name: Virtual generic local speedtest router wording
         run: cd datapath && go test -run '^TestLocalSpeedtestUsesGenericShizziRouterWording$' ./...
 
       - name: Virtual automatic hotspot startup regression
