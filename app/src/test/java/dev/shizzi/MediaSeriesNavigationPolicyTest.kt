@@ -7,6 +7,23 @@ import org.junit.Test
 class MediaSeriesNavigationPolicyTest {
 
     @Test
+    fun configuredSeasonFoldersShareOneLogicalSeriesParent() {
+        val folders = listOf(
+            "Entretien avec un vampire saison 1",
+            "ENTRETIEN avec vampire saison 2",
+            "Entretien avec un vampire SAISON 3",
+        ).mapNotNull(MediaSeriesNavigationPolicy::describeConfiguredFolderName)
+
+        assertEquals(3, folders.size)
+        assertEquals(1, folders.map { it.seriesKey }.distinct().size)
+        assertEquals(listOf(1, 2, 3), folders.map { it.seasonNumber })
+        assertEquals(
+            "entretien-avec-un-vampire",
+            folders.first().seriesKey,
+        )
+    }
+
+    @Test
     fun siblingSeasonFoldersAreGroupedIntoOneSeries() {
         val catalog = MediaSeriesNavigationPolicy.build(
             listOf(
