@@ -437,6 +437,7 @@ fun CybercafeState.toPortalConfigJson(
                             put("unlimitedDownloadBps", account.unlimitedDownloadBps)
                             put("unlimitedUploadBps", account.unlimitedUploadBps)
                             put("unlimitedPlanName", account.unlimitedPlanName)
+                            put("mediaUntilMillis", account.mediaUntilMillis)
                             put("totalUpBytes", account.totalUpBytes)
                             put("totalDownBytes", account.totalDownBytes)
                             put("markerEpoch", epoch)
