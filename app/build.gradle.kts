@@ -82,8 +82,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 26
-        versionName = "0.4.4"
+        versionCode = 27
+        versionName = "0.4.4.1"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 
