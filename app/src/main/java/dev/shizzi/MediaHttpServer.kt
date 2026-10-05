@@ -595,12 +595,12 @@ class MediaHttpServer(
         val title = escape(descriptor.seriesTitle)
         val seasonLabel = if (seasonCount > 1) "saisons" else "saison"
         val episodeLabel = if (groupEntries.size > 1) "épisodes" else "épisode"
-        val subtitle = "$seasonCount $seasonLabel · \${groupEntries.size} $episodeLabel"
+        val subtitle = "$seasonCount $seasonLabel · ${groupEntries.size} $episodeLabel"
 
         val visual = if (coverEntry != null) {
             """
             <div class="folder-image">
-              <img loading="lazy" src="thumbnail?id=\${coverEntry.id}&v=\${coverEntry.size}" alt="$title">
+              <img loading="lazy" src="thumbnail?id=${coverEntry.id}&v=${coverEntry.size}" alt="$title">
               <span class="badge">Série</span>
             </div>
             """.trimIndent()
@@ -614,7 +614,7 @@ class MediaHttpServer(
         }
 
         return """
-            <a class="folder-card catalog-card" data-title="$title" href="library?kind=\${MediaKind.SERIES.key}&series=\${queryValue(descriptor.seriesKey)}">
+            <a class="folder-card catalog-card" data-title="$title" href="library?kind=${MediaKind.SERIES.key}&series=${queryValue(descriptor.seriesKey)}">
               $visual
               <strong>$title</strong>
               <small>$subtitle</small>
