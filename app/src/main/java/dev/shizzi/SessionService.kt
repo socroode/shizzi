@@ -32,7 +32,7 @@ class SessionService : Service() {
     private val controller = TetherClient()
     private val notification by lazy { SessionNotification(this) }
     private val statusPoller = SessionStatusPoller(scope, controller)
-    private val clientAppDistribution by lazy { ClientAppDistributionServer(this) }
+    private val clientAppInfo by lazy { inspectClientAppAsset(this) }
     private val messagingServer by lazy {
         MessagingHttpServer(this) {
             (application as App).cybercafeStore.state.value.accounts
@@ -64,7 +64,6 @@ class SessionService : Service() {
     override fun onCreate() {
         super.onCreate()
         controller.onSessionLost = ::handleSessionLost
-        clientAppDistribution.start()
         if (!messagingServer.start()) {
             SessionLog.warn("messaging backend failed to start")
         } else {
@@ -277,7 +276,7 @@ class SessionService : Service() {
                             ledger.markers(),
                             pendingResults,
                             pendingAdminResults,
-                            clientAppDistribution.info.takeIf { it.available },
+                            clientAppInfo.takeIf { it.available },
                             MediaPrefs.isEnabled(this@SessionService),
                             mediaFolders,
                             MediaIndex.summary(applicationContext),
@@ -448,7 +447,6 @@ class SessionService : Service() {
         (application as App).cybercafeStore.flushUsage(System.currentTimeMillis(), force = true)
         messagingServer.stop()
         adminFileTransferServer.stop()
-        clientAppDistribution.stop()
         controller.unbind()
         scope.cancel()
         liveService = null
