@@ -8,6 +8,7 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.security.MessageDigest
+import java.util.zip.ZipFile
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -27,22 +28,14 @@ data class ClientAppDistributionInfo(
  * Shizzi package through a package Context, then streams it on 127.0.0.1.
  * This avoids depending on the ordinary Android app process staying reachable.
  */
-class ClientAppDistributionServer(private val context: Context) {
+class ClientAppDistributionServer(private val apkBytes: ByteArray) {
     private val running = AtomicBoolean(false)
     private val acceptExecutor = Executors.newSingleThreadExecutor()
     private val clientExecutor = Executors.newFixedThreadPool(2)
     private var serverSocket: ServerSocket? = null
 
     val info: ClientAppDistributionInfo by lazy {
-        runCatching { inspectClientAppAsset(context) }.getOrElse {
-            ClientAppDistributionInfo(
-                available = false,
-                version = CLIENT_VERSION,
-                fileName = CLIENT_FILE_NAME,
-                sizeBytes = 0L,
-                sha256 = "",
-            )
-        }
+        inspectClientAppBytes(apkBytes)
     }
 
     fun start(): Boolean {
@@ -173,52 +166,15 @@ class ClientAppDistributionServer(private val context: Context) {
             output.write(header.toByteArray(Charsets.UTF_8))
 
             if (method == "GET") {
-                context.assets.open(ASSET_PATH).use { asset ->
-                    if (requestedRange != null) {
-                        skipFully(asset, requestedRange.first)
-                        copyLimited(asset, output, requestedRange.byteLength())
-                    } else {
-                        asset.copyTo(output, DEFAULT_BUFFER_SIZE)
-                    }
-                }
+                val first = requestedRange?.first ?: 0L
+                val length = requestedRange?.byteLength() ?: apkBytes.size.toLong()
+                output.write(
+                    apkBytes,
+                    first.toInt(),
+                    length.toInt(),
+                )
             }
             output.flush()
-        }
-    }
-
-    private fun skipFully(
-        input: java.io.InputStream,
-        bytes: Long,
-    ) {
-        var remaining = bytes
-        while (remaining > 0L) {
-            val skipped = input.skip(remaining)
-            if (skipped > 0L) {
-                remaining -= skipped
-                continue
-            }
-            if (input.read() < 0) break
-            remaining--
-        }
-    }
-
-    private fun copyLimited(
-        input: java.io.InputStream,
-        output: BufferedOutputStream,
-        bytes: Long,
-    ) {
-        var remaining = bytes
-        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-        while (remaining > 0L) {
-            val read = input.read(
-                buffer,
-                0,
-                minOf(buffer.size.toLong(), remaining).toInt(),
-            )
-            if (read < 0) break
-            if (read == 0) continue
-            output.write(buffer, 0, read)
-            remaining -= read.toLong()
         }
     }
 
@@ -264,24 +220,32 @@ class ClientAppDistributionServer(private val context: Context) {
 }
 
 
-internal fun inspectClientAppAsset(context: Context): ClientAppDistributionInfo {
-    val digest = MessageDigest.getInstance("SHA-256")
-    var size = 0L
-    context.assets.open(ClientAppDistributionServer.ASSET_PATH).use { asset ->
-        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-        while (true) {
-            val read = asset.read(buffer)
-            if (read < 0) break
-            if (read == 0) continue
-            digest.update(buffer, 0, read)
-            size += read
-        }
+internal fun readClientAppAsset(context: Context): ByteArray =
+    context.assets.open(ClientAppDistributionServer.ASSET_PATH).use { it.readBytes() }
+
+internal fun readClientAppAssetFromInstalledShizzi(context: Context): ByteArray {
+    val applicationInfo = context.packageManager.getApplicationInfo(
+        BuildConfig.APPLICATION_ID,
+        0,
+    )
+    ZipFile(applicationInfo.sourceDir).use { zip ->
+        val entryName = "assets/" + ClientAppDistributionServer.ASSET_PATH
+        val entry = zip.getEntry(entryName)
+            ?: error("Embedded Shizzi+ missing from installed Shizzi APK: $entryName")
+        return zip.getInputStream(entry).use { it.readBytes() }
     }
+}
+
+internal fun inspectClientAppAsset(context: Context): ClientAppDistributionInfo =
+    inspectClientAppBytes(readClientAppAsset(context))
+
+internal fun inspectClientAppBytes(bytes: ByteArray): ClientAppDistributionInfo {
+    val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
     return ClientAppDistributionInfo(
-        available = size > 0,
+        available = bytes.isNotEmpty(),
         version = ClientAppDistributionServer.CLIENT_VERSION,
         fileName = ClientAppDistributionServer.CLIENT_FILE_NAME,
-        sizeBytes = size,
-        sha256 = digest.digest().joinToString("") { "%02x".format(it) },
+        sizeBytes = bytes.size.toLong(),
+        sha256 = digest.joinToString("") { "%02x".format(it) },
     )
 }
