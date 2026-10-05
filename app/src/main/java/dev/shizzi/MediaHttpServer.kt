@@ -197,7 +197,8 @@ class MediaHttpServer(
         } else {
             folders.joinToString("") { folder ->
                 folderCard(
-                    folder = folder,
+                    scopeTitle = scopeTitle,
+                scopeQuery = scopeQuery,
                     entries = entries,
                 )
             }
@@ -254,10 +255,20 @@ class MediaHttpServer(
             .flatMap { folder -> MediaIndex.entriesForFolder(context, folder.id) }
             .sortedBy { it.relativePath.lowercase(Locale.getDefault()) }
 
-        if (selectedFolder?.kind == MediaKind.SERIES) {
+        if (
+            selectedFolder?.kind == MediaKind.SERIES ||
+            (selectedFolder == null && selectedKind == MediaKind.SERIES)
+        ) {
+            val scopeTitle = selectedFolder?.name ?: MediaKind.SERIES.label
+            val scopeQuery = selectedFolder?.let {
+                "folder=${queryValue(it.id)}"
+            } ?: "kind=${MediaKind.SERIES.key}"
+            val containerNames = selectedFolders.associate { it.id to it.name }
             serveSeriesLibrary(
                 output = output,
-                folder = selectedFolder,
+                scopeTitle = scopeTitle,
+                scopeQuery = scopeQuery,
+                containerNames = containerNames,
                 entries = entries,
                 seriesKey = seriesKey,
                 seasonKey = seasonKey,
@@ -285,7 +296,9 @@ class MediaHttpServer(
 
     private fun serveSeriesLibrary(
         output: BufferedOutputStream,
-        folder: MediaFolderConfig,
+        scopeTitle: String,
+        scopeQuery: String,
+        containerNames: Map<String, String>,
         entries: List<MediaEntry>,
         seriesKey: String?,
         seasonKey: String?,
@@ -297,7 +310,8 @@ class MediaHttpServer(
                 MediaSeriesPathCandidate(
                     id = entry.id,
                     relativePath = entry.relativePath,
-                    containerName = folder.name,
+                    containerName = containerNames[entry.folderId]
+                        ?: entry.folderName.ifBlank { scopeTitle },
                 )
             },
         )
@@ -307,7 +321,7 @@ class MediaHttpServer(
                 ""
             } else {
                 catalog.series.joinToString("") { group ->
-                    seriesCard(folder.id, group, byId)
+                    seriesCard(scopeQuery, group, byId)
                 }
             }
             val looseEntries = catalog.rootEntryIds.mapNotNull(byId::get)
@@ -322,16 +336,16 @@ class MediaHttpServer(
                 """.trimIndent()
             }
             val empty = if (catalog.series.isEmpty() && looseEntries.isEmpty()) {
-                "<p class=\"empty\">Aucune série trouvée dans ${escape(folder.name)}.</p>"
+                "<p class=\"empty\">Aucune série trouvée dans ${escape(scopeTitle)}.</p>"
             } else {
                 ""
             }
 
             val html = page(
-                folder.name,
+                scopeTitle,
                 """
                 <a class="back" href="./">← Accueil Media</a>
-                <div class="section-head"><h1>${escape(folder.name)}</h1><span>${catalog.series.size} série(s)</span></div>
+                <div class="section-head"><h1>${escape(scopeTitle)}</h1><span>${catalog.series.size} série(s)</span></div>
                 <div class="folder-grid">$seriesCards</div>
                 $loose
                 $empty
@@ -363,12 +377,12 @@ class MediaHttpServer(
 
         if (seasonKey.isNullOrBlank()) {
             val cards = series.seasons.joinToString("") { season ->
-                seasonCard(folder.id, series, season, byId)
+                seasonCard(scopeQuery, series, season, byId)
             }
             val html = page(
                 series.title,
                 """
-                <a class="back" href="library?folder=${queryValue(folder.id)}">← ${escape(folder.name)}</a>
+                <a class="back" href="library?$scopeQuery">← ${escape(scopeTitle)}</a>
                 <div class="section-head"><h1>${escape(series.title)}</h1><span>${series.seasons.size} saison(s)</span></div>
                 <div class="folder-grid">$cards</div>
                 """.trimIndent(),
@@ -394,7 +408,8 @@ class MediaHttpServer(
 
     private fun writeSeriesEpisodesPage(
         output: BufferedOutputStream,
-        folder: MediaFolderConfig,
+        scopeTitle: String,
+        scopeQuery: String,
         series: MediaSeriesGroup,
         season: MediaSeriesSeasonGroup?,
         entries: List<MediaEntry>,
@@ -402,9 +417,9 @@ class MediaHttpServer(
     ) {
         val title = season?.let { "${series.title} · ${it.label}" } ?: series.title
         val back = if (season == null) {
-            "library?folder=${queryValue(folder.id)}"
+            "library?$scopeQuery"
         } else {
-            "library?folder=${queryValue(folder.id)}&series=${queryValue(series.key)}"
+            "library?$scopeQuery&series=${queryValue(series.key)}"
         }
         val cards = if (entries.isEmpty()) {
             "<p class=\"empty\">Aucun épisode trouvé.</p>"
@@ -414,7 +429,7 @@ class MediaHttpServer(
         val html = page(
             title,
             """
-            <a class="back" href="$back">← ${escape(if (season == null) folder.name else series.title)}</a>
+            <a class="back" href="$back">← ${escape(if (season == null) scopeTitle else series.title)}</a>
             <div class="section-head"><h1>${escape(title)}</h1><span>${entries.size} épisode(s)</span></div>
             <div class="poster-grid">$cards</div>
             """.trimIndent(),
@@ -508,7 +523,7 @@ class MediaHttpServer(
         val coverId = MediaFolderCoverPolicy.select(folder.id, candidates)?.id
         val coverEntry = coverId?.let { id -> entries.firstOrNull { it.id == id } }
         val count = entries.count { it.folderId == folder.id }
-        val folderName = escape(folder.name)
+        val folderName = escape(scopeTitle)
         val kindLabel = escape(folder.kind.label)
 
         val visual = if (coverEntry != null) {
@@ -537,7 +552,7 @@ class MediaHttpServer(
     }
 
     private fun seriesCard(
-        folderId: String,
+        scopeQuery: String,
         series: MediaSeriesGroup,
         byId: Map<String, MediaEntry>,
     ): String {
@@ -564,7 +579,7 @@ class MediaHttpServer(
             """.trimIndent()
         }
         return """
-            <a class="folder-card catalog-card" data-title="$title" href="library?folder=${queryValue(folderId)}&series=${queryValue(series.key)}">
+            <a class="folder-card catalog-card" data-title="$title" href="library?$scopeQuery&series=${queryValue(series.key)}">
               $visual
               <strong>$title</strong>
               <small>$subtitle</small>
@@ -573,7 +588,7 @@ class MediaHttpServer(
     }
 
     private fun seasonCard(
-        folderId: String,
+        scopeQuery: String,
         series: MediaSeriesGroup,
         season: MediaSeriesSeasonGroup,
         byId: Map<String, MediaEntry>,
@@ -596,7 +611,7 @@ class MediaHttpServer(
             """.trimIndent()
         }
         return """
-            <a class="folder-card catalog-card" data-title="$label" href="library?folder=${queryValue(folderId)}&series=${queryValue(series.key)}&season=${queryValue(season.key)}">
+            <a class="folder-card catalog-card" data-title="$label" href="library?$scopeQuery&series=${queryValue(series.key)}&season=${queryValue(season.key)}">
               $visual
               <strong>$label</strong>
               <small>${season.entryIds.size} épisode(s)</small>
