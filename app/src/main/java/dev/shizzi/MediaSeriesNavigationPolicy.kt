@@ -100,7 +100,12 @@ object MediaSeriesNavigationPolicy {
             .map(String::trim)
             .filter(String::isNotBlank)
 
-        if (segments.size < 2) return null
+        if (segments.isEmpty()) return null
+
+        if (segments.size == 1) {
+            describeRootFile(candidate, segments[0])?.let { return it }
+            return null
+        }
 
         parseSeriesAndSeason(segments[0])?.let { parsed ->
             return Descriptor(
@@ -136,6 +141,51 @@ object MediaSeriesNavigationPolicy {
             seasonNumber = null,
         )
     }
+
+    private fun describeRootFile(
+        candidate: MediaSeriesPathCandidate,
+        fileName: String,
+    ): Descriptor? {
+        parseSeriesAndSeason(candidate.containerName)?.let { parsed ->
+            return Descriptor(
+                seriesKey = slug(parsed.first),
+                seriesTitle = cleanTitle(parsed.first),
+                seasonNumber = parsed.second,
+            )
+        }
+
+        parseFileSeriesAndSeason(fileName)?.let { parsed ->
+            return Descriptor(
+                seriesKey = slug(parsed.first),
+                seriesTitle = cleanTitle(parsed.first),
+                seasonNumber = parsed.second,
+            )
+        }
+
+        val containerTitle = cleanTitle(candidate.containerName)
+        if (containerTitle.isNotBlank() && !isGenericSeriesContainer(containerTitle)) {
+            return Descriptor(
+                seriesKey = slug(containerTitle),
+                seriesTitle = containerTitle,
+                seasonNumber = null,
+            )
+        }
+        return null
+    }
+
+    private fun parseFileSeriesAndSeason(value: String): Pair<String, Int>? {
+        val stem = value.substringBeforeLast('.', value)
+        val match = FILE_SERIES_SEASON.find(stem.trim()) ?: return null
+        val title = cleanTitle(match.groupValues[1])
+        val number = (match.groupValues[2].ifBlank { match.groupValues[3] })
+            .toIntOrNull()
+            ?: return null
+        if (title.isBlank()) return null
+        return title to number
+    }
+
+    private fun isGenericSeriesContainer(value: String): Boolean =
+        slug(value) in setOf("serie", "series", "media", "medias", "tv")
 
     private fun parseSeriesAndSeason(value: String): Pair<String, Int>? {
         val match = SERIES_SEASON.find(value.trim()) ?: return null
@@ -194,5 +244,9 @@ object MediaSeriesNavigationPolicy {
 
     private val STANDALONE_SEASON = Regex(
         pattern = """(?i)^(?:(?:saison|season)\s*0*(\d{1,3})|s0*(\d{1,3}))$""",
+    )
+
+    private val FILE_SERIES_SEASON = Regex(
+        pattern = """(?i)^(.*?)(?:[\s._-]+(?:saison|season)\s*0*(\d{1,3})|[\s._-]+s0*(\d{1,3}))(?:[\s._-]*(?:e(?:p(?:isode)?)?|episode|épisode)?\s*0*\d{1,4})?(?:[\s._-].*)?$""",
     )
 }
