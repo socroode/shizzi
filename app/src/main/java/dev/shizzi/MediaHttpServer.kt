@@ -366,7 +366,8 @@ class MediaHttpServer(
             val episodes = singleUnnumbered.entryIds.mapNotNull(byId::get)
             writeSeriesEpisodesPage(
                 output = output,
-                folder = folder,
+                scopeTitle = scopeTitle,
+                scopeQuery = scopeQuery,
                 series = series,
                 season = null,
                 entries = episodes,
@@ -523,7 +524,7 @@ class MediaHttpServer(
         val coverId = MediaFolderCoverPolicy.select(folder.id, candidates)?.id
         val coverEntry = coverId?.let { id -> entries.firstOrNull { it.id == id } }
         val count = entries.count { it.folderId == folder.id }
-        val folderName = escape(scopeTitle)
+        val folderName = escape(folder.name)
         val kindLabel = escape(folder.kind.label)
 
         val visual = if (coverEntry != null) {
