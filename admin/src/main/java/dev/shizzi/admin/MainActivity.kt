@@ -306,6 +306,10 @@ class MainActivity : Activity() {
             state.optJSONArray("offers") ?: JSONArray(),
             state.optJSONArray("vouchers") ?: JSONArray(),
         )
+        renderMediaOffersAndVouchers(
+            state.optJSONArray("mediaOffers") ?: JSONArray(),
+            state.optJSONArray("mediaVouchers") ?: JSONArray(),
+        )
         renderDevices(traffic.optJSONArray("portalAuthorizations") ?: JSONArray())
         renderMediaManagement(
             state.optJSONObject("media") ?: JSONObject(),
@@ -337,13 +341,19 @@ class MainActivity : Activity() {
             val n = account.optString("number")
             val label = account.optString("name").ifBlank { "Compte $n" }
             val enabled = account.optBoolean("enabled", true)
+            val mediaUntil = account.optLong("mediaUntilMillis")
+            val mediaStatus = if (enabled && mediaUntil > System.currentTimeMillis()) {
+                "Media actif jusqu'au " + formatDateTime(mediaUntil)
+            } else {
+                "Media inactif"
+            }
             info(
                 "$label — N° $n\n" +
                     (if (enabled) "Actif" else "Suspendu") +
                     " · restant " + formatBytes(account.optLong("dataBalanceBytes")) +
                     " · utilisé " + formatBytes(
                     account.optLong("totalUpBytes") + account.optLong("totalDownBytes"),
-                ),
+                ) + "\n" + mediaStatus,
             )
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             row.addView(
@@ -394,7 +404,7 @@ class MainActivity : Activity() {
     }
 
     private fun renderOffersAndVouchers(offers: JSONArray, vouchers: JSONArray) {
-        section("Offres & vouchers")
+        section("Vouchers Internet")
 
         val id = field("ID offre (ex: promo-30)")
         val name = field("Nom de l'offre")
@@ -475,7 +485,7 @@ class MainActivity : Activity() {
             divider()
         }
 
-        section("Inventaire vouchers")
+        section("Inventaire vouchers Internet")
         val max = minOf(vouchers.length(), 50)
         for (i in 0 until max) {
             val voucher = vouchers.optJSONObject(i) ?: continue
@@ -496,6 +506,120 @@ class MainActivity : Activity() {
                 button(if (enabled) "Désactiver $code" else "Réactiver $code") {
                     command(
                         "voucher.enable",
+                        JSONObject().put("code", code).put("enabled", !enabled),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun renderMediaOffersAndVouchers(
+        offers: JSONArray,
+        vouchers: JSONArray,
+    ) {
+        section("Vouchers Media")
+        info(
+            "Les vouchers Media sont indépendants d'Internet. " +
+                "Ils ajoutent uniquement une durée d'accès à Shizzi Media.",
+        )
+
+        val id = field("ID pass Media (ex: media-week)")
+        val name = field("Nom du pass Media")
+        val duration = field("Durée", "30")
+        val unit = field("Unité : HOURS ou DAYS", "DAYS")
+        val price = field("Prix FCFP", "0")
+
+        button("Créer / modifier le pass Media") {
+            val amount = duration.text.toString().toLongOrNull() ?: 0L
+            val durationMinutes = if (
+                unit.text.toString().trim().uppercase() == "HOURS"
+            ) {
+                amount * 60L
+            } else {
+                amount * 24L * 60L
+            }
+            command(
+                "media.offer.upsert",
+                JSONObject()
+                    .put("id", id.text.toString().trim())
+                    .put("name", name.text.toString().trim())
+                    .put("durationMinutes", durationMinutes)
+                    .put("priceXpf", price.text.toString().toIntOrNull() ?: 0),
+            )
+        }
+
+        for (i in 0 until offers.length()) {
+            val offer = offers.optJSONObject(i) ?: continue
+            val offerId = offer.optString("id")
+            info(
+                offer.optString("name") + " — " +
+                    formatMediaDuration(offer.optLong("durationMinutes")) + " · " +
+                    offer.optInt("priceXpf") + " FCFP",
+            )
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            row.addView(
+                makeButton("Charger") {
+                    id.setText(offerId)
+                    name.setText(offer.optString("name"))
+                    val minutes = offer.optLong("durationMinutes")
+                    if (minutes % (24L * 60L) == 0L) {
+                        duration.setText((minutes / (24L * 60L)).toString())
+                        unit.setText("DAYS")
+                    } else {
+                        duration.setText((minutes / 60L).coerceAtLeast(1L).toString())
+                        unit.setText("HOURS")
+                    }
+                    price.setText(offer.optInt("priceXpf").toString())
+                },
+                weighted(),
+            )
+            row.addView(
+                makeButton("Générer") {
+                    prompt("Nombre de vouchers Media (1 à 100)", "1") { value ->
+                        command(
+                            "media.voucher.generate",
+                            JSONObject()
+                                .put("offerId", offerId)
+                                .put("count", (value.toIntOrNull() ?: 1).coerceIn(1, 100)),
+                        )
+                    }
+                },
+                weighted(),
+            )
+            row.addView(
+                makeButton("Supprimer") {
+                    confirm("Supprimer le pass Media ${offer.optString("name")} ?") {
+                        command("media.offer.delete", JSONObject().put("id", offerId))
+                    }
+                },
+                weighted(),
+            )
+            root.addView(row)
+            divider()
+        }
+
+        section("Inventaire vouchers Media")
+        val max = minOf(vouchers.length(), 50)
+        for (i in 0 until max) {
+            val voucher = vouchers.optJSONObject(i) ?: continue
+            val code = voucher.optString("code")
+            val redeemed = voucher.optString("redeemedByAccount")
+            val enabled = voucher.optBoolean("enabled", true)
+            info(
+                "$code — " + voucher.optString("snapshotName").ifBlank {
+                    voucher.optString("offerId")
+                } + " · " +
+                    formatMediaDuration(voucher.optLong("snapshotDurationMinutes")) + " — " +
+                    if (redeemed.isBlank()) {
+                        if (enabled) "Disponible" else "Désactivé"
+                    } else {
+                        "Utilisé par $redeemed"
+                    },
+            )
+            if (redeemed.isBlank()) {
+                button(if (enabled) "Désactiver $code" else "Réactiver $code") {
+                    command(
+                        "media.voucher.enable",
                         JSONObject().put("code", code).put("enabled", !enabled),
                     )
                 }
@@ -1512,6 +1636,21 @@ class MainActivity : Activity() {
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
+
+    private fun formatMediaDuration(minutes: Long): String {
+        val value = minutes.coerceAtLeast(0L)
+        return when {
+            value % (24L * 60L) == 0L -> (value / (24L * 60L)).toString() + " jour(s)"
+            value % 60L == 0L -> (value / 60L).toString() + " heure(s)"
+            else -> value.toString() + " minute(s)"
+        }
+    }
+
+    private fun formatDateTime(epochMillis: Long): String =
+        java.text.DateFormat.getDateTimeInstance(
+            java.text.DateFormat.SHORT,
+            java.text.DateFormat.SHORT,
+        ).format(java.util.Date(epochMillis))
 
     private fun formatBytes(bytes: Long): String = when {
         bytes >= 1_000_000_000L -> String.format("%.2f Go", bytes / 1_000_000_000.0)
