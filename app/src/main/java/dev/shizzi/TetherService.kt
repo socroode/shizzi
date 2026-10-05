@@ -15,12 +15,16 @@ class TetherService : ITetherService.Stub {
     private val session: TetherSession by lazy { TetherSession(shellContext) }
     private val compatibility: CompatibilityCheck by lazy { CompatibilityCheck(shellContext) }
     private val apexInstaller: ApexInstaller by lazy { ApexInstaller() }
+    private val clientAppDistribution: ClientAppDistributionServer by lazy {
+        ClientAppDistributionServer(appPackageContext())
+    }
 
     @Suppress("unused")
     constructor() : this(acquireSystemContext())
 
     constructor(context: Context) {
         this.context = context
+        ensureClientAppDistribution()
         liveInstance = this
     }
 
@@ -84,6 +88,7 @@ class TetherService : ITetherService.Stub {
     }
 
     override fun setPortalConfig(required: Boolean, configJson: String?) {
+        ensureClientAppDistribution()
         session.setPortalConfig(required, configJson.orEmpty())
     }
 
@@ -126,6 +131,30 @@ class TetherService : ITetherService.Stub {
             runCatching { runner.run(attemptTethering, availabilityTimeoutMs) }
                 .getOrElse { failure -> errorReport("runProbes", failure) },
         )
+
+    private fun appPackageContext(): Context =
+        context.createPackageContext(
+            BuildConfig.APPLICATION_ID,
+            Context.CONTEXT_IGNORE_SECURITY,
+        )
+
+    private fun ensureClientAppDistribution() {
+        runCatching { clientAppDistribution.start() }
+            .onSuccess { started ->
+                if (started) {
+                    Log.i(
+                        TAG,
+                        "Shizzi+ distribution hosted in shell process on 127.0.0.1:" +
+                            ClientAppDistributionServer.PORT,
+                    )
+                } else {
+                    Log.w(TAG, "Shizzi+ shell distribution asset unavailable")
+                }
+            }
+            .onFailure { failure ->
+                Log.e(TAG, "Shizzi+ shell distribution failed", failure)
+            }
+    }
 
     private fun publish(report: String): String {
         runCatching { java.io.File(REPORT_PATH).writeText(report) }
