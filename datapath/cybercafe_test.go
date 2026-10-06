@@ -91,34 +91,37 @@ func TestThreeAccountsEachNeedTheirOwnPortalLogin(t *testing.T) {
 	}
 }
 
-// Test 2: one account may have only one active device at a time.
-func TestSameAccountOnSecondPhoneIsRefusedUntilLogout(t *testing.T) {
+// Test 2: an account is portable and may have several simultaneous sessions.
+// The account is not owned by a device; IPs are only temporary routing keys.
+func TestSameAccountCanBeUsedByTwoPhonesAtOnce(t *testing.T) {
 	manager := newPortalManager(t)
 	pushConfig(t, manager, accountForTest("2000", "roniu", 20_000))
 
-	if ok, _ := manager.submitPortalAccountLogin(phoneB, "2000", "roniu"); !ok {
-		t.Fatal("first login failed")
+	if ok, message := manager.submitPortalAccountLogin(phoneB, "2000", "roniu"); !ok {
+		t.Fatalf("first login failed: %s", message)
 	}
-	if ok, message := manager.submitPortalAccountLogin(phoneC, "2000", "roniu"); ok {
-		t.Fatal("second phone unexpectedly opened the same account")
-	} else if message != "Ce compte est déjà utilisé sur un autre appareil." {
-		t.Fatalf("unexpected refusal message: %q", message)
+	if ok, message := manager.submitPortalAccountLogin(phoneC, "2000", "roniu"); !ok {
+		t.Fatalf("second login failed: %s", message)
 	}
-	if !manager.flowAllowed(phoneB) {
-		t.Fatal("first phone lost Internet after refused second login")
+	if !manager.flowAllowed(phoneB) || !manager.flowAllowed(phoneC) {
+		t.Fatal("one of the two portable sessions has no Internet")
 	}
-	if manager.flowAllowed(phoneC) {
-		t.Fatal("second phone inherited Internet")
+
+	manager.account(phoneB, directionDownload, 400)
+	manager.account(phoneC, directionDownload, 600)
+	usage := manager.accountUsage["2000"]
+	if usage == nil || usage.DownBytes != 1000 {
+		t.Fatalf("shared account usage=%+v, want 1000 download bytes", usage)
 	}
 
 	if ok, _ := manager.submitPortalLogout(phoneB); !ok {
-		t.Fatal("logout failed")
+		t.Fatal("first phone logout failed")
 	}
-	if ok, _ := manager.submitPortalAccountLogin(phoneC, "2000", "roniu"); !ok {
-		t.Fatal("account was not portable after logout")
+	if manager.flowAllowed(phoneB) {
+		t.Fatal("logged-out phone kept Internet")
 	}
 	if !manager.flowAllowed(phoneC) {
-		t.Fatal("second phone has no Internet after taking over the released account")
+		t.Fatal("second phone lost Internet when the first phone logged out")
 	}
 }
 
