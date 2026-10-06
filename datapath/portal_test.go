@@ -177,7 +177,7 @@ func TestPortalRechargeClaimCarriesAccountAndClient(t *testing.T) {
 	}
 }
 
-func TestSameAccountCanOpenMultipleActiveClientSessions(t *testing.T) {
+func TestSameAccountLoginOnSecondClientReplacesFirstSession(t *testing.T) {
 	manager := newTrafficManager()
 	manager.setPortalConfig(true, portalConfigForTest(t))
 
@@ -189,6 +189,9 @@ func TestSameAccountCanOpenMultipleActiveClientSessions(t *testing.T) {
 	if !firstOK {
 		t.Fatalf("first login failed: %s", firstMessage)
 	}
+	if manager.portalRequiredFor("192.168.7.66") {
+		t.Fatal("first client was not authorized")
+	}
 
 	secondOK, secondMessage := manager.submitPortalAccountLogin(
 		"192.168.7.77",
@@ -199,23 +202,21 @@ func TestSameAccountCanOpenMultipleActiveClientSessions(t *testing.T) {
 		t.Fatalf("second login failed: %s", secondMessage)
 	}
 
-	if manager.portalRequiredFor("192.168.7.66") {
-		t.Fatal("first authenticated client returned to the portal")
+	if !manager.portalRequiredFor("192.168.7.66") {
+		t.Fatal("previous client kept the account after takeover")
 	}
 	if manager.portalRequiredFor("192.168.7.77") {
-		t.Fatal("second authenticated client returned to the portal")
+		t.Fatal("new client did not take over the portable account")
 	}
-	if len(manager.portalAuthorized) != 2 {
-		t.Fatalf("authorizations=%d, want 2", len(manager.portalAuthorized))
+	if len(manager.portalAuthorized) != 1 {
+		t.Fatalf("authorizations=%d, want 1", len(manager.portalAuthorized))
 	}
-	if manager.portalAuthorized["192.168.7.66"].AccountNumber != "1001" ||
-		manager.portalAuthorized["192.168.7.77"].AccountNumber != "1001" {
-		t.Fatal("portable account sessions were not mapped to the same account")
+	if manager.portalAuthorized["192.168.7.77"].AccountNumber != "1001" {
+		t.Fatal("portable account was not moved to the second client")
 	}
 }
 
-
-func TestPortableAccountAcrossSixClientsSharesOneUsagePool(t *testing.T) {
+func TestPortableAccountCanMoveAcrossSixClientsSequentially(t *testing.T) {
 	manager := newTrafficManager()
 	manager.setPortalConfig(true, portalConfigForTest(t))
 
@@ -227,19 +228,20 @@ func TestPortableAccountAcrossSixClientsSharesOneUsagePool(t *testing.T) {
 		"192.168.7.65",
 		"192.168.7.66",
 	}
-	for _, ip := range clients {
+	for index, ip := range clients {
 		ok, message := manager.submitPortalAccountLogin(ip, "1001", "1234")
 		if !ok {
 			t.Fatalf("login %s failed: %s", ip, message)
 		}
-		manager.account(ip, directionDownload, 100)
-	}
-	if len(manager.portalAuthorized) != len(clients) {
-		t.Fatalf("authorizations=%d, want %d", len(manager.portalAuthorized), len(clients))
-	}
-	usage := manager.accountUsage["1001"]
-	if usage == nil || usage.DownBytes != 600 {
-		t.Fatalf("shared account usage=%+v, want 600 download bytes", usage)
+		if len(manager.portalAuthorized) != 1 {
+			t.Fatalf("after client %d authorizations=%d, want 1", index+1, len(manager.portalAuthorized))
+		}
+		if manager.portalRequiredFor(ip) {
+			t.Fatalf("current client %s was not authorized", ip)
+		}
+		if index > 0 && !manager.portalRequiredFor(clients[index-1]) {
+			t.Fatalf("previous client %s kept the account", clients[index-1])
+		}
 	}
 }
 
