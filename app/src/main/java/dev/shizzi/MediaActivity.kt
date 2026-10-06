@@ -164,6 +164,7 @@ private fun MediaScreen(onBack: () -> Unit) {
                     checked = enabled,
                     onCheckedChange = { checked ->
                         enabled = checked
+                        App.instance.cybercafeStore.setMediaModuleEnabled(checked)
                         MediaPrefs.setEnabled(context, checked)
                         if (checked) MediaServerService.start(context) else MediaServerService.stop(context)
                         revision++
