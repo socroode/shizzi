@@ -366,6 +366,34 @@ class CybercafeStore(context: Context) {
     }
 
     @Synchronized
+    fun setMessengerModuleEnabled(enabled: Boolean): RuleOutcome {
+        val updated = state.value.copy(
+            modules = state.value.modules.copy(messengerEnabled = enabled),
+        )
+        return commit(
+            RuleOutcome(
+                state = updated,
+                success = true,
+                message = if (enabled) "Shizzi Messenger activé." else "Shizzi Messenger désactivé.",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun setMediaModuleEnabled(enabled: Boolean): RuleOutcome {
+        val updated = state.value.copy(
+            modules = state.value.modules.copy(mediaEnabled = enabled),
+        )
+        return commit(
+            RuleOutcome(
+                state = updated,
+                success = true,
+                message = if (enabled) "Shizzi Media activé." else "Shizzi Media désactivé.",
+            ),
+        )
+    }
+
+    @Synchronized
     fun setPortalCustomization(
         titleRaw: String,
         messageRaw: String,
@@ -459,6 +487,10 @@ internal fun encodeCybercafeState(state: CybercafeState): String =
             put("passwordHash", state.remoteAdmin.passwordHash)
             put("downloadBps", state.remoteAdmin.downloadBps)
             put("uploadBps", state.remoteAdmin.uploadBps)
+        })
+        put("modules", JSONObject().apply {
+            put("messengerEnabled", state.modules.messengerEnabled)
+            put("mediaEnabled", state.modules.mediaEnabled)
         })
         put("offers", JSONArray().apply {
             state.offers.values.sortedBy(Offer::id).forEach { offer ->
@@ -631,6 +663,14 @@ internal fun decodeCybercafeState(raw: String?): CybercafeState {
         )
     }
 
+    val modulesObject = root.optJSONObject("modules")
+    val modules = FeatureModules(
+        // Existing Shizzi installs predate module switches, so migration keeps
+        // every current feature enabled until the administrator disables it.
+        messengerEnabled = modulesObject?.optBoolean("messengerEnabled", true) ?: true,
+        mediaEnabled = modulesObject?.optBoolean("mediaEnabled", true) ?: true,
+    )
+
     val devices = linkedMapOf<String, DeviceBinding>()
     root.optJSONArray("devices")?.forEachObject { item ->
         val key = item.optString("deviceKey").trim().lowercase()
@@ -645,13 +685,14 @@ internal fun decodeCybercafeState(raw: String?): CybercafeState {
     }
 
     return CybercafeState(
-        schemaVersion = 4,
+        schemaVersion = 5,
         offers = if (offers.isEmpty()) defaultOffers() else offers,
         accounts = accounts,
         vouchers = vouchers,
         devices = devices,
         portal = portal,
         remoteAdmin = remoteAdmin,
+        modules = modules,
     )
 }
 
