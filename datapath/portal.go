@@ -126,6 +126,11 @@ type portalClientApp struct {
 	SHA256    string `json:"sha256"`
 }
 
+type portalModules struct {
+	MessengerEnabled bool `json:"messengerEnabled"`
+	MediaEnabled     bool `json:"mediaEnabled"`
+}
+
 type portalConfig struct {
 	Title        string               `json:"title"`
 	Message      string               `json:"message"`
@@ -134,6 +139,7 @@ type portalConfig struct {
 	Admin        remoteAdminConfig    `json:"admin"`
 	AdminState   json.RawMessage      `json:"adminState"`
 	ClientApp    portalClientApp      `json:"clientApp"`
+	Modules      *portalModules        `json:"modules,omitempty"`
 	// ClaimResults lets Android tell the portal how a voucher claim ended so
 	// the client sees "accepted"/"rejected" instead of a silent drop.
 	ClaimResults []PortalClaimResult   `json:"claimResults"`
@@ -222,6 +228,10 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 	}
 	m.portalHTML = config.HTML
 	m.portalClientApp = config.ClientApp
+	if config.Modules != nil {
+		m.messengerEnabled = config.Modules.MessengerEnabled
+		m.mediaEnabled = config.Modules.MediaEnabled
+	}
 	credentialsChanged := m.adminConfig.Username != config.Admin.Username ||
 		m.adminConfig.PasswordHash != config.Admin.PasswordHash ||
 		m.adminConfig.Enabled != config.Admin.Enabled
@@ -715,6 +725,14 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	switch {
 	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
 		(path == "/media" || strings.HasPrefix(path, "/media/")) &&
+		!m.mediaModuleEnabled():
+		m.writeModuleUnavailable(conn, request.Method, "Shizzi Media")
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		(path == "/messenger" || path == "/messenger/") &&
+		!m.messengerModuleEnabled():
+		m.writeModuleUnavailable(conn, request.Method, "Shizzi Messenger")
+	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+		(path == "/media" || strings.HasPrefix(path, "/media/")) &&
 		!m.mediaAccountAuthenticated(clientIP):
 		m.writeMediaLoginRequired(conn, request.Method)
 	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
@@ -986,6 +1004,22 @@ button:disabled{opacity:.5;cursor:wait}
 	}
 }
 
+func (m *TrafficManager) writeModuleUnavailable(conn net.Conn, method, module string) {
+	body := []byte(fmt.Sprintf(`<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>%s désactivé</title></head><body style="font-family:system-ui;background:#07111f;color:white;padding:24px">
+<h1>%s désactivé</h1><p>Ce module n'est pas actif sur ce hotspot Shizzi.</p><a style="color:#67e8f9" href="/">Retour au portail Shizzi</a>
+</body></html>`, html.EscapeString(module), html.EscapeString(module)))
+	header := fmt.Sprintf(
+		"HTTP/1.1 404 Not Found\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+		len(body),
+	)
+	_, _ = conn.Write([]byte(header))
+	if method != http.MethodHead {
+		_, _ = conn.Write(body)
+	}
+}
+
 func (m *TrafficManager) writeMediaLoginRequired(conn net.Conn, method string) {
 	body := []byte(`<!doctype html>
 <html lang="fr"><head><meta charset="utf-8">
@@ -1140,7 +1174,9 @@ func (m *TrafficManager) writePortalStatusJSON(conn net.Conn, ip string) {
 }
 
 type portalStatusPayload struct {
-	Authenticated   bool   `json:"authenticated"`
+	Authenticated    bool   `json:"authenticated"`
+	MessengerEnabled bool   `json:"messengerEnabled"`
+	MediaEnabled     bool   `json:"mediaEnabled"`
 	Authorized      bool   `json:"authorized"`
 	AccountNumber   string `json:"accountNumber,omitempty"`
 	AccountName     string `json:"accountName,omitempty"`
@@ -1165,13 +1201,17 @@ func (m *TrafficManager) portalStatus(ip string) portalStatusPayload {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	payload := portalStatusPayload{
+		MessengerEnabled: m.messengerEnabled,
+		MediaEnabled:     m.mediaEnabled,
+	}
 	authorization := m.portalAuthorized[ip]
 	if authorization == nil {
-		return portalStatusPayload{}
+		return payload
 	}
 	account, ok := m.portalAccounts[authorization.AccountNumber]
 	if !ok {
-		return portalStatusPayload{}
+		return payload
 	}
 
 	// Android's totals include what it already applied from this datapath;
@@ -1205,8 +1245,10 @@ func (m *TrafficManager) portalStatus(ip string) portalStatusPayload {
 		expires = account.DataValidUntilMillis
 	}
 
-	payload := portalStatusPayload{
-		Authenticated:   true,
+	payload = portalStatusPayload{
+		Authenticated:    true,
+		MessengerEnabled: m.messengerEnabled,
+		MediaEnabled:     m.mediaEnabled,
 		Authorized:      m.portalAuthorizedLocked(ip, now),
 		AccountNumber:   account.Number,
 		AccountName:     account.Name,
@@ -1245,6 +1287,8 @@ func (m *TrafficManager) writePortalHTML(
 	subtitle := m.portalMessage
 	custom := m.portalHTML
 	clientApp := m.portalClientApp
+	messengerEnabled := m.messengerEnabled
+	mediaEnabled := m.mediaEnabled
 	m.mu.Unlock()
 
 	alert := ""
@@ -1328,13 +1372,15 @@ func (m *TrafficManager) writePortalHTML(
 		)
 	}
 
-	if status.Authenticated {
-	content += `<section class="messenger-link"><div class="eyebrow">COMMUNICATION LOCALE</div>
+	if status.Authenticated && messengerEnabled {
+		content += `<section class="messenger-link"><div class="eyebrow">COMMUNICATION LOCALE</div>
 <strong>Shizzi Messenger</strong>
 <p>Messages privés, groupes et appels entre comptes Shizzi sur ce Wi-Fi.</p>
 <a class="messenger-button" href="/messenger/">Ouvrir Shizzi Messenger</a>
 <div class="messenger-note">Compte Shizzi requis · trafic local hors quota Internet</div></section>`
-	content += `<section class="media-link"><div class="eyebrow">MEDIA LOCAL</div>
+	}
+	if status.Authenticated && mediaEnabled {
+		content += `<section class="media-link"><div class="eyebrow">MEDIA LOCAL</div>
 <strong>Shizzi Media</strong>
 <p>Films, séries et musique disponibles dans le navigateur sur ce Wi-Fi, sans utiliser Internet ni le quota Data.</p>
 <a class="media-button" href="/media/">Ouvrir Shizzi Media</a>
