@@ -177,7 +177,7 @@ func TestPortalRechargeClaimCarriesAccountAndClient(t *testing.T) {
 	}
 }
 
-func TestSameAccountIsRefusedOnSecondActiveClient(t *testing.T) {
+func TestSameAccountCanOpenMultipleActiveClientSessions(t *testing.T) {
 	manager := newTrafficManager()
 	manager.setPortalConfig(true, portalConfigForTest(t))
 
@@ -195,21 +195,22 @@ func TestSameAccountIsRefusedOnSecondActiveClient(t *testing.T) {
 		"1001",
 		"1234",
 	)
-	if secondOK {
-		t.Fatal("second client unexpectedly opened the same account")
-	}
-	if secondMessage != "Ce compte est déjà utilisé sur un autre appareil." {
-		t.Fatalf("unexpected refusal message: %s", secondMessage)
+	if !secondOK {
+		t.Fatalf("second login failed: %s", secondMessage)
 	}
 
 	if manager.portalRequiredFor("192.168.7.66") {
 		t.Fatal("first authenticated client returned to the portal")
 	}
-	if !manager.portalRequiredFor("192.168.7.77") {
-		t.Fatal("second client was authorized")
+	if manager.portalRequiredFor("192.168.7.77") {
+		t.Fatal("second authenticated client returned to the portal")
 	}
-	if len(manager.portalAuthorized) != 1 {
-		t.Fatalf("authorizations=%d, want 1", len(manager.portalAuthorized))
+	if len(manager.portalAuthorized) != 2 {
+		t.Fatalf("authorizations=%d, want 2", len(manager.portalAuthorized))
+	}
+	if manager.portalAuthorized["192.168.7.66"].AccountNumber != "1001" ||
+		manager.portalAuthorized["192.168.7.77"].AccountNumber != "1001" {
+		t.Fatal("portable account sessions were not mapped to the same account")
 	}
 }
 
