@@ -18,6 +18,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import android.widget.Switch
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
@@ -186,7 +187,9 @@ class MainActivity : Activity() {
             state.optJSONArray("vouchers") ?: JSONArray(),
         )
         renderDevices(traffic.optJSONArray("portalAuthorizations") ?: JSONArray())
-        renderMediaStatus()
+        val modules = state.optJSONObject("modules") ?: JSONObject()
+        renderModules(modules)
+        renderMediaStatus(modules.optBoolean("mediaEnabled", true))
         renderPortal(state.optJSONObject("portal") ?: JSONObject())
         renderAdminCredentials(state.optJSONObject("remoteAdmin") ?: JSONObject())
         renderDiagnostics(traffic)
@@ -395,7 +398,37 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun renderMediaStatus() {
+    private fun renderModules(modules: JSONObject) {
+        section("Modules Shizzi")
+        info("Internet — toujours actif")
+
+        val messengerEnabled = modules.optBoolean("messengerEnabled", true)
+        val messenger = Switch(this).apply {
+            text = "Shizzi Messenger"
+            isChecked = messengerEnabled
+            setOnCheckedChangeListener { _, enabled ->
+                command("module.messenger.set", JSONObject().put("enabled", enabled))
+            }
+        }
+        root.addView(messenger, full())
+
+        val mediaEnabled = modules.optBoolean("mediaEnabled", true)
+        val media = Switch(this).apply {
+            text = "Shizzi Media"
+            isChecked = mediaEnabled
+            setOnCheckedChangeListener { _, enabled ->
+                command("module.media.set", JSONObject().put("enabled", enabled))
+            }
+        }
+        root.addView(media, full())
+    }
+
+    private fun renderMediaStatus(mediaEnabled: Boolean) {
+        if (!mediaEnabled) {
+            section("Shizzi Media")
+            info("Module Media désactivé sur ce hotspot.")
+            return
+        }
         section("Shizzi Media")
         val mediaStatus = TextView(this).apply {
             text = "Détection du serveur Media…"
