@@ -53,7 +53,7 @@ class CybercafeModelTest {
 
         val migrated = decodeCybercafeState(raw)
 
-        assertEquals(4, migrated.schemaVersion)
+        assertEquals(5, migrated.schemaVersion)
         assertEquals("RONIU", migrated.accounts.getValue("1001").name)
         assertTrue(migrated.vouchers.containsKey("SHZ-ABCD-EFGH"))
         assertEquals("Shizzi Hotspot", migrated.portal.title)
@@ -103,7 +103,7 @@ class CybercafeModelTest {
 
         val migrated = decodeCybercafeState(raw)
 
-        assertEquals(4, migrated.schemaVersion)
+        assertEquals(5, migrated.schemaVersion)
         assertEquals("TEKOMOPAO WIFI1", migrated.portal.title)
         assertEquals("<html><body>{{CONTENT}}</body></html>", migrated.portal.html)
         assertEquals(7_000_000_000L, migrated.accounts.getValue("1001").dataBalanceBytes)
@@ -153,6 +153,32 @@ class CybercafeModelTest {
         assertEquals("TEKOMOPAO WIFI", decoded.portal.title)
         assertEquals("Bienvenue", decoded.portal.message)
         assertEquals("<html><body>{{CONTENT}}</body></html>", decoded.portal.html)
+        assertTrue(decoded.accounts.containsKey("1001"))
+    }
+
+    @Test
+    fun legacyStateKeepsMessengerAndMediaEnabled() {
+        val migrated = decodeCybercafeState("""{"schemaVersion":4}""")
+
+        assertEquals(5, migrated.schemaVersion)
+        assertTrue(migrated.modules.messengerEnabled)
+        assertTrue(migrated.modules.mediaEnabled)
+    }
+
+    @Test
+    fun moduleSwitchesRoundTripWithoutChangingAccounts() {
+        val state = CybercafeState(
+            accounts = mapOf("1001" to account()),
+            modules = FeatureModules(
+                messengerEnabled = false,
+                mediaEnabled = true,
+            ),
+        )
+
+        val decoded = decodeCybercafeState(encodeCybercafeState(state))
+
+        assertFalse(decoded.modules.messengerEnabled)
+        assertTrue(decoded.modules.mediaEnabled)
         assertTrue(decoded.accounts.containsKey("1001"))
     }
 
