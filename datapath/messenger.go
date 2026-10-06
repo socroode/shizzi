@@ -399,6 +399,12 @@ func (m *TrafficManager) serveMessengerAPI(
 	if !strings.HasPrefix(request.URL.Path, "/api/v1/messenger/") {
 		return false
 	}
+	if !m.messengerModuleEnabled() {
+		writeJSONStatus(conn, "404 Not Found", map[string]any{
+			"ok": false, "message": "Shizzi Messenger est désactivé sur ce routeur.",
+		})
+		return true
+	}
 
 	me, ok := m.messengerIdentity(clientIP)
 	if !ok {
