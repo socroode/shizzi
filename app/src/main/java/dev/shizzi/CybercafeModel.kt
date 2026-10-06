@@ -386,15 +386,10 @@ object CybercafeRules {
             return RuleOutcome(state, false, "Identifiant appareil manquant.")
         }
 
-        val activeOnAnotherDevice = state.devices.values.any {
-            it.accountNumber == number && it.deviceKey != normalizedKey
-        }
-        if (activeOnAnotherDevice) {
-            return RuleOutcome(
-                state,
-                false,
-                "Ce compte est déjà utilisé sur un autre appareil.",
-            )
+        // Session binding only: the account itself is portable. A login on a
+        // new client replaces any previous live device entry for this account.
+        val remainingDevices = state.devices.filterValues {
+            it.accountNumber != number
         }
 
         val binding = DeviceBinding(
@@ -406,9 +401,9 @@ object CybercafeRules {
         )
 
         return RuleOutcome(
-            state = state.copy(devices = state.devices + (normalizedKey to binding)),
+            state = state.copy(devices = remainingDevices + (normalizedKey to binding)),
             success = true,
-            message = "Appareil associé.",
+            message = "Session appareil mise à jour.",
         )
     }
 
