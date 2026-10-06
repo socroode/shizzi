@@ -105,14 +105,20 @@ data class RemoteAdminConfig(
     val uploadBps: Long = 1_000_000L,
 )
 
+data class FeatureModules(
+    val messengerEnabled: Boolean = true,
+    val mediaEnabled: Boolean = true,
+)
+
 data class CybercafeState(
-    val schemaVersion: Int = 4,
+    val schemaVersion: Int = 5,
     val offers: Map<String, Offer> = defaultOffers(),
     val accounts: Map<String, PrepaidAccount> = emptyMap(),
     val vouchers: Map<String, Voucher> = emptyMap(),
     val devices: Map<String, DeviceBinding> = emptyMap(),
     val portal: PortalCustomization = PortalCustomization(),
     val remoteAdmin: RemoteAdminConfig = RemoteAdminConfig(),
+    val modules: FeatureModules = FeatureModules(),
 )
 
 data class RuleOutcome(
