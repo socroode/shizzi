@@ -342,20 +342,19 @@ func (r *flowAttributionResolver) resolve(key flowAttributionKey, waitForRule bo
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// With exactly one client on Android's own connected-client list, the flow
-	// can only be that client's. The list of IPs seen in NAT rules is never
-	// used for this: a phone that just joined has no rule yet and would be
-	// billed to the only phone that has one.
+	// With exactly one client on Android's fresh connected-client list, this
+	// flow can only belong to that client. Trust that authoritative presence
+	// even if dumpsys still contains stale NAT rules from a phone that has
+	// disconnected/reconnected; those stale rules must not force the user to
+	// forget and re-add the Wi-Fi network.
 	if r.lastError == "" && len(r.connectedClients) == 1 &&
 		time.Since(r.lastSuccess) < presenceMaxAge {
 		for clientIP := range r.connectedClients {
-			if r.onlyClientInRulesLocked(clientIP) {
-				r.resolvedFlows++
-				r.fallbackResolvedFlows++
-				r.lastMiss = ""
-				r.noteLatencyLocked(startedAt)
-				return clientIP
-			}
+			r.resolvedFlows++
+			r.fallbackResolvedFlows++
+			r.lastMiss = ""
+			r.noteLatencyLocked(startedAt)
+			return clientIP
 		}
 	}
 
