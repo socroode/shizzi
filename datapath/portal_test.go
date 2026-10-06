@@ -215,6 +215,34 @@ func TestSameAccountCanOpenMultipleActiveClientSessions(t *testing.T) {
 }
 
 
+func TestPortableAccountAcrossSixClientsSharesOneUsagePool(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portalConfigForTest(t))
+
+	clients := []string{
+		"192.168.7.61",
+		"192.168.7.62",
+		"192.168.7.63",
+		"192.168.7.64",
+		"192.168.7.65",
+		"192.168.7.66",
+	}
+	for _, ip := range clients {
+		ok, message := manager.submitPortalAccountLogin(ip, "1001", "1234")
+		if !ok {
+			t.Fatalf("login %s failed: %s", ip, message)
+		}
+		manager.account(ip, directionDownload, 100)
+	}
+	if len(manager.portalAuthorized) != len(clients) {
+		t.Fatalf("authorizations=%d, want %d", len(manager.portalAuthorized), len(clients))
+	}
+	usage := manager.accountUsage["1001"]
+	if usage == nil || usage.DownBytes != 600 {
+		t.Fatalf("shared account usage=%+v, want 600 download bytes", usage)
+	}
+}
+
 func TestPortalCustomizationPreservesFunctionalContent(t *testing.T) {
 	custom := `<!doctype html><html><head><title>{{TITLE}}</title></head><body><h1>{{MESSAGE}}</h1>{{CONTENT}}</body></html>`
 	rendered := applyPortalCustomization(
