@@ -26,6 +26,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import java.net.HttpURLConnection
 import java.net.URL
+import org.json.JSONObject
 import kotlin.concurrent.thread
 
 class MainActivity : Activity() {
@@ -35,6 +36,9 @@ class MainActivity : Activity() {
     private lateinit var progress: ProgressBar
     private lateinit var status: TextView
     private lateinit var menu: View
+    private lateinit var featureSummary: TextView
+    private val messengerViews = mutableListOf<View>()
+    private val mediaViews = mutableListOf<View>()
     private lateinit var connectivityManager: ConnectivityManager
     private var boundWifiNetwork: Network? = null
     private var mediaBaseUrl: String? = null
@@ -49,6 +53,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         connectivityManager = getSystemService(ConnectivityManager::class.java)
         buildUi()
+        detectModules()
         detectMedia()
     }
 
@@ -71,13 +76,14 @@ class MainActivity : Activity() {
                 setPadding(0, 0, 0, dp(6))
             })
 
-            addView(TextView(this@MainActivity).apply {
+            featureSummary = TextView(this@MainActivity).apply {
                 text = "Compte · Conso · Recharge · Messenger · Media"
                 textSize = 15f
                 setTextColor(Color.rgb(148, 163, 184))
                 gravity = Gravity.CENTER
                 setPadding(0, 0, 0, dp(26))
-            })
+            }
+            addView(featureSummary)
 
             addView(sectionLabel("MON ACCÈS"))
             addView(primaryButton("Ouvrir ma connexion compte") {
@@ -90,22 +96,22 @@ class MainActivity : Activity() {
                 openPortal(PORTAL_URL)
             })
 
-            addView(sectionLabel("COMMUNICATION"))
+            addView(sectionLabel("COMMUNICATION").also { messengerViews += it })
             addView(primaryButton("Messages · Groupes · Appels") {
                 openPortal(MESSENGER_URL, "Shizzi Messenger")
-            })
+            }.also { messengerViews += it })
             addView(TextView(this@MainActivity).apply {
                 text = "Communication locale entre comptes Shizzi : messages, groupes et appels sans quota Internet."
                 textSize = 13f
                 setTextColor(Color.rgb(148, 163, 184))
                 gravity = Gravity.CENTER
                 setPadding(0, dp(8), 0, dp(8))
-            })
+            }.also { messengerViews += it })
 
-            addView(sectionLabel("SHIZZI MEDIA"))
+            addView(sectionLabel("SHIZZI MEDIA").also { mediaViews += it })
             addView(primaryButton("Films · Séries · Musique") {
                 openMedia()
-            })
+            }.also { mediaViews += it })
 
             addView(TextView(this@MainActivity).apply {
                 text = "Shizzi Media passe par le portail sécurisé et nécessite un compte Shizzi connecté."
@@ -113,11 +119,11 @@ class MainActivity : Activity() {
                 setTextColor(Color.rgb(148, 163, 184))
                 gravity = Gravity.CENTER
                 setPadding(0, dp(14), 0, 0)
-            })
+            }.also { mediaViews += it })
 
             addView(primaryButton("Actualiser la détection Shizzi") {
                 detectMedia(showFeedback = true)
-            })
+            }.also { mediaViews += it })
         }
 
         progress = ProgressBar(this).apply {
@@ -302,6 +308,46 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun detectModules() {
+        thread(name = "shizzi-module-detection") {
+            val wifi = findWifiNetwork() ?: return@thread
+            val flags = runCatching {
+                val connection = wifi.openConnection(URL(PORTAL_STATUS_URL)) as HttpURLConnection
+                connection.connectTimeout = 1_200
+                connection.readTimeout = 1_200
+                connection.useCaches = false
+                try {
+                    if (connection.responseCode != 200) return@runCatching null
+                    val body = connection.inputStream.bufferedReader().use { it.readText() }
+                    val json = JSONObject(body)
+                    Pair(
+                        json.optBoolean("messengerEnabled", true),
+                        json.optBoolean("mediaEnabled", true),
+                    )
+                } finally {
+                    connection.disconnect()
+                }
+            }.getOrNull() ?: return@thread
+
+            runOnUiThread {
+                val (messengerEnabled, mediaEnabled) = flags
+                messengerViews.forEach {
+                    it.visibility = if (messengerEnabled) View.VISIBLE else View.GONE
+                }
+                mediaViews.forEach {
+                    it.visibility = if (mediaEnabled) View.VISIBLE else View.GONE
+                }
+                if (!mediaEnabled) mediaBaseUrl = null
+
+                featureSummary.text = buildString {
+                    append("Compte · Conso · Recharge")
+                    if (messengerEnabled) append(" · Messenger")
+                    if (mediaEnabled) append(" · Media")
+                }
+            }
+        }
+    }
+
     private fun mediaCandidates(network: Network): List<String> {
         @Suppress("UNUSED_PARAMETER")
         val ignored = network
@@ -477,6 +523,7 @@ class MainActivity : Activity() {
         if (::webView.isInitialized && webView.visibility == View.VISIBLE) {
             bindPortalToWifi()
         } else {
+            detectModules()
             detectMedia()
         }
     }
@@ -513,6 +560,7 @@ class MainActivity : Activity() {
 
     private companion object {
         const val PORTAL_URL = "http://192.0.2.1/"
+        const val PORTAL_STATUS_URL = "http://192.0.2.1/status.json"
         const val MESSENGER_URL = "http://192.0.2.1/messenger/"
         const val PORTAL_MEDIA_URL = "http://192.0.2.1/media/"
     }
