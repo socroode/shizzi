@@ -25,8 +25,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import dev.shizzi.App
 import dev.shizzi.CybercafeState
+import dev.shizzi.MediaPrefs
+import dev.shizzi.MediaServerService
 import dev.shizzi.Offer
 import dev.shizzi.PrepaidAccount
 import dev.shizzi.SessionService
@@ -44,6 +47,7 @@ private enum class AdminTab {
     ACCOUNTS,
     VOUCHERS,
     DEVICES,
+    MODULES,
     PORTAL,
     REMOTE_ADMIN,
 }
@@ -71,6 +75,7 @@ fun CybercafeAdminPage(onBack: () -> Unit) {
             TextButton(onClick = { tab = AdminTab.ACCOUNTS }) { Text("Accounts") }
             TextButton(onClick = { tab = AdminTab.VOUCHERS }) { Text("Vouchers") }
             TextButton(onClick = { tab = AdminTab.DEVICES }) { Text("Devices") }
+            TextButton(onClick = { tab = AdminTab.MODULES }) { Text("Modules") }
             TextButton(onClick = { tab = AdminTab.PORTAL }) { Text("Portal") }
             TextButton(onClick = { tab = AdminTab.REMOTE_ADMIN }) { Text("Admin") }
         }
@@ -103,6 +108,10 @@ fun CybercafeAdminPage(onBack: () -> Unit) {
                     state = state,
                     onMessage = { message = it },
                 )
+                AdminTab.MODULES -> ModuleEditor(
+                    state = state,
+                    onMessage = { message = it },
+                )
                 AdminTab.PORTAL -> PortalEditor(
                     state = state,
                     onMessage = { message = it },
@@ -114,6 +123,76 @@ fun CybercafeAdminPage(onBack: () -> Unit) {
             }
             Spacer(Modifier.height(ShizziTheme.spacing.xxxl))
         }
+    }
+}
+
+
+@Composable
+private fun ModuleEditor(
+    state: CybercafeState,
+    onMessage: (String) -> Unit,
+) {
+    val context = LocalContext.current
+    val store = App.instance.cybercafeStore
+
+    SectionTitle("Modules Shizzi")
+    Text(
+        "Internet reste toujours actif. Messenger et Media peuvent être arrêtés indépendamment.",
+        color = ShizziTheme.colors.onSurfaceMuted,
+    )
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Internet")
+            Text("Toujours actif", color = ShizziTheme.colors.onSurfaceMuted)
+        }
+        Switch(checked = true, onCheckedChange = null, enabled = false)
+    }
+
+    HorizontalDivider()
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Shizzi Messenger")
+            Text("Messages, groupes et appels locaux", color = ShizziTheme.colors.onSurfaceMuted)
+        }
+        Switch(
+            checked = state.modules.messengerEnabled,
+            onCheckedChange = { enabled ->
+                onMessage(store.setMessengerModuleEnabled(enabled).message)
+            },
+        )
+    }
+
+    HorizontalDivider()
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Shizzi Media")
+            Text("Films, séries et musique locales", color = ShizziTheme.colors.onSurfaceMuted)
+        }
+        Switch(
+            checked = state.modules.mediaEnabled,
+            onCheckedChange = { enabled ->
+                val result = store.setMediaModuleEnabled(enabled)
+                MediaPrefs.setEnabled(context, enabled)
+                if (enabled) {
+                    MediaServerService.start(context)
+                } else {
+                    MediaServerService.stop(context)
+                }
+                onMessage(result.message)
+            },
+        )
     }
 }
 
