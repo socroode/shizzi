@@ -104,6 +104,24 @@ fun processRemoteAdminCommand(
                 ),
             )
 
+            "module.messenger.set" -> outcome(
+                store.setMessengerModuleEnabled(params.optBoolean("enabled", true)),
+            )
+
+            "module.media.set" -> {
+                val enabled = params.optBoolean("enabled", true)
+                val result = store.setMediaModuleEnabled(enabled)
+                if (result.success) {
+                    MediaPrefs.setEnabled(App.instance, enabled)
+                    if (enabled) {
+                        MediaServerService.start(App.instance)
+                    } else {
+                        MediaServerService.stop(App.instance)
+                    }
+                }
+                outcome(result)
+            }
+
             "portal.set" -> outcome(
                 store.setPortalCustomization(
                     params.optString("title"),
