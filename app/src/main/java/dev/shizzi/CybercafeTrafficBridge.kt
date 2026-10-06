@@ -233,6 +233,10 @@ fun CybercafeState.toPortalConfigJson(
     clientApp: ClientAppDistributionInfo? = null,
 ): String =
     JSONObject().apply {
+        put("modules", JSONObject().apply {
+            put("messengerEnabled", modules.messengerEnabled)
+            put("mediaEnabled", modules.mediaEnabled)
+        })
         put("clientApp", JSONObject().apply {
             put("available", clientApp?.available == true)
             put("version", clientApp?.version.orEmpty())
@@ -251,6 +255,10 @@ fun CybercafeState.toPortalConfigJson(
         put("adminState", JSONObject().apply {
             put("schemaVersion", schemaVersion)
             put("routerName", portal.title)
+            put("modules", JSONObject().apply {
+                put("messengerEnabled", modules.messengerEnabled)
+                put("mediaEnabled", modules.mediaEnabled)
+            })
             put("remoteAdmin", JSONObject().apply {
                 put("username", remoteAdmin.username)
                 put("downloadBps", remoteAdmin.downloadBps.coerceAtLeast(1_000_000L))
