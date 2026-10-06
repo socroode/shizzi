@@ -157,6 +157,8 @@ type TrafficManager struct {
 	clients             map[string]*clientTraffic
 
 	portalRequired       bool
+	messengerEnabled     bool
+	mediaEnabled         bool
 	portalTitle          string
 	portalMessage        string
 	portalHTML           string
@@ -181,6 +183,8 @@ func newTrafficManager() *TrafficManager {
 		// client must never get free Internet in the gap between datapath
 		// start and the first configuration.
 		portalRequired:           true,
+		messengerEnabled:         true,
+		mediaEnabled:             true,
 		requireClientAttribution: true,
 		epoch:                    time.Now().UnixNano(),
 		flowAttribution:          newFlowAttributionResolver(),
@@ -197,6 +201,18 @@ func newTrafficManager() *TrafficManager {
 		adminChallenges:          make(map[string]adminChallenge),
 		adminResults:             make(map[string]AdminCommandResult),
 	}
+}
+
+func (m *TrafficManager) messengerModuleEnabled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.messengerEnabled
+}
+
+func (m *TrafficManager) mediaModuleEnabled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.mediaEnabled
 }
 
 func (m *TrafficManager) setRequireClientAttribution(required bool) {
