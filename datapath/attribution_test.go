@@ -107,3 +107,25 @@ Client Information:
 		t.Fatal("attribution exceeded bounded wait")
 	}
 }
+
+func TestSingleConnectedClientFallbackIgnoresStaleNatRulesAfterReconnect(t *testing.T) {
+	raw := `Tethering:
+  Forwarding rules:
+    IPv4 Upstream: proto [inDstMac] iif(iface) src -> nat -> dst [outDstMac] pmtu age
+      tcp [aa:aa:aa:aa:aa:99] 47(wlan0) 192.168.7.99:50000 -> 76(testtun28) 192.0.2.2:50000 -> 198.51.100.1:443 [00:00:00:00:00:00] 1500 3s
+    IPv4 Downstream:
+  Client Information:
+    {android.net.ip.IpServer@1={/192.168.7.66=downstream: 41}}`
+
+	resolver := newFlowAttributionResolver()
+	resolver.dumpFn = func() (string, error) { return raw, nil }
+
+	got := resolver.resolve(
+		flowAttributionKey{"tcp", "192.0.2.2", 61001, "203.0.113.10", 80},
+		true,
+	)
+	if got != "192.168.7.66" {
+		t.Fatalf("reconnected single client resolved to %q, want 192.168.7.66", got)
+	}
+}
+

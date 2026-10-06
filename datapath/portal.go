@@ -168,10 +168,10 @@ type PortalClaimResult struct {
 	Message string `json:"message"`
 }
 
-// PortalAuthorization is one logged-in session: one physical client (IP as
-// resolved from Android's pre-NAT state) using one account. An account may
-// have only one active device session at a time, but remains portable after
-// logout, admin disconnect, or departed-client cleanup.
+// PortalAuthorization is one logged-in network session: the current hotspot
+// client IP (resolved from Android's pre-NAT state) using one account. This is
+// temporary routing state, never a permanent account-to-device binding. A
+// fresh login for the same account replaces the previous active session.
 type PortalAuthorization struct {
 	AccountNumber   string
 	StartedAtMillis int64
@@ -419,7 +419,7 @@ func (m *TrafficManager) submitPortalAccountLogin(
 	ip, rawNumber, pin string,
 ) (bool, string) {
 	if ip == "" {
-		return false, "Appareil non identifié. Réessayez dans quelques secondes."
+		return false, "Connexion réseau non identifiée. Réessayez dans quelques secondes."
 	}
 	number := normalizeAccountNumber(rawNumber)
 	now := time.Now().UnixMilli()
@@ -434,12 +434,15 @@ func (m *TrafficManager) submitPortalAccountLogin(
 	if hashPortalPin(account.PinSalt, pin) != account.PinHash {
 		return false, "Compte ou code incorrect."
 	}
-	// One account = one active device. The account is not permanently bound
-	// to an IP/MAC: once the previous session is logged out, revoked by the
-	// admin, or pruned after departure, it can be opened on another device.
+	// The account belongs to the user, not to a physical device. Keep the
+	// historical Shizzi 1.6/1.7 behavior: one active session per account,
+	// but a valid login from another client replaces the previous session.
+	// This also lets a phone recover after DHCP/reconnect without requiring
+	// "forget network" just because the old client IP is still remembered.
 	for otherIP, authorization := range m.portalAuthorized {
-		if otherIP != ip && authorization.AccountNumber == number {
-			return false, "Ce compte est déjà utilisé sur un autre appareil."
+		if authorization.AccountNumber == number {
+			delete(m.portalAuthorized, otherIP)
+			delete(m.portalClaimResults, otherIP)
 		}
 	}
 	m.portalAuthorized[ip] = &PortalAuthorization{

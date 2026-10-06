@@ -177,7 +177,7 @@ func TestPortalRechargeClaimCarriesAccountAndClient(t *testing.T) {
 	}
 }
 
-func TestSameAccountIsRefusedOnSecondActiveClient(t *testing.T) {
+func TestSameAccountLoginOnSecondClientReplacesFirstSession(t *testing.T) {
 	manager := newTrafficManager()
 	manager.setPortalConfig(true, portalConfigForTest(t))
 
@@ -189,30 +189,61 @@ func TestSameAccountIsRefusedOnSecondActiveClient(t *testing.T) {
 	if !firstOK {
 		t.Fatalf("first login failed: %s", firstMessage)
 	}
+	if manager.portalRequiredFor("192.168.7.66") {
+		t.Fatal("first client was not authorized")
+	}
 
 	secondOK, secondMessage := manager.submitPortalAccountLogin(
 		"192.168.7.77",
 		"1001",
 		"1234",
 	)
-	if secondOK {
-		t.Fatal("second client unexpectedly opened the same account")
-	}
-	if secondMessage != "Ce compte est déjà utilisé sur un autre appareil." {
-		t.Fatalf("unexpected refusal message: %s", secondMessage)
+	if !secondOK {
+		t.Fatalf("second login failed: %s", secondMessage)
 	}
 
-	if manager.portalRequiredFor("192.168.7.66") {
-		t.Fatal("first authenticated client returned to the portal")
+	if !manager.portalRequiredFor("192.168.7.66") {
+		t.Fatal("previous client kept the account after takeover")
 	}
-	if !manager.portalRequiredFor("192.168.7.77") {
-		t.Fatal("second client was authorized")
+	if manager.portalRequiredFor("192.168.7.77") {
+		t.Fatal("new client did not take over the portable account")
 	}
 	if len(manager.portalAuthorized) != 1 {
 		t.Fatalf("authorizations=%d, want 1", len(manager.portalAuthorized))
 	}
+	if manager.portalAuthorized["192.168.7.77"].AccountNumber != "1001" {
+		t.Fatal("portable account was not moved to the second client")
+	}
 }
 
+func TestPortableAccountCanMoveAcrossSixClientsSequentially(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portalConfigForTest(t))
+
+	clients := []string{
+		"192.168.7.61",
+		"192.168.7.62",
+		"192.168.7.63",
+		"192.168.7.64",
+		"192.168.7.65",
+		"192.168.7.66",
+	}
+	for index, ip := range clients {
+		ok, message := manager.submitPortalAccountLogin(ip, "1001", "1234")
+		if !ok {
+			t.Fatalf("login %s failed: %s", ip, message)
+		}
+		if len(manager.portalAuthorized) != 1 {
+			t.Fatalf("after client %d authorizations=%d, want 1", index+1, len(manager.portalAuthorized))
+		}
+		if manager.portalRequiredFor(ip) {
+			t.Fatalf("current client %s was not authorized", ip)
+		}
+		if index > 0 && !manager.portalRequiredFor(clients[index-1]) {
+			t.Fatalf("previous client %s kept the account", clients[index-1])
+		}
+	}
+}
 
 func TestPortalCustomizationPreservesFunctionalContent(t *testing.T) {
 	custom := `<!doctype html><html><head><title>{{TITLE}}</title></head><body><h1>{{MESSAGE}}</h1>{{CONTENT}}</body></html>`

@@ -91,34 +91,30 @@ func TestThreeAccountsEachNeedTheirOwnPortalLogin(t *testing.T) {
 	}
 }
 
-// Test 2: one account may have only one active device at a time.
-func TestSameAccountOnSecondPhoneIsRefusedUntilLogout(t *testing.T) {
+// Test 2: the account is portable but only one device may use it at a time.
+// A valid login on a second phone replaces the first phone's live session.
+func TestSameAccountOnSecondPhoneReplacesFirstSession(t *testing.T) {
 	manager := newPortalManager(t)
 	pushConfig(t, manager, accountForTest("2000", "roniu", 20_000))
 
-	if ok, _ := manager.submitPortalAccountLogin(phoneB, "2000", "roniu"); !ok {
-		t.Fatal("first login failed")
-	}
-	if ok, message := manager.submitPortalAccountLogin(phoneC, "2000", "roniu"); ok {
-		t.Fatal("second phone unexpectedly opened the same account")
-	} else if message != "Ce compte est déjà utilisé sur un autre appareil." {
-		t.Fatalf("unexpected refusal message: %q", message)
+	if ok, message := manager.submitPortalAccountLogin(phoneB, "2000", "roniu"); !ok {
+		t.Fatalf("first login failed: %s", message)
 	}
 	if !manager.flowAllowed(phoneB) {
-		t.Fatal("first phone lost Internet after refused second login")
-	}
-	if manager.flowAllowed(phoneC) {
-		t.Fatal("second phone inherited Internet")
+		t.Fatal("first phone has no Internet after login")
 	}
 
-	if ok, _ := manager.submitPortalLogout(phoneB); !ok {
-		t.Fatal("logout failed")
+	if ok, message := manager.submitPortalAccountLogin(phoneC, "2000", "roniu"); !ok {
+		t.Fatalf("second login failed: %s", message)
 	}
-	if ok, _ := manager.submitPortalAccountLogin(phoneC, "2000", "roniu"); !ok {
-		t.Fatal("account was not portable after logout")
+	if manager.flowAllowed(phoneB) {
+		t.Fatal("first phone kept Internet after account takeover")
 	}
 	if !manager.flowAllowed(phoneC) {
-		t.Fatal("second phone has no Internet after taking over the released account")
+		t.Fatal("second phone did not receive the portable account")
+	}
+	if len(manager.portalAuthorized) != 1 {
+		t.Fatalf("authorizations=%d, want 1", len(manager.portalAuthorized))
 	}
 }
 
