@@ -91,37 +91,30 @@ func TestThreeAccountsEachNeedTheirOwnPortalLogin(t *testing.T) {
 	}
 }
 
-// Test 2: an account is portable and may have several simultaneous sessions.
-// The account is not owned by a device; IPs are only temporary routing keys.
-func TestSameAccountCanBeUsedByTwoPhonesAtOnce(t *testing.T) {
+// Test 2: the account is portable but only one device may use it at a time.
+// A valid login on a second phone replaces the first phone's live session.
+func TestSameAccountOnSecondPhoneReplacesFirstSession(t *testing.T) {
 	manager := newPortalManager(t)
 	pushConfig(t, manager, accountForTest("2000", "roniu", 20_000))
 
 	if ok, message := manager.submitPortalAccountLogin(phoneB, "2000", "roniu"); !ok {
 		t.Fatalf("first login failed: %s", message)
 	}
+	if !manager.flowAllowed(phoneB) {
+		t.Fatal("first phone has no Internet after login")
+	}
+
 	if ok, message := manager.submitPortalAccountLogin(phoneC, "2000", "roniu"); !ok {
 		t.Fatalf("second login failed: %s", message)
 	}
-	if !manager.flowAllowed(phoneB) || !manager.flowAllowed(phoneC) {
-		t.Fatal("one of the two portable sessions has no Internet")
-	}
-
-	manager.account(phoneB, directionDownload, 400)
-	manager.account(phoneC, directionDownload, 600)
-	usage := manager.accountUsage["2000"]
-	if usage == nil || usage.DownBytes != 1000 {
-		t.Fatalf("shared account usage=%+v, want 1000 download bytes", usage)
-	}
-
-	if ok, _ := manager.submitPortalLogout(phoneB); !ok {
-		t.Fatal("first phone logout failed")
-	}
 	if manager.flowAllowed(phoneB) {
-		t.Fatal("logged-out phone kept Internet")
+		t.Fatal("first phone kept Internet after account takeover")
 	}
 	if !manager.flowAllowed(phoneC) {
-		t.Fatal("second phone lost Internet when the first phone logged out")
+		t.Fatal("second phone did not receive the portable account")
+	}
+	if len(manager.portalAuthorized) != 1 {
+		t.Fatalf("authorizations=%d, want 1", len(manager.portalAuthorized))
 	}
 }
 
