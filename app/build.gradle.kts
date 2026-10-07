@@ -56,6 +56,10 @@ val embeddedShizziPlusDebugDir =
     layout.buildDirectory.dir("generated/shizziPlusAssets/debug")
 val embeddedShizziPlusReleaseDir =
     layout.buildDirectory.dir("generated/shizziPlusAssets/release")
+val embeddedShizziAdminDebugDir =
+    layout.buildDirectory.dir("generated/shizziAdminAssets/debug")
+val embeddedShizziAdminReleaseDir =
+    layout.buildDirectory.dir("generated/shizziAdminAssets/release")
 
 val prepareEmbeddedShizziPlusDebug by tasks.registering(Sync::class) {
     dependsOn(":conso:assembleDebug")
@@ -73,6 +77,22 @@ val prepareEmbeddedShizziPlusRelease by tasks.registering(Sync::class) {
     outputs.dir(embeddedShizziPlusReleaseDir)
 }
 
+val prepareEmbeddedShizziAdminDebug by tasks.registering(Sync::class) {
+    dependsOn(":admin:assembleDebug")
+    from(rootProject.layout.projectDirectory.file("admin/build/outputs/apk/debug/admin-debug.apk"))
+    into(embeddedShizziAdminDebugDir.map { it.dir("shizzi") })
+    rename { "Shizzi-Admin.apk" }
+    outputs.dir(embeddedShizziAdminDebugDir)
+}
+
+val prepareEmbeddedShizziAdminRelease by tasks.registering(Sync::class) {
+    dependsOn(":admin:assembleRelease")
+    from(rootProject.layout.projectDirectory.file("admin/build/outputs/apk/release/admin-release.apk"))
+    into(embeddedShizziAdminReleaseDir.map { it.dir("shizzi") })
+    rename { "Shizzi-Admin.apk" }
+    outputs.dir(embeddedShizziAdminReleaseDir)
+}
+
 android {
     namespace = "dev.shizzi"
     compileSdk = 35
@@ -82,8 +102,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 27
-        versionName = "0.4.4.1"
+        versionCode = 28
+        versionName = "0.4.4.1.1"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 
@@ -111,7 +131,9 @@ android {
 
     sourceSets {
         getByName("debug").assets.srcDir(embeddedShizziPlusDebugDir)
+        getByName("debug").assets.srcDir(embeddedShizziAdminDebugDir)
         getByName("release").assets.srcDir(embeddedShizziPlusReleaseDir)
+        getByName("release").assets.srcDir(embeddedShizziAdminReleaseDir)
     }
 
     buildTypes {
@@ -164,12 +186,18 @@ tasks.named("preBuild") { dependsOn(gomobileBind) }
 tasks.configureEach {
     when {
         name != "prepareEmbeddedShizziPlusDebug" &&
-            name.contains("Debug", ignoreCase = true) ->
+            name != "prepareEmbeddedShizziAdminDebug" &&
+            name.contains("Debug", ignoreCase = true) -> {
             dependsOn(prepareEmbeddedShizziPlusDebug)
+            dependsOn(prepareEmbeddedShizziAdminDebug)
+        }
 
         name != "prepareEmbeddedShizziPlusRelease" &&
-            name.contains("Release", ignoreCase = true) ->
+            name != "prepareEmbeddedShizziAdminRelease" &&
+            name.contains("Release", ignoreCase = true) -> {
             dependsOn(prepareEmbeddedShizziPlusRelease)
+            dependsOn(prepareEmbeddedShizziAdminRelease)
+        }
     }
 }
 
