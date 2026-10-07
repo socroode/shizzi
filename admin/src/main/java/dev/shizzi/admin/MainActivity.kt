@@ -234,10 +234,23 @@ class MainActivity : Activity() {
                     return@thread
                 }
                 lastState = response
-                val snapshot = response.toString()
+                val state = response.optJSONObject("state") ?: JSONObject()
+                val traffic = response.optJSONObject("traffic") ?: JSONObject()
+                val snapshot = AdminRefreshPolicy.dashboardSignature(
+                    routerName = response.optString("routerName", routerName),
+                    stateJson = state.toString(),
+                    portalAuthorizationsJson =
+                        (traffic.optJSONArray("portalAuthorizations") ?: JSONArray()).toString(),
+                    mediaDiagnosticsJson =
+                        (traffic.optJSONArray("mediaDiagnostics") ?: JSONArray()).toString(),
+                )
                 runOnUiThread {
-                    val shouldRender = snapshot != lastRenderedStateJson &&
-                        (manual || hasWindowFocus())
+                    val shouldRender = AdminRefreshPolicy.shouldRenderDashboard(
+                        manual = manual,
+                        hasWindowFocus = hasWindowFocus(),
+                        currentSignature = snapshot,
+                        lastRenderedSignature = lastRenderedStateJson,
+                    )
                     if (shouldRender) {
                         val oldScrollY = scroll.scrollY
                         showDashboard(response)
