@@ -13,8 +13,8 @@ android {
         applicationId = "dev.shizzi.admin"
         minSdk = 30
         targetSdk = 35
-        versionCode = 11
-        versionName = "0.2.9-test"
+        versionCode = 12
+        versionName = "0.2.10-test"
     }
 
     val keystoreProperties = Properties().apply {
