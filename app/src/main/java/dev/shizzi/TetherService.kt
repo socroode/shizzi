@@ -18,6 +18,7 @@ class TetherService : ITetherService.Stub {
     private val clientAppDistribution: ClientAppDistributionServer by lazy {
         ClientAppDistributionServer(
             readClientAppAssetFromInstalledShizzi(context),
+            readAdminAppAssetFromInstalledShizzi(context),
         )
     }
 
@@ -140,15 +141,15 @@ class TetherService : ITetherService.Stub {
                 if (started) {
                     Log.i(
                         TAG,
-                        "Shizzi+ distribution hosted in shell process on 127.0.0.1:" +
+                        "Shizzi+ / Shizzi Admin distribution hosted in shell process on 127.0.0.1:" +
                             ClientAppDistributionServer.PORT,
                     )
                 } else {
-                    Log.w(TAG, "Shizzi+ shell distribution asset unavailable")
+                    Log.w(TAG, "embedded app shell distribution asset unavailable")
                 }
             }
             .onFailure { failure ->
-                Log.e(TAG, "Shizzi+ shell distribution failed", failure)
+                Log.e(TAG, "embedded app shell distribution failed", failure)
             }
     }
 

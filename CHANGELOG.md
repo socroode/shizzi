@@ -5,6 +5,22 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.4.1.1] - 2026-10-06
+
+### Fixed
+
+- User accounts are portable and are never permanently bound to one phone, IP address or MAC address.
+- A valid login on another phone takes over the single active account session instead of leaving the account locked to the previous device.
+- A phone that stays on the Shizzi Wi-Fi keeps its authenticated session through sleep, Wi-Fi reassociation and DHCP IPv4 changes when Android exposes the same device MAC.
+- Temporary disappearance from Android's tethering client list no longer logs a sleeping phone out.
+- DHCP address reuse by a different MAC does not inherit the previous user's session.
+
+### Changed
+
+- Shizzi Hotspot is version 0.4.4.1.1 (versionCode 28).
+- The Hotspot APK embeds both the compatible Shizzi+ APK and the compatible Shizzi Admin APK as signed release assets.
+- The captive portal at `http://192.0.2.1/` exposes Shizzi Admin directly at `http://192.0.2.1/shizzi-admin.apk`, alongside the existing Shizzi+ local download.
+
 ## [0.4.3.9] - 2026-09-30
 
 ### Security

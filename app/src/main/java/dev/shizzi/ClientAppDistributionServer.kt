@@ -28,7 +28,10 @@ data class ClientAppDistributionInfo(
  * Shizzi package through a package Context, then streams it on 127.0.0.1.
  * This avoids depending on the ordinary Android app process staying reachable.
  */
-class ClientAppDistributionServer(private val apkBytes: ByteArray) {
+class ClientAppDistributionServer(
+    private val apkBytes: ByteArray,
+    private val adminApkBytes: ByteArray,
+) {
     private val running = AtomicBoolean(false)
     private val acceptExecutor = Executors.newSingleThreadExecutor()
     private val clientExecutor = Executors.newFixedThreadPool(2)
@@ -38,9 +41,20 @@ class ClientAppDistributionServer(private val apkBytes: ByteArray) {
         inspectClientAppBytes(apkBytes)
     }
 
+    val adminInfo: ClientAppDistributionInfo by lazy {
+        inspectEmbeddedAppBytes(
+            adminApkBytes,
+            ADMIN_VERSION,
+            ADMIN_FILE_NAME,
+        )
+    }
+
     fun start(): Boolean {
-        if (!info.available) {
-            SessionLog.warn("Shizzi+ distribution asset unavailable")
+        if (!info.available || !adminInfo.available) {
+            SessionLog.warn(
+                "Embedded app distribution asset unavailable: " +
+                    "plus=${info.available}, admin=${adminInfo.available}",
+            )
             return false
         }
         if (!running.compareAndSet(false, true)) return true
@@ -72,8 +86,9 @@ class ClientAppDistributionServer(private val apkBytes: ByteArray) {
             }
         }
         SessionLog.info(
-            "Shizzi+ distribution ready: ${info.fileName} " +
-                "(${info.sizeBytes} bytes, sha256=${info.sha256})",
+            "Embedded app distribution ready: " +
+                "${info.fileName} (${info.sizeBytes} bytes), " +
+                "${adminInfo.fileName} (${adminInfo.sizeBytes} bytes)",
         )
         return true
     }
@@ -108,14 +123,19 @@ class ClientAppDistributionServer(private val apkBytes: ByteArray) {
                 }
             }
 
-            if ((method != "GET" && method != "HEAD") || path != "/shizzi-plus.apk") {
+            val payload = when (path.lowercase()) {
+                "/shizzi-plus.apk" -> apkBytes to info
+                "/shizzi-admin.apk" -> adminApkBytes to adminInfo
+                else -> null
+            }
+            if ((method != "GET" && method != "HEAD") || payload == null) {
                 writeText(output, "404 Not Found", "Introuvable")
                 return
             }
 
-            val metadata = info
+            val (selectedBytes, metadata) = payload
             if (!metadata.available) {
-                writeText(output, "503 Service Unavailable", "Shizzi+ indisponible")
+                writeText(output, "503 Service Unavailable", "Application Shizzi indisponible")
                 return
             }
 
@@ -167,9 +187,9 @@ class ClientAppDistributionServer(private val apkBytes: ByteArray) {
 
             if (method == "GET") {
                 val first = requestedRange?.first ?: 0L
-                val length = requestedRange?.byteLength() ?: apkBytes.size.toLong()
+                val length = requestedRange?.byteLength() ?: selectedBytes.size.toLong()
                 output.write(
-                    apkBytes,
+                    selectedBytes,
                     first.toInt(),
                     length.toInt(),
                 )
@@ -216,6 +236,9 @@ class ClientAppDistributionServer(private val apkBytes: ByteArray) {
         const val CLIENT_VERSION = "0.2.10-test"
         const val CLIENT_FILE_NAME = "Shizzi-Plus-0.2.10-test.apk"
         const val ASSET_PATH = "shizzi/Shizzi-Plus.apk"
+        const val ADMIN_VERSION = "0.2.9-test"
+        const val ADMIN_FILE_NAME = "Shizzi-Admin-0.2.9-test.apk"
+        const val ADMIN_ASSET_PATH = "shizzi/Shizzi-Admin.apk"
     }
 }
 
@@ -223,28 +246,57 @@ class ClientAppDistributionServer(private val apkBytes: ByteArray) {
 internal fun readClientAppAsset(context: Context): ByteArray =
     context.assets.open(ClientAppDistributionServer.ASSET_PATH).use { it.readBytes() }
 
-internal fun readClientAppAssetFromInstalledShizzi(context: Context): ByteArray {
+internal fun readEmbeddedAppAssetFromInstalledShizzi(
+    context: Context,
+    assetPath: String,
+    displayName: String,
+): ByteArray {
     val applicationInfo = context.packageManager.getApplicationInfo(
         BuildConfig.APPLICATION_ID,
         0,
     )
     ZipFile(applicationInfo.sourceDir).use { zip ->
-        val entryName = "assets/" + ClientAppDistributionServer.ASSET_PATH
+        val entryName = "assets/" + assetPath
         val entry = zip.getEntry(entryName)
-            ?: error("Embedded Shizzi+ missing from installed Shizzi APK: $entryName")
+            ?: error("Embedded $displayName missing from installed Shizzi APK: $entryName")
         return zip.getInputStream(entry).use { it.readBytes() }
     }
 }
 
+internal fun readClientAppAssetFromInstalledShizzi(context: Context): ByteArray =
+    readEmbeddedAppAssetFromInstalledShizzi(
+        context,
+        ClientAppDistributionServer.ASSET_PATH,
+        "Shizzi+",
+    )
+
+internal fun readAdminAppAssetFromInstalledShizzi(context: Context): ByteArray =
+    readEmbeddedAppAssetFromInstalledShizzi(
+        context,
+        ClientAppDistributionServer.ADMIN_ASSET_PATH,
+        "Shizzi Admin",
+    )
+
 internal fun inspectClientAppAsset(context: Context): ClientAppDistributionInfo =
     inspectClientAppBytes(readClientAppAsset(context))
 
-internal fun inspectClientAppBytes(bytes: ByteArray): ClientAppDistributionInfo {
+internal fun inspectClientAppBytes(bytes: ByteArray): ClientAppDistributionInfo =
+    inspectEmbeddedAppBytes(
+        bytes,
+        ClientAppDistributionServer.CLIENT_VERSION,
+        ClientAppDistributionServer.CLIENT_FILE_NAME,
+    )
+
+internal fun inspectEmbeddedAppBytes(
+    bytes: ByteArray,
+    version: String,
+    fileName: String,
+): ClientAppDistributionInfo {
     val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
     return ClientAppDistributionInfo(
         available = bytes.isNotEmpty(),
-        version = ClientAppDistributionServer.CLIENT_VERSION,
-        fileName = ClientAppDistributionServer.CLIENT_FILE_NAME,
+        version = version,
+        fileName = fileName,
         sizeBytes = bytes.size.toLong(),
         sha256 = digest.joinToString("") { "%02x".format(it) },
     )
