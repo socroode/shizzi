@@ -1484,7 +1484,11 @@ func (m *TrafficManager) serveClientAppDownload(conn net.Conn, request *http.Req
 	app := m.portalClientApp
 	m.mu.Unlock()
 
-	adminDownload := isAdminAppDownloadPath(request.URL.Path)
+	requestPath := "/shizzi-plus.apk"
+	if request.URL != nil && strings.TrimSpace(request.URL.Path) != "" {
+		requestPath = request.URL.Path
+	}
+	adminDownload := isAdminAppDownloadPath(requestPath)
 	backendPath := "/shizzi-plus.apk"
 	appLabel := "Shizzi+"
 	if adminDownload {
