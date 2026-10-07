@@ -439,12 +439,14 @@ func (m *TrafficManager) submitPortalAccountLogin(
 	if hashPortalPin(account.PinSalt, pin) != account.PinHash {
 		return false, "Compte ou code incorrect."
 	}
-	// One account = one active device. The account is not permanently bound
-	// to an IP/MAC: once the previous session is logged out, revoked by the
-	// admin, or pruned after departure, it can be opened on another device.
+	// One account = one active device, but never a permanent device binding.
+	// A valid login on a new phone takes over the account immediately by
+	// replacing the previous live authorization. The MAC is used only to keep
+	// the SAME physical phone authenticated across sleep/reassociation/DHCP,
+	// never to lock the account to that phone.
 	for otherIP, authorization := range m.portalAuthorized {
 		if otherIP != ip && authorization.AccountNumber == number {
-			return false, "Ce compte est déjà utilisé sur un autre appareil."
+			m.clearPortalSessionStateLocked(otherIP)
 		}
 	}
 	m.portalAuthorized[ip] = &PortalAuthorization{
