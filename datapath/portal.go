@@ -863,13 +863,26 @@ func (m *TrafficManager) serveAdminFileProxy(conn net.Conn, request *http.Reques
 	}
 }
 
-func isClientAppDownloadPath(rawPath string) bool {
+func normalizeEmbeddedAppDownloadPath(rawPath string) string {
 	path := strings.TrimSpace(strings.ToLower(rawPath))
 	for len(path) > 1 && strings.HasSuffix(path, "/") {
 		path = strings.TrimSuffix(path, "/")
 	}
-	switch path {
+	return path
+}
+
+func isClientAppDownloadPath(rawPath string) bool {
+	switch normalizeEmbeddedAppDownloadPath(rawPath) {
 	case "/shizzi-plus.apk", "/download/shizzi-plus.apk":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAdminAppDownloadPath(rawPath string) bool {
+	switch normalizeEmbeddedAppDownloadPath(rawPath) {
+	case "/shizzi-admin.apk", "/download/shizzi-admin.apk":
 		return true
 	default:
 		return false
@@ -966,7 +979,7 @@ func (m *TrafficManager) servePortalWithResolver(
 	case isChatRequest:
 		m.serveChatProxy(conn, request, localAccount)
 	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
-		isClientAppDownloadPath(path):
+		(isClientAppDownloadPath(path) || isAdminAppDownloadPath(path)):
 		m.serveClientAppDownload(conn, request)
 	case request.Method == http.MethodPost && path == "/login":
 		_ = request.ParseForm()
@@ -1471,8 +1484,16 @@ func (m *TrafficManager) serveClientAppDownload(conn net.Conn, request *http.Req
 	app := m.portalClientApp
 	m.mu.Unlock()
 
+	adminDownload := isAdminAppDownloadPath(request.URL.Path)
+	backendPath := "/shizzi-plus.apk"
+	appLabel := "Shizzi+"
+	if adminDownload {
+		backendPath = "/shizzi-admin.apk"
+		appLabel = "Shizzi Admin"
+	}
+
 	if !app.Available {
-		body := []byte("Shizzi+ indisponible")
+		body := []byte(appLabel + " indisponible")
 		header := fmt.Sprintf(
 			"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
 			len(body),
@@ -1503,8 +1524,9 @@ func (m *TrafficManager) serveClientAppDownload(conn net.Conn, request *http.Req
 
 	if _, err := fmt.Fprintf(
 		local,
-		"%s /shizzi-plus.apk HTTP/1.1\r\nHost: localhost\r\n",
+		"%s %s HTTP/1.1\r\nHost: localhost\r\n",
 		request.Method,
+		backendPath,
 	); err != nil {
 		return
 	}
@@ -1760,7 +1782,14 @@ func (m *TrafficManager) writePortalHTML(
 <div id="shizzi-download-status" class="app-note" aria-live="polite"></div>
 <div class="app-meta">%s · SHA-256 %s…</div>
 <div class="app-note">Lien direct : http://192.0.2.1/shizzi-plus.apk</div>
-<div class="app-note">Android peut demander d'autoriser l'installation depuis cette source.</div></section>`,
+<div class="app-note">Android peut demander d'autoriser l'installation depuis cette source.</div></section>
+<section class="app-download"><div class="eyebrow">APPLICATION ADMIN</div>
+<strong>Shizzi Admin</strong>
+<p>Installez l'application d'administration compatible directement depuis ce Wi-Fi Shizzi.</p>
+<a class="download-button" href="http://192.0.2.1/shizzi-admin.apk" download="Shizzi-Admin.apk">Télécharger Shizzi Admin</a>
+<div id="shizzi-admin-download-status" class="app-note" aria-live="polite"></div>
+<div class="app-note">Lien direct : http://192.0.2.1/shizzi-admin.apk</div>
+<div class="app-note">Téléchargement local · aucun Internet ni quota Data utilisé.</div></section>`,
 			html.EscapeString(clientApp.Version),
 			html.EscapeString(clientApp.FileName),
 			html.EscapeString(formatPortalFileSize(clientApp.SizeBytes)),
@@ -1850,7 +1879,8 @@ func applyPortalCustomization(
 }
 
 func injectClientAppDownload(page string) string {
-	if !strings.Contains(page, "shizzi-plus.apk") {
+	if !strings.Contains(page, "shizzi-plus.apk") &&
+		!strings.Contains(page, "shizzi-admin.apk") {
 		return page
 	}
 
@@ -1860,20 +1890,19 @@ func injectClientAppDownload(page string) string {
 	// navigation intact so the browser starts streaming from Shizzi immediately.
 	script := `<script>
 (function(){
-  var link=document.querySelector('a.download-button[href*="shizzi-plus.apk"]');
-  if(!link || link.dataset.shizziNativeDownload==="1") return;
-  link.dataset.shizziNativeDownload="1";
-
-  var status=document.getElementById("shizzi-download-status");
-  function setStatus(message){ if(status) status.textContent=message; }
-
-  link.addEventListener("click",function(){
-    link.textContent="Téléchargement lancé…";
-    setStatus("Téléchargement direct depuis le routeur Shizzi…");
-    setTimeout(function(){
-      link.textContent="Télécharger Shizzi+";
-    },1500);
-  });
+  function wire(selector,statusId,defaultLabel){
+    var link=document.querySelector(selector);
+    if(!link || link.dataset.shizziNativeDownload==="1") return;
+    link.dataset.shizziNativeDownload="1";
+    var status=document.getElementById(statusId);
+    link.addEventListener("click",function(){
+      link.textContent="Téléchargement lancé…";
+      if(status) status.textContent="Téléchargement direct depuis le routeur Shizzi…";
+      setTimeout(function(){ link.textContent=defaultLabel; },1500);
+    });
+  }
+  wire('a.download-button[href*="shizzi-plus.apk"]',"shizzi-download-status","Télécharger Shizzi+");
+  wire('a.download-button[href*="shizzi-admin.apk"]',"shizzi-admin-download-status","Télécharger Shizzi Admin");
 })();
 </script>`
 
