@@ -40,6 +40,7 @@ class AdminRefreshPolicyTest {
             AdminRefreshPolicy.shouldRenderDashboard(
                 manual = false,
                 hasWindowFocus = true,
+                userEditing = false,
                 currentSignature = signature,
                 lastRenderedSignature = signature,
             ),
@@ -65,6 +66,7 @@ class AdminRefreshPolicyTest {
             AdminRefreshPolicy.shouldRenderDashboard(
                 manual = false,
                 hasWindowFocus = true,
+                userEditing = false,
                 currentSignature = withAccount,
                 lastRenderedSignature = empty,
             ),
@@ -77,6 +79,7 @@ class AdminRefreshPolicyTest {
             AdminRefreshPolicy.shouldRenderDashboard(
                 manual = true,
                 hasWindowFocus = true,
+                userEditing = false,
                 currentSignature = "same",
                 lastRenderedSignature = "same",
             ),
@@ -99,6 +102,33 @@ class AdminRefreshPolicyTest {
         )
 
         assertEquals(before, after)
+    }
+
+
+    @Test
+    fun automaticRefreshNeverRedrawsWhileUserIsEditingAField() {
+        assertFalse(
+            AdminRefreshPolicy.shouldRenderDashboard(
+                manual = false,
+                hasWindowFocus = true,
+                userEditing = true,
+                currentSignature = "changed",
+                lastRenderedSignature = "old",
+            ),
+        )
+    }
+
+    @Test
+    fun manualRefreshCanStillRedrawWhileAFieldHasFocus() {
+        assertTrue(
+            AdminRefreshPolicy.shouldRenderDashboard(
+                manual = true,
+                hasWindowFocus = true,
+                userEditing = true,
+                currentSignature = "changed",
+                lastRenderedSignature = "old",
+            ),
+        )
     }
 
 }
