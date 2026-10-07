@@ -30,9 +30,14 @@ internal object AdminRefreshPolicy {
     fun shouldRenderDashboard(
         manual: Boolean,
         hasWindowFocus: Boolean,
+        userEditing: Boolean,
         currentSignature: String,
         lastRenderedSignature: String,
     ): Boolean =
         manual ||
-            (hasWindowFocus && currentSignature != lastRenderedSignature)
+            (
+                hasWindowFocus &&
+                    !userEditing &&
+                    currentSignature != lastRenderedSignature
+            )
 }
