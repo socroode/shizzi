@@ -3,6 +3,8 @@ name: Shizzi 0.4.4.1.1 portable account test
 on:
   push:
     branches: [test/0.4.4.1.1-portable-account]
+  pull_request:
+    branches: [test/0.4.4.1-sleep-session]
   workflow_dispatch:
 
 permissions:
