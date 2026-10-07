@@ -19,6 +19,7 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Shizzi Hotspot is version 0.4.4.1.1 (versionCode 28).
 - The Hotspot APK embeds both the compatible Shizzi+ APK and the compatible Shizzi Admin APK as signed release assets.
+- The captive portal at `http://192.0.2.1/` exposes Shizzi Admin directly at `http://192.0.2.1/shizzi-admin.apk`, alongside the existing Shizzi+ local download.
 
 ## [0.4.3.9] - 2026-09-30
 
