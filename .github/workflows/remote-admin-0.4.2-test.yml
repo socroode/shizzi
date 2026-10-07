@@ -2,7 +2,7 @@ name: Shizzi 0.4.2 remote admin test
 
 on:
   push:
-    branches: [feature/remote-admin-0.4.2, build/admin-silent-refresh]
+    branches: [feature/remote-admin-0.4.2]
   workflow_dispatch:
 
 permissions:
