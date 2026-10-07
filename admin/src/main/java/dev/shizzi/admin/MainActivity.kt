@@ -248,6 +248,7 @@ class MainActivity : Activity() {
                     val shouldRender = AdminRefreshPolicy.shouldRenderDashboard(
                         manual = manual,
                         hasWindowFocus = hasWindowFocus(),
+                        userEditing = currentFocus is EditText,
                         currentSignature = snapshot,
                         lastRenderedSignature = lastRenderedStateJson,
                     )
