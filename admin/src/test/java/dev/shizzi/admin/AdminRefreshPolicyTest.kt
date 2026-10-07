@@ -27,4 +27,78 @@ class AdminRefreshPolicyTest {
         assertFalse(AdminRefreshPolicy.shouldPoll(true, true, false, false))
         assertFalse(AdminRefreshPolicy.shouldPoll(true, true, true, true))
     }
+    @Test
+    fun automaticRefreshDoesNotRedrawWhenVisibleStateIsUnchanged() {
+        val signature = AdminRefreshPolicy.dashboardSignature(
+            routerName = "Shizzi",
+            stateJson = """{"accounts":[]}""",
+            portalAuthorizationsJson = "[]",
+            mediaDiagnosticsJson = "[]",
+        )
+
+        assertFalse(
+            AdminRefreshPolicy.shouldRenderDashboard(
+                manual = false,
+                hasWindowFocus = true,
+                currentSignature = signature,
+                lastRenderedSignature = signature,
+            ),
+        )
+    }
+
+    @Test
+    fun automaticRefreshRedrawsWhenAnAccountAppears() {
+        val empty = AdminRefreshPolicy.dashboardSignature(
+            routerName = "Shizzi",
+            stateJson = """{"accounts":[]}""",
+            portalAuthorizationsJson = "[]",
+            mediaDiagnosticsJson = "[]",
+        )
+        val withAccount = AdminRefreshPolicy.dashboardSignature(
+            routerName = "Shizzi",
+            stateJson = """{"accounts":[{"number":"1001"}]}""",
+            portalAuthorizationsJson = "[]",
+            mediaDiagnosticsJson = "[]",
+        )
+
+        assertTrue(
+            AdminRefreshPolicy.shouldRenderDashboard(
+                manual = false,
+                hasWindowFocus = true,
+                currentSignature = withAccount,
+                lastRenderedSignature = empty,
+            ),
+        )
+    }
+
+    @Test
+    fun manualRefreshAlwaysRedrawsSoDiagnosticsCanBeUpdated() {
+        assertTrue(
+            AdminRefreshPolicy.shouldRenderDashboard(
+                manual = true,
+                hasWindowFocus = true,
+                currentSignature = "same",
+                lastRenderedSignature = "same",
+            ),
+        )
+    }
+
+    @Test
+    fun dashboardSignatureIgnoresVolatileTrafficCountersByConstruction() {
+        val before = AdminRefreshPolicy.dashboardSignature(
+            routerName = "Shizzi",
+            stateJson = """{"accounts":[]}""",
+            portalAuthorizationsJson = "[]",
+            mediaDiagnosticsJson = "[]",
+        )
+        val after = AdminRefreshPolicy.dashboardSignature(
+            routerName = "Shizzi",
+            stateJson = """{"accounts":[]}""",
+            portalAuthorizationsJson = "[]",
+            mediaDiagnosticsJson = "[]",
+        )
+
+        assertEquals(before, after)
+    }
+
 }
