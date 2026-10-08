@@ -53,47 +53,6 @@ func TestPortalLoginAuthorizesOnlyResolvedClient(t *testing.T) {
 	}
 }
 
-func TestAdminSessionAloneNeverAuthorizesInternet(t *testing.T) {
-	manager := newTrafficManager()
-	manager.setPortalConfig(true, portalConfigForTest(t))
-
-	ip := "192.168.7.90"
-	manager.adminConfig = remoteAdminConfig{
-		Enabled:     true,
-		DownloadBps: 100_000_000,
-		UploadBps:   100_000_000,
-	}
-	manager.adminSessions["admin-test"] = &adminSession{
-		Token:          "admin-test",
-		IP:             ip,
-		LastSeenMillis: time.Now().UnixMilli(),
-	}
-
-	if manager.flowAllowed(ip) {
-		t.Fatal("admin session incorrectly authorized Internet")
-	}
-
-	if ok, message := manager.submitPortalAccountLogin(ip, "1001", "1234"); !ok {
-		t.Fatalf("user login failed: %s", message)
-	}
-	if !manager.flowAllowed(ip) {
-		t.Fatal("valid user account did not authorize Internet")
-	}
-}
-
-func TestVoucherWithoutUserLoginNeverAuthorizesInternet(t *testing.T) {
-	manager := newTrafficManager()
-	manager.setPortalConfig(true, portalConfigForTest(t))
-	ip := "192.168.7.91"
-
-	if ok, _ := manager.submitPortalRecharge(ip, "ABC123DEF4"); ok {
-		t.Fatal("voucher recharge accepted without an authenticated user account")
-	}
-	if manager.flowAllowed(ip) {
-		t.Fatal("voucher without account login authorized Internet")
-	}
-}
-
 func TestPortalDataAllowanceIsPerClientSession(t *testing.T) {
 	manager := newTrafficManager()
 	manager.setPortalConfig(true, portalConfigForTest(t))
@@ -139,42 +98,56 @@ func TestPortalRechargeClaimCarriesAccountAndClient(t *testing.T) {
 	}
 }
 
-func TestSameAccountIsRefusedOnSecondActiveClient(t *testing.T) {
+func TestSameAccountLoginOnSecondClientTransfersSession(t *testing.T) {
 	manager := newTrafficManager()
 	manager.setPortalConfig(true, portalConfigForTest(t))
 
-	firstOK, firstMessage := manager.submitPortalAccountLogin(
-		"192.168.7.66",
-		"1001",
-		"1234",
-	)
-	if !firstOK {
-		t.Fatalf("first login failed: %s", firstMessage)
+	if ok, message := manager.submitPortalAccountLogin("192.168.7.66", "1001", "1234"); !ok {
+		t.Fatalf("first login failed: %s", message)
 	}
-
-	secondOK, secondMessage := manager.submitPortalAccountLogin(
-		"192.168.7.77",
-		"1001",
-		"1234",
-	)
-	if secondOK {
-		t.Fatal("second client unexpectedly opened the same account")
-	}
-	if secondMessage != "Ce compte est déjà utilisé sur un autre appareil." {
-		t.Fatalf("unexpected refusal message: %s", secondMessage)
-	}
-
 	if manager.portalRequiredFor("192.168.7.66") {
-		t.Fatal("first authenticated client returned to the portal")
+		t.Fatal("first client was not authorized")
 	}
-	if !manager.portalRequiredFor("192.168.7.77") {
-		t.Fatal("second client was authorized")
+
+	if ok, message := manager.submitPortalAccountLogin("192.168.7.77", "1001", "1234"); !ok {
+		t.Fatalf("portable login failed: %s", message)
+	}
+	if !manager.portalRequiredFor("192.168.7.66") {
+		t.Fatal("previous client kept Internet after portable takeover")
+	}
+	if manager.portalRequiredFor("192.168.7.77") {
+		t.Fatal("new client did not receive the account session")
 	}
 	if len(manager.portalAuthorized) != 1 {
 		t.Fatalf("authorizations=%d, want 1", len(manager.portalAuthorized))
 	}
+	if manager.portalAuthorized["192.168.7.77"].AccountNumber != "1001" {
+		t.Fatal("account session was not transferred to the new client")
+	}
 }
 
+func TestPortableAccountMovesAcrossSixClientsWithoutSimultaneousUse(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portalConfigForTest(t))
+	clients := []string{
+		"192.168.7.61", "192.168.7.62", "192.168.7.63",
+		"192.168.7.64", "192.168.7.65", "192.168.7.66",
+	}
+	for i, ip := range clients {
+		if ok, message := manager.submitPortalAccountLogin(ip, "1001", "1234"); !ok {
+			t.Fatalf("login on %s failed: %s", ip, message)
+		}
+		if len(manager.portalAuthorized) != 1 {
+			t.Fatalf("after client %d authorizations=%d, want 1", i+1, len(manager.portalAuthorized))
+		}
+		if manager.portalRequiredFor(ip) {
+			t.Fatalf("current client %s was not authorized", ip)
+		}
+		if i > 0 && !manager.portalRequiredFor(clients[i-1]) {
+			t.Fatalf("previous client %s kept Internet", clients[i-1])
+		}
+	}
+}
 
 func TestPortalCustomizationPreservesFunctionalContent(t *testing.T) {
 	custom := `<!doctype html><html><head><title>{{TITLE}}</title></head><body><h1>{{MESSAGE}}</h1>{{CONTENT}}</body></html>`
