@@ -341,7 +341,7 @@ class CybercafeModelTest {
     }
 
     @Test
-    fun oneAccountCanHaveOnlyOneActiveDevice() {
+    fun oneAccountIsPortableButKeepsOnlyOneActiveDevice() {
         val state = CybercafeState(accounts = mapOf("1001" to account()))
         val first = CybercafeRules.bindDevice(
             state,
@@ -353,7 +353,7 @@ class CybercafeModelTest {
         )
         assertTrue(first.success)
 
-        val second = CybercafeRules.bindDevice(
+        val moved = CybercafeRules.bindDevice(
             first.state,
             "1001",
             "device-b",
@@ -361,23 +361,9 @@ class CybercafeModelTest {
             "11:22:33:44:55:66",
             2L,
         )
-        assertFalse(second.success)
-        assertEquals(
-            "Ce compte est déjà utilisé sur un autre appareil.",
-            second.message,
-        )
-        assertEquals(1, second.state.devices.size)
-
-        val released = CybercafeRules.unbindDevice(first.state, "device-a")
-        val moved = CybercafeRules.bindDevice(
-            released,
-            "1001",
-            "device-b",
-            "192.168.1.3",
-            "11:22:33:44:55:66",
-            3L,
-        )
         assertTrue(moved.success)
+        assertEquals(1, moved.state.devices.size)
+        assertFalse(moved.state.devices.containsKey("device-a"))
         assertEquals("1001", moved.state.devices.getValue("device-b").accountNumber)
     }
 
