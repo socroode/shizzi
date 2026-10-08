@@ -277,89 +277,12 @@ func (m *TrafficManager) resolveFlowClient(
 		required && waitForRule,
 	)
 	if resolved != "" {
-		m.rebindPortalAuthorizationForResolvedClient(resolved)
 		return resolved
 	}
 	if required {
 		return ""
 	}
 	return sourceIP
-}
-
-// rebindPortalAuthorizationForResolvedClient keeps an authenticated phone
-// authenticated when Android renews its DHCP address after sleep/reassociation.
-// It also refuses inheritance when the same IP is now owned by a different MAC.
-func (m *TrafficManager) rebindPortalAuthorizationForResolvedClient(ip string) {
-	if ip == "" || m.flowAttribution == nil {
-		return
-	}
-	mac := m.flowAttribution.clientMAC(ip)
-	if mac == "" {
-		return
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if current := m.portalAuthorized[ip]; current != nil {
-		if current.DeviceMAC == "" {
-			current.DeviceMAC = mac
-			return
-		}
-		if current.DeviceMAC != mac {
-			m.clearPortalSessionStateLocked(ip)
-		}
-		return
-	}
-
-	for oldIP, authorization := range m.portalAuthorized {
-		if authorization.DeviceMAC == "" || authorization.DeviceMAC != mac {
-			continue
-		}
-		if _, occupied := m.portalAuthorized[ip]; occupied {
-			return
-		}
-		m.movePortalSessionLocked(oldIP, ip, authorization)
-		return
-	}
-}
-
-func (m *TrafficManager) clearPortalSessionStateLocked(ip string) {
-	delete(m.portalAuthorized, ip)
-	delete(m.portalClaimResults, ip)
-	for i := 0; i < len(m.portalRechargeClaims); {
-		if m.portalRechargeClaims[i].IP == ip {
-			m.portalRechargeClaims = append(
-				m.portalRechargeClaims[:i],
-				m.portalRechargeClaims[i+1:]...,
-			)
-			continue
-		}
-		i++
-	}
-}
-
-func (m *TrafficManager) movePortalSessionLocked(
-	oldIP, newIP string,
-	authorization *PortalAuthorization,
-) {
-	if oldIP == "" || newIP == "" || oldIP == newIP || authorization == nil {
-		return
-	}
-	delete(m.portalAuthorized, oldIP)
-	m.portalAuthorized[newIP] = authorization
-
-	if result, ok := m.portalClaimResults[oldIP]; ok {
-		delete(m.portalClaimResults, oldIP)
-		result.IP = newIP
-		m.portalClaimResults[newIP] = result
-	}
-	for i := range m.portalRechargeClaims {
-		if m.portalRechargeClaims[i].IP == oldIP &&
-			m.portalRechargeClaims[i].AccountNumber == authorization.AccountNumber {
-			m.portalRechargeClaims[i].IP = newIP
-		}
-	}
 }
 
 func (m *TrafficManager) clientLocked(ip string) *clientTraffic {
@@ -612,9 +535,8 @@ type trafficStatsSnapshot struct {
 }
 
 func (m *TrafficManager) statsJSON() string {
-	// Keep Android's client/MAC view fresh even when no new flow triggers a
-	// dumpsys. Portal sessions are reconciled by device identity, not by an
-	// inactivity timeout: a sleeping phone must stay authenticated.
+	// Keep the client list fresh even when no new flow triggers a dumpsys, so
+	// sessions of phones that left the hotspot can be released.
 	m.flowAttribution.refreshIfOlderThan(clientPresenceRefresh)
 	presence := m.flowAttribution.presence()
 
@@ -648,12 +570,7 @@ func (m *TrafficManager) statsJSON() string {
 			snapshot.PortalAuthorizations,
 			PortalAuthorizationStatus{
 				IP:                   ip,
-				MAC: func() string {
-					if mac := presence.macs[ip]; mac != "" {
-						return mac
-					}
-					return authorization.DeviceMAC
-				}(),
+				MAC:                  presence.macs[ip],
 				AccountNumber:        authorization.AccountNumber,
 				StartedAtMillis:      authorization.StartedAtMillis,
 				SessionDataUsedBytes: authorization.UpBytes + authorization.DownBytes,
@@ -710,84 +627,33 @@ func (m *TrafficManager) statsJSON() string {
 	return string(encoded)
 }
 
-// pruneDepartedLocked reconciles authenticated sessions with Android's latest
-// client/MAC view. A temporary disappearance is NOT proof of disconnect: phones
-// may vanish from tethering dumps while asleep, so their portal session is
-// retained. A session is revoked only when Android shows that its IP now belongs
-// to a different MAC, or it is explicitly logged out/revoked elsewhere.
-//
-// If the same known MAC reappears on another DHCP address, move the existing
-// session to that address so wake/reassociation does not require another login.
+// pruneDepartedLocked releases the portal session of a client that Android no
+// longer lists as connected. Without it, a phone that leaves lets the next
+// phone handed the same DHCP address inherit its login. Only acts on an
+// authoritative client list, and only after a grace period so a transient
+// dumpsys hiccup does not log everyone out.
 func (m *TrafficManager) pruneDepartedLocked(presence clientPresence, now time.Time) {
-	if presence.authoritative {
-		type portalMove struct {
-			oldIP string
-			newIP string
-			auth  *PortalAuthorization
-		}
-		moves := make([]portalMove, 0)
-
-		for ip, authorization := range m.portalAuthorized {
-			observedMAC := presence.macs[ip]
-			if authorization.DeviceMAC == "" && observedMAC != "" {
-				authorization.DeviceMAC = observedMAC
-			}
-
-			// Positive proof of DHCP reuse: the same IP now belongs to another
-			// physical phone, so the old authorization must not be inherited.
-			if authorization.DeviceMAC != "" &&
-				observedMAC != "" &&
-				observedMAC != authorization.DeviceMAC {
-				m.clearPortalSessionStateLocked(ip)
-				continue
-			}
-
-			if _, present := presence.clients[ip]; present {
-				authorization.missingSince = time.Time{}
-				continue
-			}
-
-			// Absence alone can mean Wi-Fi power save/sleep. Keep the session.
-			authorization.missingSince = time.Time{}
-			if authorization.DeviceMAC == "" {
-				continue
-			}
-
-			newIP := ""
-			for candidateIP, candidateMAC := range presence.macs {
-				if candidateIP == ip || candidateMAC != authorization.DeviceMAC {
-					continue
-				}
-				if newIP != "" {
-					// Ambiguous MAC observation: fail closed and do not move.
-					newIP = ""
-					break
-				}
-				newIP = candidateIP
-			}
-			if newIP != "" {
-				moves = append(moves, portalMove{oldIP: ip, newIP: newIP, auth: authorization})
-			}
-		}
-
-		for _, move := range moves {
-			if m.portalAuthorized[move.oldIP] != move.auth {
-				continue
-			}
-			if _, occupied := m.portalAuthorized[move.newIP]; occupied {
-				continue
-			}
-			m.movePortalSessionLocked(move.oldIP, move.newIP, move.auth)
-		}
-	}
-
-	// Remote-admin sessions keep the older short departure timeout. This change
-	// is intentionally limited to customer portal authentication.
 	if !presence.authoritative {
+		for _, authorization := range m.portalAuthorized {
+			authorization.missingSince = time.Time{}
+		}
 		for _, session := range m.adminSessions {
 			session.missingSince = time.Time{}
 		}
 		return
+	}
+	for ip, authorization := range m.portalAuthorized {
+		if _, present := presence.clients[ip]; present {
+			authorization.missingSince = time.Time{}
+			continue
+		}
+		if authorization.missingSince.IsZero() {
+			authorization.missingSince = now
+			continue
+		}
+		if now.Sub(authorization.missingSince) >= departedClientGrace {
+			delete(m.portalAuthorized, ip)
+		}
 	}
 	for token, session := range m.adminSessions {
 		if _, present := presence.clients[session.IP]; present {
