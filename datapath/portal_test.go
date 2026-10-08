@@ -53,6 +53,47 @@ func TestPortalLoginAuthorizesOnlyResolvedClient(t *testing.T) {
 	}
 }
 
+func TestAdminSessionAloneNeverAuthorizesInternet(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portalConfigForTest(t))
+
+	ip := "192.168.7.90"
+	manager.adminConfig = remoteAdminConfig{
+		Enabled:     true,
+		DownloadBps: 100_000_000,
+		UploadBps:   100_000_000,
+	}
+	manager.adminSessions["admin-test"] = &adminSession{
+		Token:          "admin-test",
+		IP:             ip,
+		LastSeenMillis: time.Now().UnixMilli(),
+	}
+
+	if manager.flowAllowed(ip) {
+		t.Fatal("admin session incorrectly authorized Internet")
+	}
+
+	if ok, message := manager.submitPortalAccountLogin(ip, "1001", "1234"); !ok {
+		t.Fatalf("user login failed: %s", message)
+	}
+	if !manager.flowAllowed(ip) {
+		t.Fatal("valid user account did not authorize Internet")
+	}
+}
+
+func TestVoucherWithoutUserLoginNeverAuthorizesInternet(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portalConfigForTest(t))
+	ip := "192.168.7.91"
+
+	if ok, _ := manager.submitPortalRecharge(ip, "ABC123DEF4"); ok {
+		t.Fatal("voucher recharge accepted without an authenticated user account")
+	}
+	if manager.flowAllowed(ip) {
+		t.Fatal("voucher without account login authorized Internet")
+	}
+}
+
 func TestPortalDataAllowanceIsPerClientSession(t *testing.T) {
 	manager := newTrafficManager()
 	manager.setPortalConfig(true, portalConfigForTest(t))
