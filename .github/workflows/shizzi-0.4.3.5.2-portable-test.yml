@@ -1,0 +1,161 @@
+name: Shizzi 0.4.3.5.2 portable account test
+
+on:
+  push:
+    branches: [test/0.4.3.5.2-portable]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shizzi-04352-compat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compatibility-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: temurin
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.3'
+          cache-dependency-path: datapath/go.sum
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install NDK
+        run: sdkmanager --install "ndk;27.0.12077973"
+
+      - name: Install gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          gomobile init
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Restore permanent signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.SHIZZI_KEYSTORE_B64 || secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.SHIZZI_STORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SHIZZI_KEY_ALIAS || secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SHIZZI_KEY_PASSWORD || secrets.KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_B64"
+          test -n "$STORE_PASSWORD"
+          test -n "$KEY_ALIAS"
+          test -n "$KEY_PASSWORD"
+          echo "$KEYSTORE_B64" | base64 -d > shizzi-release.jks
+          cat > keystore.properties <<EOF
+          storeFile=shizzi-release.jks
+          storePassword=$STORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+
+      - name: Guard legacy identification behavior
+        run: |
+          grep -q 'versionName = "0.4.3.5.2"' app/build.gradle.kts
+          grep -q 'versionCode = 30' app/build.gradle.kts
+          grep -q 'A valid login from another client transfers the live session immediately.' datapath/portal.go
+          grep -q 'Portable account: credentials belong to the user, not to one device.' app/src/main/java/dev/shizzi/CybercafeModel.kt
+          grep -q '!m.adminAuthorizedLocked(ip)' datapath/traffic.go
+          grep -q 'adminConfig.DownloadBps' datapath/traffic.go
+          grep -q '/shizzi-admin.apk' datapath/portal.go
+          ! grep -q 'servePortalWithResolver' datapath/portal.go
+          ! grep -q 'portalEnabled()' datapath/portal.go
+          ! grep -q 'DeviceMAC' datapath/portal.go
+          ! grep -q 'rebindPortalAuthorizationForResolvedClient' datapath/traffic.go
+
+      - name: Virtual test - datapath and captive portal
+        working-directory: datapath
+        run: go test ./...
+
+      - name: Virtual test - Android router, Shizzi Plus and Admin
+        run: ./gradlew :app:testDebugUnitTest :conso:testDebugUnitTest :admin:testDebugUnitTest --no-daemon
+
+      - name: Build signed Shizzi 0.4.3.5.2
+        run: ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Verify version, signature and embedded applications
+        env:
+          EXPECTED_CERT_SHA256: "FA:DF:C5:E8:7F:A6:03:51:F7:DC:B7:5D:34:F1:AB:91:11:08:24:33:3C:D1:09:7A:38:B3:C7:03:F7:AF:3D:B7"
+        run: |
+          BUILD_TOOLS=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | grep -v -- "-rc" | sort -V | tail -1)
+          EXPECTED_NORM=$(echo "$EXPECTED_CERT_SHA256" | tr -d ': ')
+
+          APK=app/build/outputs/apk/release/app-release.apk
+          BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$APK")
+          PACKAGE=$(echo "$BADGING" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
+          VERSION_NAME=$(echo "$BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
+          VERSION_CODE=$(echo "$BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
+          test "$PACKAGE" = "dev.shizzi"
+          test "$VERSION_NAME" = "0.4.3.5.2"
+          test "$VERSION_CODE" = "30"
+
+          ROUTER_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
+          test "$ROUTER_CERT" = "$EXPECTED_NORM"
+
+          PLUS=conso/build/outputs/apk/release/conso-release.apk
+          ADMIN=admin/build/outputs/apk/release/admin-release.apk
+          test -s "$PLUS"
+          test -s "$ADMIN"
+
+          EMBEDDED_PLUS=/tmp/Shizzi-Plus-embedded.apk
+          EMBEDDED_ADMIN=/tmp/Shizzi-Admin-embedded.apk
+          unzip -p "$APK" assets/shizzi/Shizzi-Plus.apk > "$EMBEDDED_PLUS"
+          unzip -p "$APK" assets/shizzi/Shizzi-Admin.apk > "$EMBEDDED_ADMIN"
+          test "$(stat -c%s "$EMBEDDED_PLUS")" -gt 20000
+          test "$(stat -c%s "$EMBEDDED_ADMIN")" -gt 20000
+          unzip -t "$EMBEDDED_PLUS" >/dev/null
+          unzip -t "$EMBEDDED_ADMIN" >/dev/null
+          cmp "$PLUS" "$EMBEDDED_PLUS"
+          cmp "$ADMIN" "$EMBEDDED_ADMIN"
+
+          PLUS_BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$PLUS")
+          ADMIN_BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$ADMIN")
+          test "$(echo "$PLUS_BADGING" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")" = "dev.shizzi.conso"
+          test "$(echo "$ADMIN_BADGING" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")" = "dev.shizzi.admin"
+
+          PLUS_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$PLUS" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
+          ADMIN_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$ADMIN" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
+          EMBEDDED_PLUS_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$EMBEDDED_PLUS" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
+          EMBEDDED_ADMIN_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$EMBEDDED_ADMIN" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
+          test "$PLUS_CERT" = "$EXPECTED_NORM"
+          test "$ADMIN_CERT" = "$EXPECTED_NORM"
+          test "$EMBEDDED_PLUS_CERT" = "$EXPECTED_NORM"
+          test "$EMBEDDED_ADMIN_CERT" = "$EXPECTED_NORM"
+
+      - name: Prepare APK artifacts
+        run: |
+          mkdir -p release-output
+          cp app/build/outputs/apk/release/app-release.apk release-output/Shizzi-Hotspot-0.4.3.5.2.apk
+          cp conso/build/outputs/apk/release/conso-release.apk release-output/Shizzi-Plus-Compatible.apk
+          cp admin/build/outputs/apk/release/admin-release.apk release-output/Shizzi-Admin-Compatible.apk
+          cd release-output
+          sha256sum *.apk > SHA256SUMS.txt
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: Shizzi-0.4.3.5.2-portable-test
+          path: |
+            release-output/Shizzi-Hotspot-0.4.3.5.2.apk
+            release-output/Shizzi-Plus-Compatible.apk
+            release-output/Shizzi-Admin-Compatible.apk
+            release-output/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Clean up signing material
+        if: always()
+        run: rm -f shizzi-release.jks keystore.properties
