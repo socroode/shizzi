@@ -15,12 +15,19 @@ class TetherService : ITetherService.Stub {
     private val session: TetherSession by lazy { TetherSession(shellContext) }
     private val compatibility: CompatibilityCheck by lazy { CompatibilityCheck(shellContext) }
     private val apexInstaller: ApexInstaller by lazy { ApexInstaller() }
+    private val clientAppDistribution: ClientAppDistributionServer by lazy {
+        ClientAppDistributionServer(
+            readClientAppAssetFromInstalledShizzi(context),
+            readAdminAppAssetFromInstalledShizzi(context),
+        )
+    }
 
     @Suppress("unused")
     constructor() : this(acquireSystemContext())
 
     constructor(context: Context) {
         this.context = context
+        ensureClientAppDistribution()
         liveInstance = this
     }
 
@@ -84,6 +91,7 @@ class TetherService : ITetherService.Stub {
     }
 
     override fun setPortalConfig(required: Boolean, configJson: String?) {
+        ensureClientAppDistribution()
         session.setPortalConfig(required, configJson.orEmpty())
     }
 
@@ -126,6 +134,24 @@ class TetherService : ITetherService.Stub {
             runCatching { runner.run(attemptTethering, availabilityTimeoutMs) }
                 .getOrElse { failure -> errorReport("runProbes", failure) },
         )
+
+    private fun ensureClientAppDistribution() {
+        runCatching { clientAppDistribution.start() }
+            .onSuccess { started ->
+                if (started) {
+                    Log.i(
+                        TAG,
+                        "Shizzi+ / Shizzi Admin distribution hosted in shell process on 127.0.0.1:" +
+                            ClientAppDistributionServer.PORT,
+                    )
+                } else {
+                    Log.w(TAG, "embedded app shell distribution asset unavailable")
+                }
+            }
+            .onFailure { failure ->
+                Log.e(TAG, "embedded app shell distribution failed", failure)
+            }
+    }
 
     private fun publish(report: String): String {
         runCatching { java.io.File(REPORT_PATH).writeText(report) }

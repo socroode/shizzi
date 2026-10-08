@@ -77,6 +77,20 @@ data class AdminCommandResult(
     val payloadJson: String = "",
 )
 
+data class LiveMediaDiagnostic(
+    val atMillis: Long = 0L,
+    val clientIp: String = "",
+    val path: String = "",
+    val accountAuthenticated: Boolean = false,
+    val accountNumber: String = "",
+    val proxyTarget: String = "",
+    val backend: String = "",
+    val backendConnected: Boolean = false,
+    val bytesCopied: Long = 0L,
+    val result: String = "",
+    val error: String = "",
+)
+
 data class LiveTrafficSnapshot(
     val epoch: Long = 0L,
     val accountUsage: List<LiveAccountUsage> = emptyList(),
@@ -85,6 +99,7 @@ data class LiveTrafficSnapshot(
     val portalAuthorizations: List<LivePortalAuthorization> = emptyList(),
     val portalRechargeClaims: List<LivePortalRechargeClaim> = emptyList(),
     val adminCommands: List<LiveAdminCommand> = emptyList(),
+    val mediaDiagnostics: List<LiveMediaDiagnostic> = emptyList(),
 )
 
 fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
@@ -177,6 +192,29 @@ fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
         }
     }.orEmpty()
 
+    val mediaDiagnostics = root.optJSONArray("mediaDiagnostics")?.let { array ->
+        buildList {
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                add(
+                    LiveMediaDiagnostic(
+                        atMillis = item.optLong("atMillis"),
+                        clientIp = item.optString("clientIp"),
+                        path = item.optString("path"),
+                        accountAuthenticated = item.optBoolean("accountAuthenticated"),
+                        accountNumber = item.optString("accountNumber"),
+                        proxyTarget = item.optString("proxyTarget"),
+                        backend = item.optString("backend"),
+                        backendConnected = item.optBoolean("backendConnected"),
+                        bytesCopied = item.optLong("bytesCopied"),
+                        result = item.optString("result"),
+                        error = item.optString("error"),
+                    ),
+                )
+            }
+        }
+    }.orEmpty()
+
     val usage = root.optJSONArray("accountUsage")?.let { array ->
         buildList {
             for (index in 0 until array.length()) {
@@ -222,6 +260,7 @@ fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
         portalAuthorizations = authorizations,
         portalRechargeClaims = claims,
         adminCommands = adminCommands,
+        mediaDiagnostics = mediaDiagnostics,
     )
 }
 
@@ -230,8 +269,20 @@ fun CybercafeState.toPortalConfigJson(
     markers: Map<String, AccountMarker> = emptyMap(),
     claimResults: List<PortalClaimResult> = emptyList(),
     adminResults: List<AdminCommandResult> = emptyList(),
+    clientApp: ClientAppDistributionInfo? = null,
+    mediaEnabled: Boolean = false,
+    mediaFolders: List<MediaFolderConfig> = emptyList(),
+    mediaSummary: MediaIndexSummary? = null,
+    routerBattery: RouterBatteryState = RouterBatteryState(),
 ): String =
     JSONObject().apply {
+        put("clientApp", JSONObject().apply {
+            put("available", clientApp?.available == true)
+            put("version", clientApp?.version.orEmpty())
+            put("fileName", clientApp?.fileName.orEmpty())
+            put("sizeBytes", clientApp?.sizeBytes ?: 0L)
+            put("sha256", clientApp?.sha256.orEmpty())
+        })
         put("admin", JSONObject().apply {
             put("enabled", remoteAdmin.enabled)
             put("username", remoteAdmin.username)
@@ -253,6 +304,11 @@ fun CybercafeState.toPortalConfigJson(
                 put("message", this@toPortalConfigJson.portal.message)
                 put("html", this@toPortalConfigJson.portal.html)
             })
+            put("battery", JSONObject().apply {
+                put("available", routerBattery.available)
+                put("percent", routerBattery.percent)
+                put("charging", routerBattery.charging)
+            })
             put("accounts", JSONArray().apply {
                 accounts.values.sortedBy(PrepaidAccount::number).forEach { account ->
                     put(JSONObject().apply {
@@ -267,6 +323,7 @@ fun CybercafeState.toPortalConfigJson(
                         put("unlimitedDownloadBps", account.unlimitedDownloadBps)
                         put("unlimitedUploadBps", account.unlimitedUploadBps)
                         put("unlimitedPlanName", account.unlimitedPlanName)
+                        put("mediaUntilMillis", account.mediaUntilMillis)
                         put("totalUpBytes", account.totalUpBytes)
                         put("totalDownBytes", account.totalDownBytes)
                     })
@@ -306,6 +363,56 @@ fun CybercafeState.toPortalConfigJson(
                     })
                 }
             })
+            put("mediaOffers", JSONArray().apply {
+                mediaOffers.values.sortedBy(MediaOffer::name).forEach { offer ->
+                    put(JSONObject().apply {
+                        put("id", offer.id)
+                        put("name", offer.name)
+                        put("durationMinutes", offer.durationMinutes)
+                        put("priceXpf", offer.priceXpf)
+                    })
+                }
+            })
+            put("mediaVouchers", JSONArray().apply {
+                mediaVouchers.values.sortedByDescending(MediaVoucher::createdAtMillis).forEach { voucher ->
+                    put(JSONObject().apply {
+                        put("code", voucher.code)
+                        put("offerId", voucher.offerId)
+                        put("createdAtMillis", voucher.createdAtMillis)
+                        put("enabled", voucher.enabled)
+                        put("redeemedByAccount", voucher.redeemedByAccount)
+                        put("redeemedAtMillis", voucher.redeemedAtMillis)
+                        put("snapshotVersion", voucher.snapshotVersion)
+                        put("snapshotName", voucher.snapshotName)
+                        put("snapshotDurationMinutes", voucher.snapshotDurationMinutes)
+                        put("snapshotPriceXpf", voucher.snapshotPriceXpf)
+                    })
+                }
+            })
+            put("media", JSONObject().apply {
+                put("enabled", mediaEnabled)
+                put("maxFolders", MediaFolderStore.MAX_FOLDERS)
+                put("summary", JSONObject().apply {
+                    put("films", mediaSummary?.films ?: 0)
+                    put("series", mediaSummary?.series ?: 0)
+                    put("music", mediaSummary?.music ?: 0)
+                    put("total", mediaSummary?.total ?: 0)
+                    put("updatedAt", mediaSummary?.updatedAt ?: 0L)
+                })
+                put("folders", JSONArray().apply {
+                    mediaFolders.forEach { folder ->
+                        put(JSONObject().apply {
+                            put("id", folder.id)
+                            put("name", folder.name)
+                            put("kind", folder.kind.key)
+                            put("treeUri", folder.treeUri ?: JSONObject.NULL)
+                            put("enabled", folder.enabled)
+                            put("writable", folder.writable)
+                            put("allowedAccounts", JSONArray(folder.allowedAccounts.toList()))
+                        })
+                    }
+                })
+            })
         })
         put("title", portal.title)
         put("message", portal.message)
@@ -330,6 +437,7 @@ fun CybercafeState.toPortalConfigJson(
                             put("unlimitedDownloadBps", account.unlimitedDownloadBps)
                             put("unlimitedUploadBps", account.unlimitedUploadBps)
                             put("unlimitedPlanName", account.unlimitedPlanName)
+                            put("mediaUntilMillis", account.mediaUntilMillis)
                             put("totalUpBytes", account.totalUpBytes)
                             put("totalDownBytes", account.totalDownBytes)
                             put("markerEpoch", epoch)
@@ -392,6 +500,11 @@ suspend fun TetherClient.applyCybercafePolicies(
     markers: Map<String, AccountMarker>,
     claimResults: List<PortalClaimResult>,
     adminResults: List<AdminCommandResult> = emptyList(),
+    clientApp: ClientAppDistributionInfo? = null,
+    mediaEnabled: Boolean = false,
+    mediaFolders: List<MediaFolderConfig> = emptyList(),
+    mediaSummary: MediaIndexSummary? = null,
+    routerBattery: RouterBatteryState = RouterBatteryState(),
 ) {
     val portalRequired = state.accounts.isNotEmpty() || state.remoteAdmin.enabled
 
@@ -401,7 +514,17 @@ suspend fun TetherClient.applyCybercafePolicies(
     if (portalRequired) setRequireClientAttribution(true)
     setPortalConfig(
         portalRequired,
-        state.toPortalConfigJson(epoch, markers, claimResults, adminResults),
+        state.toPortalConfigJson(
+            epoch,
+            markers,
+            claimResults,
+            adminResults,
+            clientApp,
+            mediaEnabled,
+            mediaFolders,
+            mediaSummary,
+            routerBattery,
+        ),
     )
     if (!portalRequired) setRequireClientAttribution(false)
 }

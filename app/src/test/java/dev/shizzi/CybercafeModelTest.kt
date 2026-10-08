@@ -53,7 +53,7 @@ class CybercafeModelTest {
 
         val migrated = decodeCybercafeState(raw)
 
-        assertEquals(4, migrated.schemaVersion)
+        assertEquals(5, migrated.schemaVersion)
         assertEquals("RONIU", migrated.accounts.getValue("1001").name)
         assertTrue(migrated.vouchers.containsKey("SHZ-ABCD-EFGH"))
         assertEquals("Shizzi Hotspot", migrated.portal.title)
@@ -103,7 +103,7 @@ class CybercafeModelTest {
 
         val migrated = decodeCybercafeState(raw)
 
-        assertEquals(4, migrated.schemaVersion)
+        assertEquals(5, migrated.schemaVersion)
         assertEquals("TEKOMOPAO WIFI1", migrated.portal.title)
         assertEquals("<html><body>{{CONTENT}}</body></html>", migrated.portal.html)
         assertEquals(7_000_000_000L, migrated.accounts.getValue("1001").dataBalanceBytes)
@@ -199,6 +199,117 @@ class CybercafeModelTest {
             at + 60L * day,
             second.state.accounts.getValue("1001").unlimitedUntilMillis,
         )
+    }
+
+    @Test
+    fun mediaVoucherAddsOnlyMediaTimeAndDoesNotTouchInternet() {
+        val mediaOffer = MediaOffer(
+            id = "media-36h",
+            name = "Media 36 heures",
+            durationMinutes = 36L * 60L,
+            priceXpf = 750,
+        )
+        val mediaVoucher = MediaVoucher(
+            code = "MEDIAPASS1",
+            offerId = mediaOffer.id,
+            createdAtMillis = 0L,
+            snapshotName = mediaOffer.name,
+            snapshotDurationMinutes = mediaOffer.durationMinutes,
+            snapshotPriceXpf = mediaOffer.priceXpf,
+        )
+        val original = account().copy(
+            dataBalanceBytes = 12_000_000_000L,
+            dataValidUntilMillis = 50L * day,
+            dataDownloadBps = 2_000_000L,
+            dataUploadBps = 1_000_000L,
+        )
+        val state = CybercafeState(
+            accounts = mapOf("1001" to original),
+            mediaOffers = mapOf(mediaOffer.id to mediaOffer),
+            mediaVouchers = mapOf(mediaVoucher.code to mediaVoucher),
+        )
+        val at = 1_000_000L
+
+        val result = CybercafeRules.redeemAnyVoucher(state, "1001", "mediapass1", at)
+
+        assertTrue(result.success)
+        val updated = result.state.accounts.getValue("1001")
+        assertEquals(at + 36L * 60L * 60_000L, updated.mediaUntilMillis)
+        assertEquals(original.dataBalanceBytes, updated.dataBalanceBytes)
+        assertEquals(original.dataValidUntilMillis, updated.dataValidUntilMillis)
+        assertEquals(original.dataDownloadBps, updated.dataDownloadBps)
+        assertEquals(original.dataUploadBps, updated.dataUploadBps)
+        assertEquals(
+            "1001",
+            result.state.mediaVouchers.getValue("MEDIAPASS1").redeemedByAccount,
+        )
+    }
+
+    @Test
+    fun mediaVoucherDurationAccumulatesFromCurrentExpiry() {
+        val offer = MediaOffer(
+            id = "media-10d",
+            name = "Media 10 jours",
+            durationMinutes = 10L * 24L * 60L,
+            priceXpf = 1_000,
+        )
+        val state = CybercafeState(
+            accounts = mapOf(
+                "1001" to account().copy(mediaUntilMillis = 20L * day),
+            ),
+            mediaOffers = mapOf(offer.id to offer),
+            mediaVouchers = mapOf(
+                "M1" to MediaVoucher(
+                    code = "M1",
+                    offerId = offer.id,
+                    createdAtMillis = 0L,
+                    snapshotName = offer.name,
+                    snapshotDurationMinutes = offer.durationMinutes,
+                ),
+            ),
+        )
+
+        val result = CybercafeRules.redeemAnyVoucher(state, "1001", "M1", 5L * day)
+
+        assertTrue(result.success)
+        assertEquals(
+            30L * day,
+            result.state.accounts.getValue("1001").mediaUntilMillis,
+        )
+    }
+
+    @Test
+    fun mediaVoucherStateRoundTripsIndependently() {
+        val mediaOffer = MediaOffer(
+            id = "media-custom",
+            name = "Media personnalisé",
+            durationMinutes = 90L,
+            priceXpf = 300,
+        )
+        val state = CybercafeState(
+            accounts = mapOf(
+                "1001" to account().copy(mediaUntilMillis = 123_456L),
+            ),
+            mediaOffers = mapOf(mediaOffer.id to mediaOffer),
+            mediaVouchers = mapOf(
+                "MEDIA90" to MediaVoucher(
+                    code = "MEDIA90",
+                    offerId = mediaOffer.id,
+                    createdAtMillis = 42L,
+                    snapshotName = mediaOffer.name,
+                    snapshotDurationMinutes = mediaOffer.durationMinutes,
+                    snapshotPriceXpf = mediaOffer.priceXpf,
+                ),
+            ),
+        )
+
+        val decoded = decodeCybercafeState(encodeCybercafeState(state))
+
+        assertEquals(5, decoded.schemaVersion)
+        assertEquals(123_456L, decoded.accounts.getValue("1001").mediaUntilMillis)
+        assertEquals(90L, decoded.mediaOffers.getValue("media-custom").durationMinutes)
+        assertEquals(90L, decoded.mediaVouchers.getValue("MEDIA90").snapshotDurationMinutes)
+        assertTrue(decoded.vouchers.isEmpty())
     }
 
     @Test

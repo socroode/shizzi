@@ -5,6 +5,85 @@ and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.4.1.1] - 2026-10-06
+
+### Fixed
+
+- User accounts are portable and are never permanently bound to one phone, IP address or MAC address.
+- A valid login on another phone takes over the single active account session instead of leaving the account locked to the previous device.
+- A phone that stays on the Shizzi Wi-Fi keeps its authenticated session through sleep, Wi-Fi reassociation and DHCP IPv4 changes when Android exposes the same device MAC.
+- Temporary disappearance from Android's tethering client list no longer logs a sleeping phone out.
+- DHCP address reuse by a different MAC does not inherit the previous user's session.
+
+### Changed
+
+- Shizzi Hotspot is version 0.4.4.1.1 (versionCode 28).
+- The Hotspot APK embeds both the compatible Shizzi+ APK and the compatible Shizzi Admin APK as signed release assets.
+- The captive portal at `http://192.0.2.1/` exposes Shizzi Admin directly at `http://192.0.2.1/shizzi-admin.apk`, alongside the existing Shizzi+ local download.
+
+## [0.4.3.9] - 2026-09-30
+
+### Security
+
+- Shizzi Media now requires an active Shizzi account session on the requesting device.
+- Unauthenticated hotspot clients cannot open /media/, browse the catalog, open player pages or request /media/stream URLs.
+- The Media backend on port 8088 now binds to loopback only, preventing LAN clients from bypassing the captive-portal account check.
+- The Media card is hidden until a Shizzi account is connected.
+
+### Changed
+
+- Shizzi+ 0.2.4 routes Media through the secured captive-portal /media/ path instead of connecting directly to port 8088.
+- Media relative links remain under the /media/ proxy so catalog, player and stream requests all pass through the account gate.
+- Shizzi Admin remains 0.2.3.
+
+
+## [0.4.3.8] - 2026-09-30
+
+### Added
+
+- Browser-only local Wi-Fi speed test at /speedtest/ with 10, 25, 50 and 100 MiB test sizes.
+- Five-sample local latency measurement and Reno9-to-client throughput measurement with live progress.
+- Conservative estimate of simultaneous 1080p streams at 3 Mbps using a 30% Wi-Fi safety margin.
+- Portal card linking directly to the speed test before or after account login.
+- Bounded server-generated speed-test payloads; no media file, Internet download or persistent storage is required.
+
+### Changed
+
+- The local speed test uses the captive-portal path itself so the measurement reflects the Shizzi router-to-client Wi-Fi path.
+- Shizzi+ remains 0.2.3 and Shizzi Admin remains 0.2.3; only Shizzi Hotspot changes in this test build.
+
+
+## [0.4.3.7] - 2026-09-30
+
+### Added
+
+- Local browser access to Shizzi Media at /media/ through the captive portal.
+- Portal Media card available to PCs, phones and tablets connected to the Shizzi Wi-Fi.
+- Local reverse proxy preserves HTTP Range/206 responses so browser seeking works for large videos.
+- Regression test for /media/ route rewriting.
+
+### Changed
+
+- Media catalog links are relative, so the same Films/Séries/Musique interface works both directly in Shizzi+ and behind the captive-portal /media/ path.
+- Shizzi+ remains 0.2.3 and Shizzi Admin remains 0.2.3; only Shizzi Hotspot changes in this test build.
+
+
+## [0.4.3.6] - 2026-09-30
+
+### Added
+
+- Captive portal download card for Shizzi+ before or after account login.
+- Local /download/shizzi-plus.apk route that stays entirely on the hotspot and does not consume Internet quota.
+- Loopback-only Android distribution bridge so the Shizuku datapath can safely proxy the embedded client APK.
+- Shizzi+ 0.2.3 is embedded in the Hotspot build with version, size and SHA-256 metadata shown by the portal.
+- CI verifies the embedded APK package, version, permanent certificate and exact SHA-256.
+
+### Changed
+
+- Clients no longer need the Shizzi+ APK to be sent manually; they can install it from the captive portal.
+- No hotspot subnet is hard-coded for the download path: clients use the same captive-portal address they already reached.
+
+
 ## [0.4.3.5] - 2026-09-29
 
 ### Added

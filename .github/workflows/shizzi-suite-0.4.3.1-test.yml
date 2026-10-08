@@ -1,4 +1,5 @@
-name: Shizzi 0.4.3.5 suite test
+name: Shizzi 0.4.3.9 suite test
+# Account-gated Media release-candidate suite.
 
 on:
   push:
@@ -9,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: shizzi-suite-0435-${{ github.ref }}
+  group: shizzi-suite-0439-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -99,27 +100,32 @@ jobs:
             test "$ACTUAL_NORM" = "$EXPECTED_NORM"
           }
 
-          verify_apk app/build/outputs/apk/release/app-release.apk dev.shizzi 0.4.3.5 15
-          verify_apk conso/build/outputs/apk/release/conso-release.apk dev.shizzi.conso 0.2.3 7
-          verify_apk admin/build/outputs/apk/release/admin-release.apk dev.shizzi.admin 0.2.3 5
+          verify_apk app/build/outputs/apk/release/app-release.apk dev.shizzi 0.4.3.9 21
+          verify_apk conso/build/outputs/apk/release/conso-release.apk dev.shizzi.conso 0.2.4 8
+          verify_apk admin/build/outputs/apk/release/admin-release.apk dev.shizzi.admin 0.2.4 6
+
+          unzip -p app/build/outputs/apk/release/app-release.apk             assets/shizzi/Shizzi-Plus.apk > /tmp/shizzi-plus-embedded.apk
+          test -s /tmp/shizzi-plus-embedded.apk
+          cmp conso/build/outputs/apk/release/conso-release.apk /tmp/shizzi-plus-embedded.apk
+          verify_apk /tmp/shizzi-plus-embedded.apk dev.shizzi.conso 0.2.4 8
 
       - name: Prepare suite artifacts
         run: |
           mkdir -p suite-output
-          cp app/build/outputs/apk/release/app-release.apk suite-output/Shizzi-Hotspot-0.4.3.5-Media-Test.apk
-          cp conso/build/outputs/apk/release/conso-release.apk suite-output/Shizzi-Plus-0.2.3-Test.apk
-          cp admin/build/outputs/apk/release/admin-release.apk suite-output/Shizzi-Admin-0.2.3-Test.apk
+          cp app/build/outputs/apk/release/app-release.apk suite-output/Shizzi-Hotspot-0.4.3.9-Media-IPv4-Fix.apk
+          cp conso/build/outputs/apk/release/conso-release.apk suite-output/Shizzi-Plus-0.2.4-Test.apk
+          cp admin/build/outputs/apk/release/admin-release.apk suite-output/Shizzi-Admin-0.2.4-Media-Diagnostics-Test.apk
           cd suite-output
           sha256sum *.apk > SHA256SUMS.txt
 
       - name: Upload signed Shizzi suite
         uses: actions/upload-artifact@v5
         with:
-          name: Shizzi-0.4.3.5-suite-test
+          name: Shizzi-0.4.3.9-suite-test
           path: |
-            suite-output/Shizzi-Hotspot-0.4.3.5-Media-Test.apk
-            suite-output/Shizzi-Plus-0.2.3-Test.apk
-            suite-output/Shizzi-Admin-0.2.3-Test.apk
+            suite-output/Shizzi-Hotspot-0.4.3.9-Media-IPv4-Fix.apk
+            suite-output/Shizzi-Plus-0.2.4-Test.apk
+            suite-output/Shizzi-Admin-0.2.4-Media-Diagnostics-Test.apk
             suite-output/SHA256SUMS.txt
           if-no-files-found: error
 

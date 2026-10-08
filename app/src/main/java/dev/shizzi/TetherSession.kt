@@ -138,26 +138,37 @@ class TetherSession(private val context: Context) {
         val control = DownstreamControl(context)
         control.stopWifiTethering()
 
-        val (didStart, startDetail) = control.startWifiTethering()
-        check(didStart) { "restartDownstream: hotspot did not start ($startDetail)" }
+        val outcome = startDownstreamWith(
+            start = {
+                val (accepted, detail) = control.startWifiTethering()
+                DownstreamStartAttempt(accepted = accepted, detail = detail)
+            },
+            isTethered = ::awaitDownstreamTethered,
+            onRetry = SessionLog::warn,
+        )
 
-        awaitDownstreamTethered()
+        check(outcome.success) {
+            "restartDownstream: hotspot did not start after ${outcome.attempts} attempts " +
+                "(${outcome.detail})"
+        }
+        SessionLog.info(
+            "hotspot started automatically after ${outcome.attempts} attempt(s): ${outcome.detail}",
+        )
     }
 
-    private fun awaitDownstreamTethered() {
+    private fun awaitDownstreamTethered(): Boolean {
         val deadline = System.currentTimeMillis() + DOWNSTREAM_SETTLE_MS
         val downstream = DownstreamInspector()
 
         while (System.currentTimeMillis() < deadline) {
-
             if (downstream.findTetheredDownstream() != null) {
                 SessionLog.info("downstream tethered")
-                return
+                return true
             }
             Thread.sleep(DOWNSTREAM_POLL_MS)
         }
 
-        SessionLog.warn("downstream not tethered after ${DOWNSTREAM_SETTLE_MS}ms; continuing")
+        return false
     }
 
     private fun verifyUpstream(name: String) {

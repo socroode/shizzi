@@ -1,5 +1,6 @@
 package dev.shizzi
 
+import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -7,6 +8,7 @@ fun processRemoteAdminCommand(
     command: LiveAdminCommand,
     store: CybercafeStore,
     nowMillis: Long,
+    context: Context,
 ): AdminCommandResult {
     val params = runCatching { JSONObject(command.paramsJson) }.getOrElse { JSONObject() }
 
@@ -119,6 +121,196 @@ fun processRemoteAdminCommand(
                     params.optString("password"),
                 ),
             )
+
+
+            "media.offer.upsert" -> outcome(
+                store.upsertMediaOffer(
+                    MediaOffer(
+                        id = params.optString("id"),
+                        name = params.optString("name"),
+                        durationMinutes = params.optLong("durationMinutes"),
+                        priceXpf = params.optInt("priceXpf"),
+                    ),
+                ),
+            )
+
+            "media.offer.delete" -> outcome(
+                store.deleteMediaOffer(params.optString("id")),
+            )
+
+            "media.voucher.generate" -> {
+                val generated = store.generateMediaVouchers(
+                    params.optString("offerId"),
+                    params.optInt("count", 1).coerceIn(1, 100),
+                    nowMillis,
+                )
+                if (generated.isEmpty()) {
+                    AdminCommandResult(command.id, false, "Échec de génération Media.")
+                } else {
+                    AdminCommandResult(
+                        command.id,
+                        true,
+                        generated.size.toString() + " voucher(s) Media généré(s).",
+                        JSONArray(generated.map { it.code }).toString(),
+                    )
+                }
+            }
+
+            "media.voucher.enable" -> outcome(
+                store.setMediaVoucherEnabled(
+                    params.optString("code"),
+                    params.optBoolean("enabled", true),
+                ),
+            )
+
+            "media.enable" -> {
+                val enabled = params.optBoolean("enabled", true)
+                MediaPrefs.setEnabled(context, enabled)
+                if (enabled) MediaServerService.start(context) else MediaServerService.stop(context)
+                AdminCommandResult(
+                    command.id,
+                    true,
+                    if (enabled) "Shizzi Media activé." else "Shizzi Media désactivé.",
+                )
+            }
+
+            "media.folder.create" -> {
+                val current = MediaFolderStore.load(context)
+                if (current.size >= MediaFolderStore.MAX_FOLDERS) {
+                    AdminCommandResult(command.id, false, "Maximum de dossiers Media atteint.")
+                } else {
+                    val kind = MediaKind.fromKey(params.optString("kind")) ?: MediaKind.FILMS
+                    val created = MediaFolderStore.create(
+                        params.optString("name").ifBlank { "Dossier Media" },
+                        kind,
+                    )
+                    MediaFolderStore.upsert(context, created)
+                    if (MediaPrefs.isEnabled(context)) MediaServerService.restart(context)
+                    AdminCommandResult(
+                        command.id,
+                        true,
+                        "Dossier Media créé.",
+                        JSONObject().put("id", created.id).toString(),
+                    )
+                }
+            }
+
+            "media.folder.update" -> {
+                val id = params.optString("id")
+                val current = MediaFolderStore.byId(context, id)
+                if (current == null) {
+                    AdminCommandResult(command.id, false, "Dossier Media introuvable.")
+                } else {
+                    val accounts = if (params.has("allowedAccounts")) {
+                        buildSet {
+                            val array = params.optJSONArray("allowedAccounts") ?: JSONArray()
+                            for (index in 0 until array.length()) {
+                                normalizeMediaAccount(array.optString(index))
+                                    .takeIf { it.isNotBlank() }
+                                    ?.let(::add)
+                            }
+                        }
+                    } else {
+                        current.allowedAccounts
+                    }
+                    val kind = MediaKind.fromKey(params.optString("kind")) ?: current.kind
+                    val updated = current.copy(
+                        name = params.optString("name", current.name),
+                        kind = kind,
+                        enabled = params.optBoolean("enabled", current.enabled),
+                        allowedAccounts = accounts,
+                    )
+                    val needsRescan = updated.kind != current.kind || updated.name != current.name
+                    MediaFolderStore.upsert(context, updated)
+                    if (MediaPrefs.isEnabled(context)) MediaServerService.restart(context)
+                    if (needsRescan && updated.uri() != null) {
+                        kotlin.concurrent.thread(name = "shizzi-media-admin-rescan") {
+                            runCatching {
+                                MediaIndex.rebuild(context.applicationContext)
+                                if (MediaPrefs.isEnabled(context)) {
+                                    MediaServerService.restart(context.applicationContext)
+                                }
+                            }
+                        }
+                    }
+                    AdminCommandResult(command.id, true, "Dossier Media modifié.")
+                }
+            }
+
+            "media.folder.delete" -> {
+                val id = params.optString("id")
+                val current = MediaFolderStore.byId(context, id)
+                if (current == null) {
+                    AdminCommandResult(command.id, false, "Dossier Media introuvable.")
+                } else {
+                    MediaFolderStore.remove(context, id)
+                    MediaIndex.removeFolder(context.applicationContext, id)
+                    if (MediaPrefs.isEnabled(context)) MediaServerService.restart(context)
+                    AdminCommandResult(command.id, true, "Dossier Media supprimé.")
+                }
+            }
+
+
+            "media.folder.source" -> {
+                val id = params.optString("id")
+                val current = MediaFolderStore.byId(context, id)
+                val rawUri = params.optString("treeUri").trim()
+                if (current == null) {
+                    AdminCommandResult(command.id, false, "Dossier Media introuvable.")
+                } else if (rawUri.isBlank()) {
+                    MediaFolderStore.upsert(context, current.copy(treeUri = null))
+                    MediaIndex.removeFolder(context.applicationContext, id)
+                    if (MediaPrefs.isEnabled(context)) MediaServerService.restart(context)
+                    AdminCommandResult(command.id, true, "Source Media retirée.")
+                } else {
+                    val uri = android.net.Uri.parse(rawUri)
+                    if (!MediaRemoteSources.isAllowed(context, uri)) {
+                        AdminCommandResult(
+                            command.id,
+                            false,
+                            "Cette source n’a pas été autorisée par Android sur le routeur.",
+                        )
+                    } else {
+                        MediaFolderStore.upsert(context, current.copy(treeUri = rawUri))
+                        MediaIndex.removeFolder(context.applicationContext, id)
+                        if (MediaPrefs.isEnabled(context)) MediaServerService.restart(context)
+                        kotlin.concurrent.thread(name = "shizzi-media-admin-source-scan") {
+                            runCatching {
+                                MediaIndex.rebuild(context.applicationContext)
+                                if (MediaPrefs.isEnabled(context)) {
+                                    MediaServerService.restart(context.applicationContext)
+                                }
+                            }
+                        }
+                        AdminCommandResult(command.id, true, "Source Media appliquée. Scan lancé.")
+                    }
+                }
+            }
+
+            "media.scan" -> {
+                kotlin.concurrent.thread(name = "shizzi-media-admin-scan") {
+                    runCatching {
+                        MediaIndex.rebuild(context.applicationContext)
+                        if (MediaPrefs.isEnabled(context)) {
+                            MediaServerService.restart(context.applicationContext)
+                        }
+                    }
+                }
+                AdminCommandResult(command.id, true, "Scan Media lancé.")
+            }
+
+            "media.browse" -> {
+                val payload = MediaRemoteSources.browse(
+                    context,
+                    params.optString("parentUri").takeIf { it.isNotBlank() },
+                )
+                AdminCommandResult(
+                    command.id,
+                    true,
+                    "Sources Media disponibles.",
+                    payload.toString(),
+                )
+            }
 
             else -> AdminCommandResult(
                 command.id,

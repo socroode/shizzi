@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -147,4 +148,177 @@ func TestUnresolvedUDPDoesNotStallOtherFlows(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("TCP handshake stalled %v behind unresolved UDP", elapsed)
 	}
+}
+
+
+func TestAuthenticatedMediaRequestReachesLoopbackBackend(t *testing.T) {
+	backend, err := net.Listen("tcp", mediaBridgeAddress)
+	if err != nil {
+		t.Fatalf("listen Media backend: %v", err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+
+	backendBody := "<html><body>Shizzi Media E2E</body></html>"
+	backendHeaders := make(chan string, 1)
+	backendDone := make(chan struct{})
+	go func() {
+		defer close(backendDone)
+		conn, acceptErr := backend.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+
+		reader := bufio.NewReader(conn)
+		var received strings.Builder
+		for {
+			line, readErr := reader.ReadString('\n')
+			if readErr != nil {
+				return
+			}
+			received.WriteString(line)
+			if line == "\r\n" {
+				break
+			}
+		}
+		backendHeaders <- received.String()
+
+		_, _ = fmt.Fprintf(
+			conn,
+			"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
+			len(backendBody),
+			backendBody,
+		)
+	}()
+
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portalConfigForTest(t))
+	clientIP := "192.168.7.66"
+	ok, message := manager.submitPortalAccountLogin(clientIP, "1001", "1234")
+	if !ok {
+		t.Fatalf("login failed: %s", message)
+	}
+
+	server, client := net.Pipe()
+	responseDone := make(chan struct{})
+	go func() {
+		defer close(responseDone)
+		manager.servePortal(server, clientIP)
+	}()
+
+	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
+	_, err = fmt.Fprint(
+		client,
+		"GET /media/ HTTP/1.1\r\nHost: 192.0.2.1\r\nConnection: close\r\n\r\n",
+	)
+	if err != nil {
+		t.Fatalf("write Media request: %v", err)
+	}
+
+	response, readErr := io.ReadAll(client)
+	_ = client.Close()
+	if readErr != nil {
+		t.Fatalf("read Media response: %v", readErr)
+	}
+	<-responseDone
+	<-backendDone
+	headersSeen := <-backendHeaders
+	if !strings.Contains(headersSeen, "X-Shizzi-Media-Account: 1001") {
+		t.Fatalf("Media account identity was not forwarded to backend: %q", headersSeen)
+	}
+
+	if !strings.Contains(string(response), "200 OK") {
+		t.Fatalf("Media response was not 200: %q", string(response))
+	}
+	if !strings.Contains(string(response), "Shizzi Media E2E") {
+		t.Fatalf("Media backend body was not proxied: %q", string(response))
+	}
+
+	stats := manager.statsJSON()
+	for _, expected := range []string{
+		`"path":"/media/"`,
+		`"accountAuthenticated":true`,
+		`"backendConnected":true`,
+		`"result":"proxied"`,
+	} {
+		if !strings.Contains(stats, expected) {
+			t.Fatalf("Media diagnostic missing %s: %s", expected, stats)
+		}
+	}
+}
+
+func TestAuthenticatedChatRequestReachesLoopbackBackend(t *testing.T) {
+	backend, err := net.Listen("tcp", chatBridgeAddress)
+	if err != nil { t.Fatalf("listen Chat backend: %v", err) }
+	t.Cleanup(func() { _ = backend.Close() })
+
+	backendHeaders := make(chan string, 1)
+	backendBody := make(chan string, 1)
+	backendDone := make(chan struct{})
+	go func() {
+		defer close(backendDone)
+		conn, acceptErr := backend.Accept()
+		if acceptErr != nil { return }
+		defer conn.Close()
+		reader := bufio.NewReader(conn)
+		var received strings.Builder
+		contentLength := 0
+		for {
+			line, readErr := reader.ReadString('\n')
+			if readErr != nil { return }
+			received.WriteString(line)
+			if strings.HasPrefix(strings.ToLower(line), "content-length:") {
+				value := strings.TrimSpace(strings.TrimPrefix(strings.ToLower(line), "content-length:"))
+				contentLength, _ = strconv.Atoi(value)
+			}
+			if line == "\r\n" { break }
+		}
+		backendHeaders <- received.String()
+		body := make([]byte, contentLength)
+		if contentLength > 0 { _, _ = io.ReadFull(reader, body) }
+		backendBody <- string(body)
+		responseBody := "{\"ok\":true,\"message\":\"proxied\"}"
+		_, _ = fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(responseBody), responseBody)
+	}()
+
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portalConfigForTest(t))
+	clientIP := "192.168.7.66"
+	ok, message := manager.submitPortalAccountLogin(clientIP, "1001", "1234")
+	if !ok { t.Fatalf("login failed: %s", message) }
+
+	payload := "{\"conversationId\":\"dm:1001:1002\",\"text\":\"Bonjour\"}"
+	server, client := net.Pipe()
+	responseDone := make(chan struct{})
+	go func() { defer close(responseDone); manager.servePortal(server, clientIP) }()
+	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
+	_, err = fmt.Fprintf(client, "POST /chat/api/send HTTP/1.1\r\nHost: 192.0.2.1\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(payload), payload)
+	if err != nil { t.Fatalf("write Chat request: %v", err) }
+	response, readErr := io.ReadAll(client)
+	_ = client.Close()
+	if readErr != nil { t.Fatalf("read Chat response: %v", readErr) }
+	<-responseDone
+	<-backendDone
+	headersSeen := <-backendHeaders
+	bodySeen := <-backendBody
+	if !strings.Contains(headersSeen, "X-Shizzi-Chat-Account: 1001") { t.Fatalf("Chat account identity was not forwarded: %q", headersSeen) }
+	if bodySeen != payload { t.Fatalf("Chat POST body changed in proxy: got %q want %q", bodySeen, payload) }
+	if !strings.Contains(string(response), "200 OK") || !strings.Contains(string(response), "\"proxied\"") { t.Fatalf("Chat backend response was not proxied: %q", string(response)) }
+}
+
+func TestUnauthenticatedChatNeverReachesBackend(t *testing.T) {
+	manager := newTrafficManager()
+	manager.setPortalConfig(true, portalConfigForTest(t))
+	server, client := net.Pipe()
+	done := make(chan struct{})
+	go func() { defer close(done); manager.servePortal(server, "192.168.7.77") }()
+	_ = client.SetDeadline(time.Now().Add(3 * time.Second))
+	_, _ = fmt.Fprint(client, "GET /chat/ HTTP/1.1\r\nHost: 192.0.2.1\r\nConnection: close\r\n\r\n")
+	response, err := io.ReadAll(client)
+	_ = client.Close()
+	if err != nil { t.Fatalf("read unauthenticated Chat response: %v", err) }
+	<-done
+	text := string(response)
+	if !strings.Contains(text, "Compte Shizzi requis") { t.Fatalf("unauthenticated Chat did not require account: %q", text) }
+	if !strings.Contains(text, "X-Shizzi-Chat-Auth: required") { t.Fatalf("Chat auth marker missing: %q", text) }
 }

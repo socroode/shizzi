@@ -91,34 +91,68 @@ func TestThreeAccountsEachNeedTheirOwnPortalLogin(t *testing.T) {
 	}
 }
 
-// Test 2: one account may have only one active device at a time.
-func TestSameAccountOnSecondPhoneIsRefusedUntilLogout(t *testing.T) {
+// Test 2: the account is portable and may have only one active device at a
+// time. A valid login on a new phone takes over immediately; there is no
+// permanent device binding and no need to return to the previous phone.
+func TestSameAccountOnSecondPhoneReplacesFirstSession(t *testing.T) {
 	manager := newPortalManager(t)
 	pushConfig(t, manager, accountForTest("2000", "roniu", 20_000))
 
-	if ok, _ := manager.submitPortalAccountLogin(phoneB, "2000", "roniu"); !ok {
-		t.Fatal("first login failed")
-	}
-	if ok, message := manager.submitPortalAccountLogin(phoneC, "2000", "roniu"); ok {
-		t.Fatal("second phone unexpectedly opened the same account")
-	} else if message != "Ce compte est déjà utilisé sur un autre appareil." {
-		t.Fatalf("unexpected refusal message: %q", message)
+	if ok, message := manager.submitPortalAccountLogin(phoneB, "2000", "roniu"); !ok {
+		t.Fatalf("first login failed: %s", message)
 	}
 	if !manager.flowAllowed(phoneB) {
-		t.Fatal("first phone lost Internet after refused second login")
-	}
-	if manager.flowAllowed(phoneC) {
-		t.Fatal("second phone inherited Internet")
+		t.Fatal("first phone has no Internet after login")
 	}
 
-	if ok, _ := manager.submitPortalLogout(phoneB); !ok {
-		t.Fatal("logout failed")
+	if ok, message := manager.submitPortalAccountLogin(phoneC, "2000", "roniu"); !ok {
+		t.Fatalf("portable login on second phone failed: %s", message)
 	}
-	if ok, _ := manager.submitPortalAccountLogin(phoneC, "2000", "roniu"); !ok {
-		t.Fatal("account was not portable after logout")
+	if manager.flowAllowed(phoneB) {
+		t.Fatal("first phone kept Internet after account takeover")
 	}
 	if !manager.flowAllowed(phoneC) {
-		t.Fatal("second phone has no Internet after taking over the released account")
+		t.Fatal("second phone did not receive the portable account")
+	}
+	if len(manager.portalAuthorized) != 1 {
+		t.Fatalf("authorizations=%d, want 1", len(manager.portalAuthorized))
+	}
+}
+
+func TestSamePhoneKeepsSessionAcrossDhcpAddressChangeWithoutRelogin(t *testing.T) {
+	manager := newPortalManager(t)
+	pushConfig(t, manager, accountForTest("2100", "pin1", 20_000))
+	const oldIP = "192.168.7.66"
+	const newIP = "192.168.7.99"
+	const deviceMAC = "aa:bb:cc:dd:ee:42"
+
+	manager.flowAttribution.mu.Lock()
+	manager.flowAttribution.clientMACs[oldIP] = deviceMAC
+	manager.flowAttribution.mu.Unlock()
+
+	if ok, message := manager.submitPortalAccountLogin(oldIP, "2100", "pin1"); !ok {
+		t.Fatalf("initial login failed: %s", message)
+	}
+	if !manager.flowAllowed(oldIP) {
+		t.Fatal("old address has no Internet after login")
+	}
+
+	// Android reassociates the same physical phone and gives it a new DHCP IP.
+	// No logout, Wi-Fi forget/rejoin or account login is performed here.
+	manager.flowAttribution.mu.Lock()
+	delete(manager.flowAttribution.clientMACs, oldIP)
+	manager.flowAttribution.clientMACs[newIP] = deviceMAC
+	manager.flowAttribution.mu.Unlock()
+	manager.rebindPortalAuthorizationForResolvedClient(newIP)
+
+	if manager.flowAllowed(oldIP) {
+		t.Fatal("old DHCP address stayed authorized after automatic rebind")
+	}
+	if !manager.flowAllowed(newIP) {
+		t.Fatal("same phone lost Internet after DHCP/reassociation")
+	}
+	if got := manager.portalAuthorized[newIP]; got == nil || got.AccountNumber != "2100" {
+		t.Fatalf("session was not moved to the new IP: %+v", got)
 	}
 }
 
@@ -282,34 +316,40 @@ func TestDNSIsCarriedButNeverBilledWhenUnattributed(t *testing.T) {
 	}
 }
 
-// A phone that leaves must not hand its login to the next phone that gets
-// the same DHCP address.
-func TestDepartedClientSessionIsReleased(t *testing.T) {
+// A sleeping phone may disappear from Android's client list, but that absence
+// alone must not end its login. The session is released only when there is
+// positive identity evidence that the DHCP address belongs to another phone.
+func TestPortalSessionSurvivesAbsenceButNotDHCPReuse(t *testing.T) {
 	manager := newTrafficManager()
-	connected := "{/192.168.7.66=downstream: 41, /192.168.7.77=downstream: 41}"
-	manager.flowAttribution.dumpFn = func() (string, error) {
-		return "IPv4 Upstream:\nIPv4 Downstream:\n" + connected, nil
-	}
 	pushConfig(t, manager, accountForTest("9000", "pin1", 1_000_000))
+	const oldMAC = "aa:bb:cc:dd:ee:66"
+	const replacementMAC = "aa:bb:cc:dd:ee:77"
+
+	manager.flowAttribution.mu.Lock()
+	manager.flowAttribution.clientMACs[phoneA] = oldMAC
+	manager.flowAttribution.mu.Unlock()
 	manager.submitPortalAccountLogin(phoneA, "9000", "pin1")
 
-	manager.flowAttribution.refreshIfOlderThan(0)
 	manager.mu.Lock()
-	manager.pruneDepartedLocked(manager.flowAttribution.presence(), time.Now())
+	manager.pruneDepartedLocked(clientPresence{
+		clients:       map[string]struct{}{},
+		macs:          map[string]string{},
+		authoritative: true,
+	}, time.Now().Add(8*time.Hour))
 	manager.mu.Unlock()
 	if manager.portalRequiredFor(phoneA) {
-		t.Fatal("present client logged out")
+		t.Fatal("sleeping client was logged out because it disappeared from presence")
 	}
 
-	connected = "{/192.168.7.77=downstream: 41}"
-	manager.flowAttribution.refreshIfOlderThan(0)
-	now := time.Now()
 	manager.mu.Lock()
-	manager.pruneDepartedLocked(manager.flowAttribution.presence(), now)
-	manager.pruneDepartedLocked(manager.flowAttribution.presence(), now.Add(departedClientGrace))
+	manager.pruneDepartedLocked(clientPresence{
+		clients:       map[string]struct{}{phoneA: {}},
+		macs:          map[string]string{phoneA: replacementMAC},
+		authoritative: true,
+	}, time.Now())
 	manager.mu.Unlock()
 	if !manager.portalRequiredFor(phoneA) {
-		t.Fatal("departed client's session survived")
+		t.Fatal("different phone inherited the old session through DHCP IP reuse")
 	}
 }
 
