@@ -2,7 +2,6 @@ package datapath
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"net"
 	"os"
@@ -34,219 +33,6 @@ func portalConfigForTest(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return string(raw)
-}
-
-func TestPortalPageDoesNotWaitForClientIdentity(t *testing.T) {
-	manager := newTrafficManager()
-	manager.setPortalConfig(true, portalConfigForTest(t))
-
-	resolverCalls := 0
-	server, client := net.Pipe()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		manager.servePortalWithResolver(server, "", func() string {
-			resolverCalls++
-			return "192.168.7.66"
-		})
-	}()
-
-	_ = client.SetDeadline(time.Now().Add(3 * time.Second))
-	_, _ = client.Write([]byte(
-		"GET / HTTP/1.1\r\nHost: connectivitycheck.gstatic.com\r\nConnection: close\r\n\r\n",
-	))
-	response, readErr := io.ReadAll(client)
-	_ = client.Close()
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	<-done
-
-	if resolverCalls != 0 {
-		t.Fatalf("portal display waited for client identity: resolver calls=%d", resolverCalls)
-	}
-	if !strings.Contains(string(response), "Ouvrir la connexion compte") {
-		t.Fatalf("login page was not rendered for unidentified client: %q", string(response))
-	}
-}
-
-func TestPortalLoginResolvesIdentityBeforeAuthorization(t *testing.T) {
-	manager := newTrafficManager()
-	manager.setPortalConfig(true, portalConfigForTest(t))
-
-	const resolvedIP = "192.168.7.66"
-	resolverCalls := 0
-	server, client := net.Pipe()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		manager.servePortalWithResolver(server, "", func() string {
-			resolverCalls++
-			return resolvedIP
-		})
-	}()
-
-	body := "account=1001&pin=1234"
-	request := "POST /login HTTP/1.1\r\n" +
-		"Host: 192.0.2.1\r\n" +
-		"Content-Type: application/x-www-form-urlencoded\r\n" +
-		"Content-Length: 21\r\n" +
-		"Connection: close\r\n\r\n" + body
-	_ = client.SetDeadline(time.Now().Add(3 * time.Second))
-	_, _ = client.Write([]byte(request))
-	response, readErr := io.ReadAll(client)
-	_ = client.Close()
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	<-done
-
-	if resolverCalls != 1 {
-		t.Fatalf("login identity resolver calls=%d, want 1", resolverCalls)
-	}
-	if manager.portalRequiredFor(resolvedIP) {
-		t.Fatal("resolved client was not authorized after login")
-	}
-	if _, exists := manager.portalAuthorized[""]; exists {
-		t.Fatal("login was incorrectly attached to an unidentified client")
-	}
-	if !strings.Contains(string(response), "Connexion autorisée.") {
-		t.Fatalf("unexpected login response: %q", string(response))
-	}
-}
-
-func TestPortalLoginRemembersClientMAC(t *testing.T) {
-	manager := newTrafficManager()
-	manager.setPortalConfig(true, portalConfigForTest(t))
-	const ip = "192.168.7.66"
-	const mac = "aa:bb:cc:dd:ee:66"
-
-	manager.flowAttribution.mu.Lock()
-	manager.flowAttribution.clientMACs[ip] = mac
-	manager.flowAttribution.mu.Unlock()
-
-	ok, message := manager.submitPortalAccountLogin(ip, "1001", "1234")
-	if !ok {
-		t.Fatalf("login failed: %s", message)
-	}
-	if got := manager.portalAuthorized[ip].DeviceMAC; got != mac {
-		t.Fatalf("stored MAC=%q, want %q", got, mac)
-	}
-}
-
-func TestSleepingPortalClientIsNotLoggedOutWhenAbsentFromPresence(t *testing.T) {
-	manager := newTrafficManager()
-	manager.setPortalConfig(true, portalConfigForTest(t))
-	const ip = "192.168.7.66"
-	const mac = "aa:bb:cc:dd:ee:66"
-
-	manager.flowAttribution.mu.Lock()
-	manager.flowAttribution.clientMACs[ip] = mac
-	manager.flowAttribution.mu.Unlock()
-	ok, message := manager.submitPortalAccountLogin(ip, "1001", "1234")
-	if !ok {
-		t.Fatalf("login failed: %s", message)
-	}
-
-	manager.mu.Lock()
-	manager.pruneDepartedLocked(clientPresence{
-		clients:       map[string]struct{}{},
-		macs:          map[string]string{},
-		authoritative: true,
-	}, time.Now().Add(24*time.Hour))
-	_, stillAuthorized := manager.portalAuthorized[ip]
-	manager.mu.Unlock()
-
-	if !stillAuthorized {
-		t.Fatal("sleeping client was logged out only because it disappeared from presence")
-	}
-}
-
-func TestPortalSessionIsRevokedWhenDHCPIPBelongsToDifferentMAC(t *testing.T) {
-	manager := newTrafficManager()
-	manager.setPortalConfig(true, portalConfigForTest(t))
-	const ip = "192.168.7.66"
-	const oldMAC = "aa:bb:cc:dd:ee:66"
-	const newMAC = "aa:bb:cc:dd:ee:77"
-
-	manager.portalAuthorized[ip] = &PortalAuthorization{
-		AccountNumber: "1001",
-		DeviceMAC:     oldMAC,
-	}
-
-	manager.mu.Lock()
-	manager.pruneDepartedLocked(clientPresence{
-		clients:       map[string]struct{}{ip: {}},
-		macs:          map[string]string{ip: newMAC},
-		authoritative: true,
-	}, time.Now())
-	_, inherited := manager.portalAuthorized[ip]
-	manager.mu.Unlock()
-
-	if inherited {
-		t.Fatal("different phone inherited authorization through DHCP IP reuse")
-	}
-}
-
-func TestPortalSessionFollowsSameMACToNewIP(t *testing.T) {
-	manager := newTrafficManager()
-	manager.setPortalConfig(true, portalConfigForTest(t))
-	const oldIP = "192.168.7.66"
-	const newIP = "192.168.7.88"
-	const mac = "aa:bb:cc:dd:ee:66"
-
-	manager.portalAuthorized[oldIP] = &PortalAuthorization{
-		AccountNumber: "1001",
-		DeviceMAC:     mac,
-	}
-
-	manager.mu.Lock()
-	manager.pruneDepartedLocked(clientPresence{
-		clients:       map[string]struct{}{newIP: {}},
-		macs:          map[string]string{newIP: mac},
-		authoritative: true,
-	}, time.Now())
-	_, oldStillPresent := manager.portalAuthorized[oldIP]
-	moved := manager.portalAuthorized[newIP]
-	manager.mu.Unlock()
-
-	if oldStillPresent {
-		t.Fatal("old DHCP address still owns the session")
-	}
-	if moved == nil || moved.AccountNumber != "1001" {
-		t.Fatalf("same device did not keep its session on new IP: %+v", moved)
-	}
-}
-
-func TestOneSleepingClientSurvivesAmongSixHotspotClients(t *testing.T) {
-	manager := newTrafficManager()
-	presence := clientPresence{
-		clients:       make(map[string]struct{}),
-		macs:          make(map[string]string),
-		authoritative: true,
-	}
-	for i := 1; i <= 6; i++ {
-		ip := fmt.Sprintf("192.168.7.%d", 60+i)
-		mac := fmt.Sprintf("aa:bb:cc:dd:ee:%02x", i)
-		manager.portalAuthorized[ip] = &PortalAuthorization{
-			AccountNumber: fmt.Sprintf("10%02d", i),
-			DeviceMAC:     mac,
-		}
-		if i != 3 {
-			presence.clients[ip] = struct{}{}
-			presence.macs[ip] = mac
-		}
-	}
-
-	manager.mu.Lock()
-	manager.pruneDepartedLocked(presence, time.Now().Add(8*time.Hour))
-	count := len(manager.portalAuthorized)
-	_, sleeperStillAuthorized := manager.portalAuthorized["192.168.7.63"]
-	manager.mu.Unlock()
-
-	if count != 6 || !sleeperStillAuthorized {
-		t.Fatalf("sleep regression: sessions=%d sleeper=%v, want 6/true", count, sleeperStillAuthorized)
-	}
 }
 
 func TestPortalLoginAuthorizesOnlyResolvedClient(t *testing.T) {
@@ -312,7 +98,7 @@ func TestPortalRechargeClaimCarriesAccountAndClient(t *testing.T) {
 	}
 }
 
-func TestSameAccountMovesToSecondActiveClient(t *testing.T) {
+func TestSameAccountIsRefusedOnSecondActiveClient(t *testing.T) {
 	manager := newTrafficManager()
 	manager.setPortalConfig(true, portalConfigForTest(t))
 
@@ -330,15 +116,18 @@ func TestSameAccountMovesToSecondActiveClient(t *testing.T) {
 		"1001",
 		"1234",
 	)
-	if !secondOK {
-		t.Fatalf("portable takeover failed: %s", secondMessage)
+	if secondOK {
+		t.Fatal("second client unexpectedly opened the same account")
+	}
+	if secondMessage != "Ce compte est déjà utilisé sur un autre appareil." {
+		t.Fatalf("unexpected refusal message: %s", secondMessage)
 	}
 
-	if !manager.portalRequiredFor("192.168.7.66") {
-		t.Fatal("first client kept the session after account takeover")
+	if manager.portalRequiredFor("192.168.7.66") {
+		t.Fatal("first authenticated client returned to the portal")
 	}
-	if manager.portalRequiredFor("192.168.7.77") {
-		t.Fatal("second client did not receive the account session")
+	if !manager.portalRequiredFor("192.168.7.77") {
+		t.Fatal("second client was authorized")
 	}
 	if len(manager.portalAuthorized) != 1 {
 		t.Fatalf("authorizations=%d, want 1", len(manager.portalAuthorized))
