@@ -386,15 +386,11 @@ object CybercafeRules {
             return RuleOutcome(state, false, "Identifiant appareil manquant.")
         }
 
-        val activeOnAnotherDevice = state.devices.values.any {
-            it.accountNumber == number && it.deviceKey != normalizedKey
-        }
-        if (activeOnAnotherDevice) {
-            return RuleOutcome(
-                state,
-                false,
-                "Ce compte est déjà utilisé sur un autre appareil.",
-            )
+        // Portable account: credentials belong to the user, not to one device.
+        // A valid login on a new device replaces the previous active binding,
+        // while still keeping only one active device for the account.
+        val remainingDevices = state.devices.filterValues {
+            it.accountNumber != number
         }
 
         val binding = DeviceBinding(
@@ -406,9 +402,9 @@ object CybercafeRules {
         )
 
         return RuleOutcome(
-            state = state.copy(devices = state.devices + (normalizedKey to binding)),
+            state = state.copy(devices = remainingDevices + (normalizedKey to binding)),
             success = true,
-            message = "Appareil associé.",
+            message = "Session transférée sur cet appareil.",
         )
     }
 
