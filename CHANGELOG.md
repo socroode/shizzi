@@ -3,6 +3,13 @@
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3.5.1] - 2026-10-07
+- Forked from the exact Shizzi 0.4.3.5 Media baseline.
+- Imports the later 0.4.4 feature set while preserving the pre-reconnect client identification and captive-session behavior.
+- Excludes the 0.4.4/0.4.4.1/0.4.4.1.1 changes that introduced portal-before-attribution, MAC session rebinding, sleep-session persistence, single-client stale-NAT reconnect fallback and portable account takeover.
+- Keeps current Media, Series navigation, thumbnails, Media vouchers, Messenger/calls, Shizzi+ distribution, Shizzi Admin features and the local /shizzi-admin.apk portal download.
+- Android versionCode is 29 so this test build can update over 0.4.4.1.1 without uninstalling.
+
 ## [Unreleased]
 
 ## [0.4.4.1.1] - 2026-10-06
