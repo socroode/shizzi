@@ -85,59 +85,30 @@ func handleTCP(
 		// NAT rules), so it is not worth a dumpsys lookup.
 		clientIP = ""
 	} else if traffic != nil {
-		// Captive-portal HTTP must win the race against Android's connectivity
-		// check. A brand-new hotspot client can issue its first port-80 request
-		// before Android has published the NAT tuple that identifies the
-		// physical phone. Waiting the normal 1.5-3.5 s attribution window here
-		// makes Android report "no Internet" instead of opening Shizzi.
-		//
-		// For port 80 while the portal is enabled, do only one immediate
-		// attribution refresh. If the flow is still unknown, render the login
-		// page without an identity. Stateful POSTs resolve the physical client
-		// strictly inside servePortalWithResolver before applying any account.
-		if destinationPort == 80 && traffic.portalEnabled() {
-			clientIP = traffic.resolveFlowClient(
-				"tcp",
-				clientIP,
-				uint16(id.RemotePort),
-				destinationIP,
-				destinationPort,
-				false,
-			)
-			if clientIP == "" {
-				traffic.servePortalWithResolver(client, "", func() string {
-					return traffic.resolveFlowClient(
-						"tcp",
-						sourceOf(id),
-						uint16(id.RemotePort),
-						destinationIP,
-						destinationPort,
-						true,
-					)
-				})
-				return
-			}
-			if destinationIP == portalIP || traffic.portalRequiredFor(clientIP) {
-				traffic.servePortal(client, clientIP)
-				return
-			}
-		} else {
-			clientIP = traffic.resolveFlowClient(
-				"tcp",
-				clientIP,
-				uint16(id.RemotePort),
-				destinationIP,
-				destinationPort,
-				true,
-			)
-			if clientIP == "" {
-				// Unknown physical client: never guess, never bill someone else.
-				client.Close()
-				return
-			}
+		clientIP = traffic.resolveFlowClient(
+			"tcp",
+			clientIP,
+			uint16(id.RemotePort),
+			destinationIP,
+			destinationPort,
+			true,
+		)
+		if clientIP == "" && !dns {
+			// Unknown physical client: never guess, never bill someone else.
+			client.Close()
+			return
 		}
 
-		if !traffic.flowAllowed(clientIP) {
+		if destinationPort == 80 && clientIP != "" &&
+			(destinationIP == portalIP || traffic.portalRequiredFor(clientIP)) {
+			traffic.servePortal(client, clientIP)
+			return
+		}
+		if destinationPort == 80 && clientIP == "" && destinationIP == portalIP {
+			client.Close()
+			return
+		}
+		if !dns && !traffic.flowAllowed(clientIP) {
 			traffic.noteRefusedUnauthorized()
 			client.Close()
 			return
