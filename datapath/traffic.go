@@ -339,10 +339,9 @@ func (m *TrafficManager) flowAllowed(ip string) bool {
 }
 
 func (m *TrafficManager) allowedLocked(ip string, nowMillis int64) bool {
-	if m.portalRequired && !m.portalAuthorizedLocked(ip, nowMillis) {
-		// Internet access is granted only by a successfully authenticated
-		// user account session (account number + password/PIN) with an active
-		// Internet plan. Admin authentication is local management only.
+	if m.portalRequired &&
+		!m.portalAuthorizedLocked(ip, nowMillis) &&
+		!m.adminAuthorizedLocked(ip) {
 		return false
 	}
 	globalUsed := m.totalUpBytes + m.totalDownBytes
@@ -402,7 +401,9 @@ func (m *TrafficManager) waitAllowedWithPortalBypass(
 	client := m.clientLocked(ip)
 	client.LastSeen = now
 	if m.portalRequired {
-		if authorization := m.portalAuthorized[ip]; authorization != nil {
+		if m.adminAuthorizedLocked(ip) {
+			client.setRates(m.adminConfig.DownloadBps, m.adminConfig.UploadBps)
+		} else if authorization := m.portalAuthorized[ip]; authorization != nil {
 			account := m.portalAccounts[authorization.AccountNumber]
 			client.setRates(account.downloadBps(nowMillis), account.uploadBps(nowMillis))
 		}
