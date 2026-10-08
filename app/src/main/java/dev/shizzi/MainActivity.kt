@@ -10,6 +10,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.core.view.WindowCompat
@@ -50,11 +52,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         registerShizukuListeners()
 
-        if (MediaPrefs.isEnabled(this)) {
+        if (RouterActivation.isActivated(this) && MediaPrefs.isEnabled(this)) {
             MediaServerService.start(this)
         }
 
         setContent {
+            val activation = remember { mutableStateOf(RouterActivation.isActivated(this@MainActivity)) }
             val settings by viewModel.settings.collectAsState()
             val loaded = settings ?: return@setContent
 
@@ -73,6 +76,19 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Surface(color = colors.background) {
+                    if (!activation.value) {
+                        RouterActivationScreen { candidate ->
+                            val result = RouterActivation.activate(this@MainActivity, candidate)
+                            if (result == RouterActivationResult.ACTIVATED ||
+                                result == RouterActivationResult.ALREADY_ACTIVATED) {
+                                activation.value = true
+                                if (MediaPrefs.isEnabled(this@MainActivity)) {
+                                    MediaServerService.start(this@MainActivity)
+                                }
+                            }
+                            result
+                        }
+                    } else {
                     val state by viewModel.state.collectAsState()
                     val diagnostics by viewModel.diagnosticsState.collectAsState()
                     val compatibility by viewModel.compatibilityState.collectAsState()
@@ -115,6 +131,7 @@ class MainActivity : ComponentActivity() {
                                 viewModel::regenerateAutomationToken,
                         ),
                     )
+                    }
                 }
             }
         }

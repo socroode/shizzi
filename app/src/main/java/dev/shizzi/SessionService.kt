@@ -63,6 +63,7 @@ class SessionService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        if (!RouterActivation.isActivated(this)) return
         controller.onSessionLost = ::handleSessionLost
         if (!messagingServer.start()) {
             SessionLog.warn("messaging backend failed to start")
@@ -80,6 +81,10 @@ class SessionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!RouterActivation.isActivated(this)) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         isStopping = intent?.action == ACTION_STOP
         reportTo = intent?.getStringExtra(EXTRA_REPORT_AS)
             ?.let { runCatching { AutomationCommand.valueOf(it) }.getOrNull() }
@@ -516,6 +521,7 @@ class SessionService : Service() {
         }
 
         fun start(context: Context, reportAs: AutomationCommand? = null) {
+            check(RouterActivation.isActivated(context)) { "Activation du routeur Shizzi requise" }
             context.startForegroundService(
                 Intent(context, SessionService::class.java).reporting(reportAs),
             )

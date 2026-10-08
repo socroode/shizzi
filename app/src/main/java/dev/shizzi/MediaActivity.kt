@@ -52,6 +52,11 @@ import kotlin.concurrent.thread
 class MediaActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (!RouterActivation.isActivated(this)) {
+            startActivity(Intent(this, MainActivity::class.java))
+            finish()
+            return
+        }
         setContent {
             ShizziTheme {
                 MediaScreen(onBack = ::finish)

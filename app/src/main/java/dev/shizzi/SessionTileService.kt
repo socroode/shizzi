@@ -37,6 +37,10 @@ class SessionTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
+        if (!RouterActivation.isActivated(this)) {
+            openApp()
+            return
+        }
 
         val render = currentRender()
 
@@ -69,6 +73,14 @@ class SessionTileService : TileService() {
 
     private fun publish(session: SessionUiState) {
         val tile = qsTile ?: return
+        if (!RouterActivation.isActivated(this)) {
+            tile.state = android.service.quicksettings.Tile.STATE_UNAVAILABLE
+            tile.label = SessionTile.LABEL
+            tile.subtitle = "Activation requise"
+            tile.contentDescription = "Shizzi, activation PIN requise"
+            tile.updateTile()
+            return
+        }
         val render = SessionTile.render(session, ShizukuGate.currentState(), isStopping)
 
         if (session.status != UiStatus.LOADING) isStopping = false

@@ -24,6 +24,12 @@ class MediaServerService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!RouterActivation.isActivated(this)) {
+            stopServer()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         syncConfig(intent)
         when (intent?.action ?: ACTION_START) {
             ACTION_STOP -> {
@@ -160,6 +166,7 @@ class MediaServerService : Service() {
                 }
 
         fun start(context: Context) {
+            if (!RouterActivation.isActivated(context)) return
             ContextCompat.startForegroundService(
                 context,
                 configuredIntent(context, ACTION_START),
@@ -173,6 +180,7 @@ class MediaServerService : Service() {
         }
 
         fun restart(context: Context) {
+            if (!RouterActivation.isActivated(context)) return
             ContextCompat.startForegroundService(
                 context,
                 configuredIntent(context, ACTION_RESTART),
