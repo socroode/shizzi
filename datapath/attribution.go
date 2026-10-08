@@ -531,15 +531,6 @@ func (r *flowAttributionResolver) refreshIfOlderThan(maxAge time.Duration) {
 	r.lastError = ""
 }
 
-func (r *flowAttributionResolver) clientMAC(ip string) string {
-	if r == nil || strings.TrimSpace(ip) == "" {
-		return ""
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return strings.ToLower(strings.TrimSpace(r.clientMACs[ip]))
-}
-
 func (r *flowAttributionResolver) presence() clientPresence {
 	if r == nil {
 		return clientPresence{}
