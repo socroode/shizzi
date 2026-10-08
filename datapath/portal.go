@@ -168,16 +168,15 @@ type PortalClaimResult struct {
 	Message string `json:"message"`
 }
 
-// PortalAuthorization is one logged-in session: one physical client using one
-// account. The resolved IP is the map key; DeviceMAC, when Android exposes it,
-// keeps the same session attached to the same phone across sleep/reassociation
-// and prevents a different phone reusing the DHCP address from inheriting it.
+// PortalAuthorization is one logged-in session: one physical client (IP as
+// resolved from Android's pre-NAT state) using one account. An account may
+// have only one active device session at a time, but remains portable after
+// logout, admin disconnect, or departed-client cleanup.
 type PortalAuthorization struct {
 	AccountNumber   string
 	StartedAtMillis int64
 	UpBytes         int64
 	DownBytes       int64
-	DeviceMAC       string
 
 	missingSince time.Time
 }
@@ -319,16 +318,6 @@ func (m *TrafficManager) portalRequiredFor(ip string) bool {
 		!m.adminAuthorizedLocked(ip)
 }
 
-// portalEnabled reports whether Shizzi is currently gating client Internet
-// behind the captive portal. It deliberately does not require a client
-// identity: the first Android connectivity probe may arrive before Android
-// has published the NAT tuple for that phone.
-func (m *TrafficManager) portalEnabled() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.portalRequired
-}
-
 // remainingDataLocked is the account's live Data balance, shared by all of
 // its sessions.
 func (m *TrafficManager) remainingDataLocked(account PortalAccount) int64 {
@@ -424,10 +413,6 @@ func (m *TrafficManager) submitPortalAccountLogin(
 	}
 	number := normalizeAccountNumber(rawNumber)
 	now := time.Now().UnixMilli()
-	deviceMAC := ""
-	if m.flowAttribution != nil {
-		deviceMAC = m.flowAttribution.clientMAC(ip)
-	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -439,20 +424,17 @@ func (m *TrafficManager) submitPortalAccountLogin(
 	if hashPortalPin(account.PinSalt, pin) != account.PinHash {
 		return false, "Compte ou code incorrect."
 	}
-	// One account = one active device, but never a permanent device binding.
-	// A valid login on a new phone takes over the account immediately by
-	// replacing the previous live authorization. The MAC is used only to keep
-	// the SAME physical phone authenticated across sleep/reassociation/DHCP,
-	// never to lock the account to that phone.
+	// One account = one active device. The account is not permanently bound
+	// to an IP/MAC: once the previous session is logged out, revoked by the
+	// admin, or pruned after departure, it can be opened on another device.
 	for otherIP, authorization := range m.portalAuthorized {
 		if otherIP != ip && authorization.AccountNumber == number {
-			m.clearPortalSessionStateLocked(otherIP)
+			return false, "Ce compte est déjà utilisé sur un autre appareil."
 		}
 	}
 	m.portalAuthorized[ip] = &PortalAuthorization{
 		AccountNumber:   number,
 		StartedAtMillis: now,
-		DeviceMAC:       deviceMAC,
 	}
 	delete(m.portalClaimResults, ip)
 	if !m.accountHasInternetLocked(account, now) {
@@ -890,18 +872,6 @@ func isAdminAppDownloadPath(rawPath string) bool {
 }
 
 func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
-	m.servePortalWithResolver(conn, clientIP, nil)
-}
-
-// servePortalWithResolver lets a brand-new client see the captive page before
-// its physical IP has been resolved. The resolver is invoked only when a
-// request can change or access identity-bound state; merely displaying the
-// login page never waits for the normal multi-client attribution window.
-func (m *TrafficManager) servePortalWithResolver(
-	conn net.Conn,
-	clientIP string,
-	resolveClient func() string,
-) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
 
@@ -911,22 +881,11 @@ func (m *TrafficManager) servePortalWithResolver(
 	}
 	defer request.Body.Close()
 
-	path := request.URL.Path
-	identityBoundRequest :=
-		request.Method != http.MethodGet &&
-		request.Method != http.MethodHead ||
-		strings.HasPrefix(path, "/api/v1/admin/") ||
-		path == "/status.json" ||
-		path == "/media" || strings.HasPrefix(path, "/media/") ||
-		path == "/chat" || strings.HasPrefix(path, "/chat/")
-	if clientIP == "" && resolveClient != nil && identityBoundRequest {
-		clientIP = resolveClient()
-	}
-
 	if m.serveAdminAPI(conn, request, clientIP) {
 		return
 	}
 
+	path := request.URL.Path
 	isMediaRequest := (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
 		(path == "/media" || strings.HasPrefix(path, "/media/"))
 	isChatRequest := path == "/chat" || strings.HasPrefix(path, "/chat/")
