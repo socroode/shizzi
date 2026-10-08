@@ -4,10 +4,12 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.4.3.5.2] - 2026-10-07
-- Internet access now requires a successfully authenticated user account session: account number + password/PIN.
-- Shizzi Admin authentication no longer grants general Internet access; Admin remains local management only.
-- A voucher cannot authorize Internet by itself and can only recharge an already authenticated user account.
-- Keeps the 0.4.3.5 identification/session behavior and the 0.4.4 feature set imported by 0.4.3.5.1.
+- User accounts are portable: a valid account number + password/PIN can move the active session to another client device.
+- Only one active device is kept for a user account at a time; the previous client loses the account session when the new client authenticates successfully.
+- No Wi-Fi forget/disconnect/reconnect is required to transfer the user account.
+- Keeps the 0.4.3.5 client identification/captive-network behavior: no MAC session rebinding, sleep-session persistence, portal-before-attribution or stale-NAT reconnect fallback from 0.4.4.x.
+- Keeps the existing Shizzi Admin behavior unchanged from 0.4.3.5.1.
+- Keeps the later Media, Series, thumbnails, Media vouchers, Messenger/calls, Shizzi+, Admin and local APK download features.
 - Android versionCode is 30 so this test build can update over 0.4.3.5.1 and 0.4.4.1.1.
 
 ## [0.4.3.5.1] - 2026-10-07
