@@ -628,15 +628,21 @@ class MainActivity : Activity() {
     }
 
     private fun renderDevices(sessions: JSONArray) {
-        section("Appareils connectés")
-        if (sessions.length() == 0) info("Aucune session client active.")
+        section("Appareils et sessions")
+        if (sessions.length() == 0) info("Aucune session client enregistrée.")
         for (i in 0 until sessions.length()) {
             val item = sessions.optJSONObject(i) ?: continue
             val ip = item.optString("ip")
+            val presence = when (item.optString("presence")) {
+                "online" -> "Wi-Fi confirmé"
+                "missing" -> "Appareil absent (vérification 45 s)"
+                else -> "Wi-Fi non vérifiable (session conservée)"
+            }
             info(
                 "$ip · " + item.optString("mac").ifBlank { "MAC —" } +
                     "\nCompte " + item.optString("accountNumber") +
-                    " · " + if (item.optBoolean("authorized")) "Internet actif" else "Internet bloqué",
+                    " · " + (if (item.optBoolean("authorized")) "Internet autorisé" else "Internet bloqué") +
+                    "\n" + presence,
             )
             button("Déconnecter $ip") {
                 command("session.disconnect", JSONObject().put("ip", ip))
