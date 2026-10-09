@@ -539,6 +539,23 @@ type trafficStatsSnapshot struct {
 	MediaDiagnostics         []MediaDiagnostic           `json:"mediaDiagnostics,omitempty"`
 }
 
+// refreshClientPresence runs outside statistics polling and outside m.mu:
+// dumpsys can take over a second on some Android devices. A lost client is
+// released only after 45 seconds of consecutive authoritative absence.
+func (m *TrafficManager) refreshClientPresence() {
+	m.mu.Lock()
+	active := len(m.portalAuthorized) > 0 || len(m.adminSessions) > 0
+	m.mu.Unlock()
+	if !active {
+		return
+	}
+	m.flowAttribution.refreshIfOlderThan(clientPresenceRefresh)
+	presence := m.flowAttribution.presence()
+	m.mu.Lock()
+	m.pruneDepartedLocked(presence, time.Now())
+	m.mu.Unlock()
+}
+
 func (m *TrafficManager) statsJSON() string {
 	// A NAT/tethering client-list snapshot is not reliable evidence that
 	// an authenticated phone disconnected. Never revoke account sessions
@@ -572,11 +589,19 @@ func (m *TrafficManager) statsJSON() string {
 	nowMillis := time.Now().UnixMilli()
 	for ip, authorization := range m.portalAuthorized {
 		account := m.portalAccounts[authorization.AccountNumber]
+		presenceStatus := "unknown"
+		if presence.authoritative {
+			presenceStatus = "missing"
+			if _, present := presence.clients[ip]; present {
+				presenceStatus = "online"
+			}
+		}
 		snapshot.PortalAuthorizations = append(
 			snapshot.PortalAuthorizations,
 			PortalAuthorizationStatus{
 				IP:                   ip,
 				MAC:                  presence.macs[ip],
+				Presence:             presenceStatus,
 				AccountNumber:        authorization.AccountNumber,
 				StartedAtMillis:      authorization.StartedAtMillis,
 				SessionDataUsedBytes: authorization.UpBytes + authorization.DownBytes,
@@ -659,6 +684,8 @@ func (m *TrafficManager) pruneDepartedLocked(presence clientPresence, now time.T
 		}
 		if now.Sub(authorization.missingSince) >= departedClientGrace {
 			delete(m.portalAuthorized, ip)
+			delete(m.portalClaimResults, ip)
+			m.removePendingClaimsForIPLocked(ip)
 		}
 	}
 	for token, session := range m.adminSessions {
