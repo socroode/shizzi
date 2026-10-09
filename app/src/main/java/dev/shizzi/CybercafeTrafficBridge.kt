@@ -44,6 +44,7 @@ data class LivePortalAuthorization(
     val upBytes: Long = 0L,
     val downBytes: Long = 0L,
     val authorized: Boolean = false,
+    val presence: String = "unknown",
     val downloadBps: Long = 0L,
     val uploadBps: Long = 0L,
 )
@@ -145,6 +146,7 @@ fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
                         upBytes = item.optLong("upBytes"),
                         downBytes = item.optLong("downBytes"),
                         authorized = item.optBoolean("authorized"),
+                        presence = item.optString("presence", "unknown"),
                         downloadBps = item.optLong("downloadBps"),
                         uploadBps = item.optLong("uploadBps"),
                     ),
