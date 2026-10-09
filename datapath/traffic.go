@@ -535,13 +535,11 @@ type trafficStatsSnapshot struct {
 }
 
 func (m *TrafficManager) statsJSON() string {
-	// Keep the client list fresh even when no new flow triggers a dumpsys, so
-	// sessions of phones that left the hotspot can be released.
-	m.flowAttribution.refreshIfOlderThan(clientPresenceRefresh)
-	presence := m.flowAttribution.presence()
-
+	// A NAT/tethering client-list snapshot is not reliable evidence that
+	// an authenticated phone disconnected. Never revoke account sessions
+	// merely because dumpsys temporarily omitted a client. Explicit login
+	// takeover, logout and administrator revocation control account ownership.
 	m.mu.Lock()
-	m.pruneDepartedLocked(presence, time.Now())
 
 	snapshot := trafficStatsSnapshot{
 		Epoch:                    m.epoch,
