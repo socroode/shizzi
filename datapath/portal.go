@@ -463,6 +463,10 @@ func (m *TrafficManager) submitPortalLogout(ip string) (bool, string) {
 		return false, "Aucune session ouverte sur cet appareil."
 	}
 	delete(m.portalAuthorized, ip)
+	delete(m.portalClaimResults, ip)
+	// A pending voucher claim belongs to the authenticated session that
+	// submitted it, not to the next phone assigned the same IP.
+	m.removePendingClaimsForIPLocked(ip)
 	return true, "Session fermée sur cet appareil."
 }
 
@@ -509,8 +513,23 @@ func (m *TrafficManager) revokePortalClient(ip string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.portalAuthorized, ip)
+	delete(m.portalClaimResults, ip)
+	m.removePendingClaimsForIPLocked(ip)
 }
 
+// removePendingClaimsForIPLocked is called with m.mu held.
+func (m *TrafficManager) removePendingClaimsForIPLocked(ip string) {
+	if len(m.portalRechargeClaims) == 0 {
+		return
+	}
+	filtered := m.portalRechargeClaims[:0]
+	for _, claim := range m.portalRechargeClaims {
+		if claim.IP != ip {
+			filtered = append(filtered, claim)
+		}
+	}
+	m.portalRechargeClaims = filtered
+}
 
 func randomHex(byteCount int) string {
 	bytes := make([]byte, byteCount)
