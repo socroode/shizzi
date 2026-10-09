@@ -432,3 +432,46 @@ func TestChangingAccountPINRevokesPreviousDeviceWithoutWiFiDisconnect(t *testing
   t.Fatal("new credentials did not restore Internet")
  }
 }
+
+func TestLogoutClearsPendingVoucherClaimsForDepartingClient(t *testing.T) {
+ manager := newTrafficManager()
+ manager.setPortalConfig(true, portalConfigForTest(t))
+ ip := "192.168.7.66"
+ if ok, message := manager.submitPortalAccountLogin(ip, "1001", "1234"); !ok {
+  t.Fatalf("login failed: %s", message)
+ }
+ if ok, message := manager.submitPortalRecharge(ip, "voucher123"); !ok {
+  t.Fatalf("recharge failed: %s", message)
+ }
+ if len(manager.portalRechargeClaims) != 1 {
+  t.Fatal("expected pending voucher claim")
+ }
+ if ok, message := manager.submitPortalLogout(ip); !ok {
+  t.Fatalf("logout failed: %s", message)
+ }
+ if len(manager.portalRechargeClaims) != 0 {
+  t.Fatal("pending voucher claim survived logout")
+ }
+ if !manager.portalRequiredFor(ip) {
+  t.Fatal("logout did not revoke Internet")
+ }
+}
+
+func TestAdminRevocationClearsPendingVoucherClaims(t *testing.T) {
+ manager := newTrafficManager()
+ manager.setPortalConfig(true, portalConfigForTest(t))
+ ip := "192.168.7.66"
+ if ok, message := manager.submitPortalAccountLogin(ip, "1001", "1234"); !ok {
+  t.Fatalf("login failed: %s", message)
+ }
+ if ok, message := manager.submitPortalRecharge(ip, "voucher123"); !ok {
+  t.Fatalf("recharge failed: %s", message)
+ }
+ manager.revokePortalClient(ip)
+ if len(manager.portalRechargeClaims) != 0 {
+  t.Fatal("pending voucher claim survived admin revocation")
+ }
+ if !manager.portalRequiredFor(ip) {
+  t.Fatal("admin revocation did not block Internet")
+ }
+}
