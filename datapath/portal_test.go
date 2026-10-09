@@ -392,3 +392,43 @@ func TestStatsSnapshotUsesCachedMACWithoutRefreshingTethering(t *testing.T) {
   t.Fatal("stats snapshot revoked the authenticated session")
  }
 }
+
+func TestChangingAccountPINRevokesPreviousDeviceWithoutWiFiDisconnect(t *testing.T) {
+ manager := newTrafficManager()
+ raw := portalConfigForTest(t)
+ manager.setPortalConfig(true, raw)
+ ip := "192.168.7.66"
+ if ok, message := manager.submitPortalAccountLogin(ip, "1001", "1234"); !ok {
+  t.Fatalf("initial login failed: %s", message)
+ }
+ // Routine quota/speed sync with unchanged credentials must preserve login.
+ manager.setPortalConfig(true, raw)
+ if manager.portalRequiredFor(ip) {
+  t.Fatal("unchanged credentials unexpectedly revoked the session")
+ }
+ var config portalConfig
+ if err := json.Unmarshal([]byte(raw), &config); err != nil {
+  t.Fatal(err)
+ }
+ config.Accounts[0].PinHash = hashPortalPin(config.Accounts[0].PinSalt, "5678")
+ changed, err := json.Marshal(config)
+ if err != nil {
+  t.Fatal(err)
+ }
+ manager.setPortalConfig(true, string(changed))
+ if !manager.portalRequiredFor(ip) {
+  t.Fatal("old PIN session retained Internet after credential rotation")
+ }
+ if manager.mediaAccountAuthenticated(ip) {
+  t.Fatal("old PIN session retained media access after credential rotation")
+ }
+ if ok, _ := manager.submitPortalAccountLogin(ip, "1001", "1234"); ok {
+  t.Fatal("old PIN was still accepted")
+ }
+ if ok, message := manager.submitPortalAccountLogin(ip, "1001", "5678"); !ok {
+  t.Fatalf("new PIN failed: %s", message)
+ }
+ if manager.portalRequiredFor(ip) {
+  t.Fatal("new credentials did not restore Internet")
+ }
+}
