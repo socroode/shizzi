@@ -184,6 +184,7 @@ type PortalAuthorization struct {
 type PortalAuthorizationStatus struct {
 	IP                   string `json:"ip"`
 	MAC                  string `json:"mac,omitempty"`
+	Presence             string `json:"presence"` // online, missing, unknown
 	AccountNumber        string `json:"accountNumber"`
 	StartedAtMillis      int64  `json:"startedAtMillis"`
 	SessionDataUsedBytes int64  `json:"sessionDataUsedBytes"`
