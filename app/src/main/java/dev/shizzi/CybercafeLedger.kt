@@ -130,6 +130,7 @@ data class LiveSession(
     val sessionUpBytes: Long,
     val sessionDownBytes: Long,
     val startedAtMillis: Long,
+    val presence: String = "unknown",
 )
 
 fun PrepaidAccount.planLabel(nowMillis: Long): String = when {
