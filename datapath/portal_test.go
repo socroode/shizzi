@@ -363,3 +363,32 @@ func TestStatsSnapshotDoesNotRevokeAuthenticatedSessionOnMissingPresence(t *test
   t.Fatal("stats poll revoked a valid account session")
  }
 }
+
+func TestStatsSnapshotUsesCachedMACWithoutRefreshingTethering(t *testing.T) {
+ manager := newTrafficManager()
+ manager.setPortalConfig(true, portalConfigForTest(t))
+ ip := "192.168.7.66"
+ if ok, message := manager.submitPortalAccountLogin(ip, "1001", "1234"); !ok {
+  t.Fatalf("login failed: %s", message)
+ }
+ manager.flowAttribution.mu.Lock()
+ manager.flowAttribution.clientMACs[ip] = "02:11:22:33:44:55"
+ manager.flowAttribution.dumpFn = func() (string, error) {
+  t.Fatal("stats must not call dumpsys or refresh tethering")
+  return "", nil
+ }
+ manager.flowAttribution.mu.Unlock()
+ var snapshot trafficStatsSnapshot
+ if err := json.Unmarshal([]byte(manager.statsJSON()), &snapshot); err != nil {
+  t.Fatal(err)
+ }
+ if len(snapshot.PortalAuthorizations) != 1 {
+  t.Fatalf("authorizations=%d, want 1", len(snapshot.PortalAuthorizations))
+ }
+ if got := snapshot.PortalAuthorizations[0].MAC; got != "02:11:22:33:44:55" {
+  t.Fatalf("cached MAC=%q, want 02:11:22:33:44:55", got)
+ }
+ if manager.portalRequiredFor(ip) {
+  t.Fatal("stats snapshot revoked the authenticated session")
+ }
+}
