@@ -6,6 +6,7 @@ import (
     "net"
     "strings"
     "sync"
+    "sync/atomic"
     "testing"
     "time"
 
@@ -125,15 +126,9 @@ Client Information:
 func TestPortalAttributionRetriesUntilLateExactRule(t *testing.T) {
     traffic := newPortalManager(t)
     pushConfig(t, traffic, accountForTest("1001", "pass", 100000))
-    stack := linkedStacks(t, traffic)
-    conn, err := gonet.DialTCP(stack, tcpip.FullAddress{
-        NIC: 1, Addr: tcpip.AddrFrom4([4]byte{192, 0, 2, 1}), Port: 80,
-    }, ipv4.ProtocolNumber)
-    if err != nil {
-        t.Fatal(err)
-    }
-    defer conn.Close()
-    sourcePort := conn.LocalAddr().(*net.TCPAddr).Port
+    // The dump callback is installed before any forwarding goroutine starts.
+    // The translated port is published atomically after DialTCP.
+    var translatedPort atomic.Int64
     began := time.Now()
     traffic.flowAttribution.dumpFn = func() (string, error) {
         if time.Since(began) < 1700*time.Millisecond {
@@ -144,8 +139,17 @@ tcp [02:00:00:00:00:01] 47(ap0) %s:41000 -> 76(testtun0) 192.0.2.2:%d -> 192.0.2
 IPv4 Downstream:
 Client Information:
 {android.net.ip.IpServer@1={/%s=downstream: 41, /%s=downstream: 41}}`,
-            phoneB, sourcePort, phoneA, phoneB), nil
+            phoneB, translatedPort.Load(), phoneA, phoneB), nil
     }
+    stack := linkedStacks(t, traffic)
+    conn, err := gonet.DialTCP(stack, tcpip.FullAddress{
+        NIC: 1, Addr: tcpip.AddrFrom4([4]byte{192, 0, 2, 1}), Port: 80,
+    }, ipv4.ProtocolNumber)
+    if err != nil {
+        t.Fatal(err)
+    }
+    defer conn.Close()
+    translatedPort.Store(int64(conn.LocalAddr().(*net.TCPAddr).Port))
     _ = conn.SetDeadline(time.Now().Add(10 * time.Second))
     fmt.Fprint(conn, "GET / HTTP/1.1\r\nHost: 192.0.2.1\r\nConnection: close\r\n\r\n")
     data, err := io.ReadAll(conn)
