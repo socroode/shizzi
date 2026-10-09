@@ -339,6 +339,7 @@ class SessionService : Service() {
                 sessionUpBytes = session.upBytes,
                 sessionDownBytes = session.downBytes,
                 startedAtMillis = session.startedAtMillis,
+                presence = session.presence,
             )
         }
         rates.retain(keys)
