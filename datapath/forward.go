@@ -94,8 +94,15 @@ func handleTCP(
 			true,
 		)
 		if clientIP == "" && !dns {
-			// Unknown physical client: never guess, never bill someone else.
-			client.Close()
+			// NAT attribution may disappear while Android still keeps the
+			// phone associated with the hotspot. Never assign somebody else's
+			// account, but keep local HTTP recovery accessible (including
+			// Android's captive-portal HTTP probe on an external address).
+			if destinationPort == 80 && traffic.portalRecoveryNeeded(destinationIP) {
+				traffic.serveUnidentifiedPortal(client)
+			} else {
+				client.Close()
+			}
 			return
 		}
 
