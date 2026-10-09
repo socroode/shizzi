@@ -34,6 +34,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - uses: android-actions/setup-android@v4
+      - name: Install Android NDK
+        run: sdkmanager --install "ndk;27.0.12077973"
       - uses: gradle/actions/setup-gradle@v6
       - name: Test Shizzi router, Plus and Admin
         run: ./gradlew :app:testDebugUnitTest :conso:testDebugUnitTest :admin:testDebugUnitTest --no-daemon
