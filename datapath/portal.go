@@ -283,6 +283,7 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 			oldAccount.PinHash != newAccount.PinHash {
 			delete(m.portalAuthorized, ip)
 			delete(m.portalClaimResults, ip)
+			m.removePendingClaimsForIPLocked(ip)
 		}
 	}
 	m.portalAccounts = accounts
@@ -299,6 +300,8 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 		account, ok := accounts[authorization.AccountNumber]
 		if !ok || !account.Enabled {
 			delete(m.portalAuthorized, ip)
+			delete(m.portalClaimResults, ip)
+			m.removePendingClaimsForIPLocked(ip)
 		}
 	}
 }
