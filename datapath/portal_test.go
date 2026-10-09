@@ -98,40 +98,34 @@ func TestPortalRechargeClaimCarriesAccountAndClient(t *testing.T) {
 	}
 }
 
-func TestSameAccountIsRefusedOnSecondActiveClient(t *testing.T) {
-	manager := newTrafficManager()
-	manager.setPortalConfig(true, portalConfigForTest(t))
-
-	firstOK, firstMessage := manager.submitPortalAccountLogin(
-		"192.168.7.66",
-		"1001",
-		"1234",
-	)
-	if !firstOK {
-		t.Fatalf("first login failed: %s", firstMessage)
-	}
-
-	secondOK, secondMessage := manager.submitPortalAccountLogin(
-		"192.168.7.77",
-		"1001",
-		"1234",
-	)
-	if secondOK {
-		t.Fatal("second client unexpectedly opened the same account")
-	}
-	if secondMessage != "Ce compte est déjà utilisé sur un autre appareil." {
-		t.Fatalf("unexpected refusal message: %s", secondMessage)
-	}
-
-	if manager.portalRequiredFor("192.168.7.66") {
-		t.Fatal("first authenticated client returned to the portal")
-	}
-	if !manager.portalRequiredFor("192.168.7.77") {
-		t.Fatal("second client was authorized")
-	}
-	if len(manager.portalAuthorized) != 1 {
-		t.Fatalf("authorizations=%d, want 1", len(manager.portalAuthorized))
-	}
+func TestSameAccountTransfersToSecondAuthenticatedClient(t *testing.T) {
+ manager := newTrafficManager()
+ manager.setPortalConfig(true, portalConfigForTest(t))
+ firstIP, secondIP := "192.168.7.66", "192.168.7.77"
+ if ok, message := manager.submitPortalAccountLogin(firstIP, "1001", "1234"); !ok {
+  t.Fatalf("first login failed: %s", message)
+ }
+ if ok, _ := manager.submitPortalAccountLogin(secondIP, "1001", "wrong"); ok {
+  t.Fatal("invalid PIN stole an active account")
+ }
+ if manager.portalRequiredFor(firstIP) {
+  t.Fatal("invalid takeover revoked first client's access")
+ }
+ if ok, message := manager.submitPortalAccountLogin(secondIP, "1001", "1234"); !ok {
+  t.Fatalf("authenticated takeover failed: %s", message)
+ }
+ if !manager.portalRequiredFor(firstIP) {
+  t.Fatal("first client still has Internet after account takeover")
+ }
+ if manager.portalRequiredFor(secondIP) {
+  t.Fatal("second authenticated client was denied Internet")
+ }
+ if len(manager.portalAuthorized) != 1 {
+  t.Fatalf("authorizations=%d, want 1", len(manager.portalAuthorized))
+ }
+ if !manager.mediaAccountAuthenticated(secondIP) || manager.mediaAccountAuthenticated(firstIP) {
+  t.Fatal("media session did not follow the authenticated account")
+ }
 }
 
 
