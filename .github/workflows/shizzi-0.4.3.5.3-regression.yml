@@ -1,0 +1,39 @@
+name: Shizzi 0.4.3.5.3 regression tests
+
+on:
+  push:
+    branches:
+      - test/0.4.3.5.3
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shizzi-04353-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  datapath:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: datapath/go.mod
+          cache-dependency-path: datapath/go.sum
+      - name: Test portal, attribution, routing and account regressions
+        working-directory: datapath
+        run: go test -count=1 ./...
+
+  android-unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Test Shizzi router, Plus and Admin
+        run: ./gradlew :app:testDebugUnitTest :conso:testDebugUnitTest :admin:testDebugUnitTest --no-daemon
