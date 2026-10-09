@@ -315,9 +315,10 @@ private fun AccountEditor(
     state.accounts.values.sortedBy(PrepaidAccount::number).forEach { account ->
         AccountRow(account)
         val accountSessions = sessions.filter { it.accountNumber == account.number }
+        val onlineCount = accountSessions.count { it.presence == "online" }
         Text(
-            if (accountSessions.isEmpty()) "Aucun appareil connecté"
-            else "${accountSessions.size} appareil(s) connecté(s)",
+            if (accountSessions.isEmpty()) "Aucune session enregistrée"
+            else "$onlineCount appareil(s) confirmé(s) sur le Wi-Fi · ${accountSessions.size} session(s) enregistrée(s)",
             color = ShizziTheme.colors.onSurfaceMuted,
         )
         accountSessions.forEach { session ->
@@ -929,13 +930,10 @@ private fun ConnectedDevices(
 ) {
     val sessions by SessionService.liveSessions.collectAsState()
     val diagnostics by SessionService.attributionDiagnostics.collectAsState()
-    SectionTitle("Connected Devices")
+    SectionTitle("Appareils et sessions")
 
     if (sessions.isEmpty()) {
-        Text(
-            "Aucun appareil connecté. Chaque appareil apparaît ici après " +
-                "authentification sur le portail.",
-        )
+        Text("Aucune session enregistrée. Un appareil apparaît après authentification sur le portail.")
     }
 
     sessions.sortedWith(compareBy({ it.accountNumber }, { it.ip })).forEach { session ->
@@ -945,6 +943,13 @@ private fun ConnectedDevices(
             style = ShizziTheme.typography.heading,
         )
         Text("MAC : " + session.mac.ifBlank { "—" })
+        Text(
+            "Présence Wi-Fi : " + when (session.presence) {
+                "online" -> "confirmée"
+                "missing" -> "absence détectée (délai de sécurité 45 s)"
+                else -> "non vérifiable (session conservée)"
+            },
+        )
         Text(
             "Compte : " + (account?.name?.takeIf { it.isNotBlank() } ?: "Compte") +
                 " (N° " + session.accountNumber + ")",
@@ -960,7 +965,7 @@ private fun ConnectedDevices(
             "Consommation session : " +
                 formatBytes(session.sessionUpBytes + session.sessionDownBytes),
         )
-        Text("Connecté depuis : " + formatDate(session.startedAtMillis))
+        Text("Session ouverte depuis : " + formatDate(session.startedAtMillis))
         TextButton(onClick = {
             SessionService.disconnectSession(session.ip)
             onMessage("Session ${session.ip} fermée. Le compte est conservé.")
