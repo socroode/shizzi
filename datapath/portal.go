@@ -424,12 +424,13 @@ func (m *TrafficManager) submitPortalAccountLogin(
 	if hashPortalPin(account.PinSalt, pin) != account.PinHash {
 		return false, "Compte ou code incorrect."
 	}
-	// One account = one active device. The account is not permanently bound
-	// to an IP/MAC: once the previous session is logged out, revoked by the
-	// admin, or pruned after departure, it can be opened on another device.
+	// One account = one active device. A successful login takes over the
+	// account from any previous client without disconnecting its Wi-Fi.
+	// Remove old authorizations only AFTER verifying the new credentials.
 	for otherIP, authorization := range m.portalAuthorized {
-		if otherIP != ip && authorization.AccountNumber == number {
-			return false, "Ce compte est déjà utilisé sur un autre appareil."
+		if otherIP != ip && authorization != nil && authorization.AccountNumber == number {
+			delete(m.portalAuthorized, otherIP)
+			delete(m.portalClaimResults, otherIP)
 		}
 	}
 	m.portalAuthorized[ip] = &PortalAuthorization{
