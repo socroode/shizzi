@@ -9,6 +9,7 @@ package datapath
 import (
 	"fmt"
 	"net"
+	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
@@ -31,6 +32,7 @@ type Session struct {
 	stack   *stack.Stack
 	binding *networkBinding
 	traffic *TrafficManager
+	stopPresence chan struct{}
 }
 
 // Start builds a netstack over tunFD, already open, and attaches it to the TUN.
@@ -84,7 +86,34 @@ func Start(tunFD int, mtu int) (*Session, error) {
 		Control: binding.control,
 	}, traffic)
 
-	return &Session{stack: netStack, binding: binding, traffic: traffic}, nil
+	session := &Session{
+		stack: netStack,
+		binding: binding,
+		traffic: traffic,
+		stopPresence: make(chan struct{}),
+	}
+	go session.maintainClientPresence(session.stopPresence)
+	return session, nil
+}
+
+// Keep account/device presence in sync without blocking traffic statistics,
+// authentication, NAT attribution or the local captive portal.
+func (s *Session) maintainClientPresence(stop <-chan struct{}) {
+	ticker := time.NewTicker(clientPresenceRefresh)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			select {
+			case <-stop:
+				return
+			default:
+				s.traffic.refreshClientPresence()
+			}
+		}
+	}
 }
 
 // SetNetwork pins every subsequent dial to a handle from
@@ -198,6 +227,10 @@ func (s *Session) ResetTrafficStats() {
 func (s *Session) Stop() {
 	if s.stack == nil {
 		return
+	}
+	if s.stopPresence != nil {
+		close(s.stopPresence)
+		s.stopPresence = nil
 	}
 	s.stack.Close()
 	s.stack = nil
