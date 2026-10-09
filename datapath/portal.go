@@ -273,6 +273,18 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 			i++
 		}
 	}
+	// A credential rotation must invalidate sessions authenticated with the
+	// previous PIN. Merely replacing portalAccounts would leave the old
+	// device online without ever proving knowledge of the new password.
+	for ip, authorization := range m.portalAuthorized {
+		oldAccount, existed := m.portalAccounts[authorization.AccountNumber]
+		newAccount, stillExists := accounts[authorization.AccountNumber]
+		if !existed || !stillExists || oldAccount.PinSalt != newAccount.PinSalt ||
+			oldAccount.PinHash != newAccount.PinHash {
+			delete(m.portalAuthorized, ip)
+			delete(m.portalClaimResults, ip)
+		}
+	}
 	m.portalAccounts = accounts
 	if m.portalClaimResults == nil {
 		m.portalClaimResults = make(map[string]PortalClaimResult)
