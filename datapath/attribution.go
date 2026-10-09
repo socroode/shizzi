@@ -59,6 +59,7 @@ type flowAttributionResolver struct {
 	flows            map[flowAttributionKey]string
 	connectedClients map[string]struct{}
 	clientMACs       map[string]string
+	clientListKnown  bool
 	lastRefresh      time.Time
 	lastSuccess      time.Time
 	lastError        string
@@ -517,6 +518,10 @@ func (r *flowAttributionResolver) refreshIfOlderThan(maxAge time.Duration) {
 	}
 	r.flows = flows
 	r.connectedClients = clients
+	// An explicitly emitted Client Information section can establish that
+	// Android currently lists zero clients. Without it, an empty NAT dump
+	// cannot prove that a sleeping client has left the hotspot.
+	r.clientListKnown = strings.Contains(raw, "Client Information:") || len(clients) > 0
 	for ip, mac := range macs {
 		r.clientMACs[ip] = mac
 	}
@@ -540,7 +545,7 @@ func (r *flowAttributionResolver) presence() clientPresence {
 	result := clientPresence{
 		clients: make(map[string]struct{}, len(r.connectedClients)),
 		macs:    make(map[string]string, len(r.clientMACs)),
-		authoritative: r.lastError == "" && len(r.connectedClients) > 0 &&
+		authoritative: r.lastError == "" && r.clientListKnown &&
 			time.Since(r.lastSuccess) < presenceMaxAge,
 	}
 	for ip := range r.connectedClients {
@@ -568,7 +573,8 @@ func (r *flowAttributionResolver) snapshot() flowAttributionSnapshot {
 		UnresolvedUDPFlows:    r.unresolvedUDPFlows,
 		LooseCandidateFlows:   r.looseCandidateFlows,
 		ClientCount:           len(r.connectedClients),
-		ClientListKnown:       len(r.connectedClients) > 0,
+		ClientListKnown:       r.lastError == "" && r.clientListKnown &&
+			time.Since(r.lastSuccess) < presenceMaxAge,
 		SlowestResolveMillis:  r.slowestResolve.Milliseconds(),
 		DumpCount:             r.dumpCount,
 		LastDumpMillis:        r.lastDumpDuration.Milliseconds(),
