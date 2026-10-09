@@ -539,6 +539,9 @@ func (m *TrafficManager) statsJSON() string {
 	// an authenticated phone disconnected. Never revoke account sessions
 	// merely because dumpsys temporarily omitted a client. Explicit login
 	// takeover, logout and administrator revocation control account ownership.
+	// Read cached MAC metadata without treating a transient client-list gap
+	// as proof of disconnection. Do not refresh tethering or revoke sessions.
+	presence := m.flowAttribution.presence()
 	m.mu.Lock()
 
 	snapshot := trafficStatsSnapshot{
