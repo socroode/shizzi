@@ -443,7 +443,12 @@ func (m *TrafficManager) submitPortalAccountLogin(
 		if otherIP != ip && authorization != nil && authorization.AccountNumber == number {
 			delete(m.portalAuthorized, otherIP)
 			delete(m.portalClaimResults, otherIP)
+			m.removePendingClaimsForIPLocked(otherIP)
 		}
+	}
+	// A different account on this address must not inherit a queued voucher.
+	if previous := m.portalAuthorized[ip]; previous != nil && previous.AccountNumber != number {
+		m.removePendingClaimsForIPLocked(ip)
 	}
 	m.portalAuthorized[ip] = &PortalAuthorization{
 		AccountNumber:   number,

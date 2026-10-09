@@ -409,6 +409,7 @@ func (m *TrafficManager) waitAllowedWithPortalBypass(
 		}
 	}
 
+	authorization := m.portalAuthorized[ip]
 	clientLimiter := client.uploadLimiter
 	globalLimiter := m.globalUploadLimiter
 	if dir == directionDownload {
@@ -419,7 +420,11 @@ func (m *TrafficManager) waitAllowedWithPortalBypass(
 
 	globalLimiter.wait(byteCount)
 	clientLimiter.wait(byteCount)
-	return true
+	// A login, takeover or revocation can occur during bandwidth pacing.
+	// Never release queued bytes under a different account session.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.portalAuthorized[ip] == authorization && m.allowedLocked(ip, time.Now().UnixMilli())
 }
 
 func (m *TrafficManager) account(ip string, dir direction, byteCount int) {
