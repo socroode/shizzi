@@ -935,7 +935,7 @@ func (m *TrafficManager) serveUnidentifiedPortal(conn net.Conn) {
 	}
 	defer request.Body.Close()
 	body := []byte(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shizzi — Identification en cours</title></head><body style="font-family:sans-serif;max-width:42rem;margin:2rem auto;padding:1rem"><h1>Shizzi : appareil non identifié</h1><p>Le Wi-Fi Android peut être connecté, mais Shizzi ne reconnaît pas encore cette connexion. Aucun accès Internet n'est accordé sans identification.</p><p>Restez connecté au Wi-Fi, puis réessayez le portail. Il n'est pas nécessaire d'oublier le réseau.</p><p><a href="http://192.0.2.1/">Réessayer le portail Shizzi</a></p><p>Si le problème persiste, demandez à l'administrateur de consulter le diagnostic d'attribution réseau de Shizzi.</p></body></html>`)
-	header := fmt.Sprintf("HTTP/1.1 200 OK\\r\\nContent-Type: text/html; charset=utf-8\\r\\nCache-Control: no-store\\r\\nContent-Length: %d\\r\\nConnection: close\\r\\n\\r\\n", len(body))
+	header := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", len(body))
 	_, _ = io.WriteString(conn, header)
 	if request.Method != http.MethodHead {
 		_, _ = conn.Write(body)
