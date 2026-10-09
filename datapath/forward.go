@@ -94,16 +94,30 @@ func handleTCP(
 			true,
 		)
 		if clientIP == "" && !dns {
-			// NAT attribution may disappear while Android still keeps the
-			// phone associated with the hotspot. Never assign somebody else's
-			// account, but keep local HTTP recovery accessible (including
-			// Android's captive-portal HTTP probe on an external address).
+			// Android may publish the exact translated NAT tuple just AFTER
+			// the first attribution window. For captive HTTP, give it three
+			// short additional chances before presenting a recovery page.
+			// Never infer an IP from another connected hotspot client.
 			if destinationPort == 80 && traffic.portalRecoveryNeeded(destinationIP) {
-				traffic.serveUnidentifiedPortal(client)
+				for retry := 0; retry < 3 && clientIP == ""; retry++ {
+					time.Sleep(350 * time.Millisecond)
+					clientIP = traffic.resolveFlowClient(
+						"tcp",
+						sourceOf(id),
+						uint16(id.RemotePort),
+						destinationIP,
+						destinationPort,
+						false,
+					)
+				}
+				if clientIP == "" {
+					traffic.serveUnidentifiedPortal(client)
+					return
+				}
 			} else {
 				client.Close()
+				return
 			}
-			return
 		}
 
 		if destinationPort == 80 && clientIP != "" &&

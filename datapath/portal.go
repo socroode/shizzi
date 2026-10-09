@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -934,7 +935,17 @@ func (m *TrafficManager) serveUnidentifiedPortal(conn net.Conn) {
 		return
 	}
 	defer request.Body.Close()
-	body := []byte(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shizzi — Identification en cours</title></head><body style="font-family:sans-serif;max-width:42rem;margin:2rem auto;padding:1rem"><h1>Shizzi : appareil non identifié</h1><p>Le Wi-Fi Android peut être connecté, mais Shizzi ne reconnaît pas encore cette connexion. Aucun accès Internet n'est accordé sans identification.</p><p>Restez connecté au Wi-Fi, puis réessayez le portail. Il n'est pas nécessaire d'oublier le réseau.</p><p><a href="http://192.0.2.1/">Réessayer le portail Shizzi</a></p><p>Si le problème persiste, demandez à l'administrateur de consulter le diagnostic d'attribution réseau de Shizzi.</p></body></html>`)
+	// Retry only a safe GET of the local portal. Never replay login POSTs
+	// or cache submitted account credentials while the client is unknown.
+	retryCount, err := strconv.Atoi(request.URL.Query().Get("shizzi_retry"))
+	if err != nil || retryCount < 0 {
+		retryCount = 0
+	}
+	autoRefresh := ""
+	if retryCount < 5 {
+		autoRefresh = fmt.Sprintf(`<meta http-equiv="refresh" content="2;url=http://192.0.2.1/?shizzi_retry=%d">`, retryCount+1)
+	}
+	body := []byte(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shizzi — Identification en cours</title>` + autoRefresh + `</head><body style="font-family:sans-serif;max-width:42rem;margin:2rem auto;padding:1rem"><h1>Shizzi : identification en cours</h1><p>Le Wi-Fi Android est connecté, mais Shizzi ne reconnaît pas encore cette connexion. Aucun accès Internet n'est accordé sans identification.</p><p>Shizzi réessaie automatiquement d'ouvrir le portail. Gardez le Wi-Fi connecté : inutile d'oublier le réseau.</p><p>Si vous aviez soumis votre compte, aucune tentative non identifiée n'a été validée. Saisissez-le à nouveau uniquement lorsque le portail normal est affiché.</p><p><a href="http://192.0.2.1/">Ouvrir le portail Shizzi</a></p><p>Si l'identification reste bloquée, demandez à l'administrateur de consulter les diagnostics d'attribution réseau.</p></body></html>`)
 	header := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", len(body))
 	_, _ = io.WriteString(conn, header)
 	if request.Method != http.MethodHead {

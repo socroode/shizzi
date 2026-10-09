@@ -63,6 +63,13 @@ func TestWifiConnectedButNATUnidentifiedStillShowsRecoveryPortal(t *testing.T) {
     if strings.Contains(response, "password") || strings.Contains(response, "Numéro de compte") {
         t.Fatal("unidentified client was offered an unsafe authenticated portal")
     }
+    if !strings.Contains(response, "shizzi_retry=1") || !strings.Contains(response, "http-equiv=\"refresh\"") {
+        t.Fatalf("unidentified client must retry portal automatically without Wi-Fi reassociation: %q", response)
+    }
+    exhausted, _ := dial("/?shizzi_retry=5", "GET", "")
+    if strings.Contains(exhausted, "http-equiv=\"refresh\"") {
+        t.Fatal("recovery auto-refresh must stop after five attempts")
+    }
 
     // A POST cannot invent a client IP or steal an active account.
     response, _ = dial("/login", "POST", "account=1001&pin=pass")
@@ -108,5 +115,46 @@ Client Information:
         !strings.Contains(string(body), "Compte") ||
         strings.Contains(string(body), "appareil non identifié") {
         t.Fatalf("normal portal did not recover once attribution returned: %q", body)
+    }
+}
+
+ 
+// A newly connected client should not have to submit its account twice
+// merely because Android publishes its NAT translation after the initial
+// attribution wait. Attribution remains exact even with two clients online.
+func TestPortalAttributionRetriesUntilLateExactRule(t *testing.T) {
+    traffic := newPortalManager(t)
+    pushConfig(t, traffic, accountForTest("1001", "pass", 100000))
+    stack := linkedStacks(t, traffic)
+    conn, err := gonet.DialTCP(stack, tcpip.FullAddress{
+        NIC: 1, Addr: tcpip.AddrFrom4([4]byte{192, 0, 2, 1}), Port: 80,
+    }, ipv4.ProtocolNumber)
+    if err != nil {
+        t.Fatal(err)
+    }
+    defer conn.Close()
+    sourcePort := conn.LocalAddr().(*net.TCPAddr).Port
+    began := time.Now()
+    traffic.flowAttribution.dumpFn = func() (string, error) {
+        if time.Since(began) < 1700*time.Millisecond {
+            return simulatedClientList(phoneA, phoneB) + "IPv4 Upstream:\nIPv4 Downstream:\n", nil
+        }
+        return fmt.Sprintf(`IPv4 Upstream:
+tcp [02:00:00:00:00:01] 47(ap0) %s:41000 -> 76(testtun0) 192.0.2.2:%d -> 192.0.2.1:80 [00:00:00:00:00:00] 1500 3ms
+IPv4 Downstream:
+Client Information:
+{android.net.ip.IpServer@1={/%s=downstream: 41, /%s=downstream: 41}}`,
+            phoneB, sourcePort, phoneA, phoneB), nil
+    }
+    _ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+    fmt.Fprint(conn, "GET / HTTP/1.1\r\nHost: 192.0.2.1\r\nConnection: close\r\n\r\n")
+    data, err := io.ReadAll(conn)
+    if err != nil && len(data) == 0 {
+        t.Fatal(err)
+    }
+    if !strings.Contains(string(data), "HTTP/1.1 200 OK") ||
+        !strings.Contains(string(data), "Numéro de compte") ||
+        strings.Contains(string(data), "identification en cours") {
+        t.Fatalf("late exact NAT rule did not recover the original portal request: %q", data)
     }
 }
