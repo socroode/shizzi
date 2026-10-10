@@ -550,6 +550,7 @@ func (m *TrafficManager) refreshClientPresence() {
 		return
 	}
 	m.flowAttribution.refreshIfOlderThan(clientPresenceRefresh)
+	m.flowAttribution.refreshWifiPresence()
 	presence := m.flowAttribution.presence()
 	m.mu.Lock()
 	m.pruneDepartedLocked(presence, time.Now())
