@@ -33,6 +33,8 @@ type flowAttributionSnapshot struct {
 	LooseCandidateFlows   int64  `json:"looseCandidateFlows"`
 	ClientCount           int    `json:"mappedClients"`
 	ClientListKnown       bool   `json:"clientListKnown"`
+	WifiAssociatedClients int    `json:"wifiAssociatedClients"`
+	WifiCountKnown        bool   `json:"wifiCountKnown"`
 	SlowestResolveMillis  int64  `json:"slowestResolveMillis"`
 	DumpCount             int64  `json:"dumpCount"`
 	LastDumpMillis        int64  `json:"lastDumpMillis"`
@@ -46,6 +48,8 @@ type clientPresence struct {
 	clients       map[string]struct{}
 	macs          map[string]string
 	authoritative bool
+	wifiCount      int
+	wifiCountKnown bool
 }
 
 type flowAttributionResolver struct {
@@ -53,13 +57,20 @@ type flowAttributionResolver struct {
 	// refreshMu makes dumpsys single-flight and keeps it outside mu, so flows
 	// that already have an answer never queue behind a slow dumpsys.
 	refreshMu sync.Mutex
+	wifiRefreshMu sync.Mutex
 
 	dumpFn func() (string, error)
+	wifiDumpFn func() (string, error)
 
 	flows            map[flowAttributionKey]string
 	connectedClients map[string]struct{}
 	clientMACs       map[string]string
 	clientListKnown  bool
+	wifiClientCount   int
+	wifiCountKnown    bool
+	lastWifiRefresh   time.Time
+	lastWifiSuccess   time.Time
+	lastWifiError     string
 	lastRefresh      time.Time
 	lastSuccess      time.Time
 	lastError        string
@@ -92,6 +103,8 @@ const (
 	attributionDumpWaitDelay   = 200 * time.Millisecond
 	attributionMissMemory      = 5 * time.Second
 	presenceMaxAge             = 15 * time.Second
+	wifiRefreshInterval       = 10 * time.Second
+	wifiPresenceMaxAge        = 20 * time.Second
 )
 
 var ipv4UpstreamRulePattern = regexp.MustCompile(
@@ -102,6 +115,127 @@ var ipv4UpstreamRulePattern = regexp.MustCompile(
 
 var ipv4TuplePattern = regexp.MustCompile(
 	`([0-9]{1,3}(?:\.[0-9]{1,3}){3}):(\d+)`,
+)
+
+var softApConnectedCountPattern = regexp.MustCompile(`(?m)^getConnectedClientList\(\)\.size\(\):\s*(\d+)\s*package datapath
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"os/exec"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+// flowAttributionKey describes the translated flow visible on Shizzi's TUN.
+// Android tethering may NAT several physical hotspot clients to 192.0.2.2.
+// dumpsys tethering retains the original client IP and the translated tuple,
+// allowing Shizzi to recover the physical client before applying policy.
+type flowAttributionKey struct {
+	Protocol   string
+	PublicIP   string
+	PublicPort uint16
+	DstIP      string
+	DstPort    uint16
+}
+
+type flowAttributionSnapshot struct {
+	ResolvedFlows         int64  `json:"resolvedFlows"`
+	FallbackResolvedFlows int64  `json:"fallbackResolvedFlows"`
+	UnresolvedFlows       int64  `json:"unresolvedFlows"`
+	UnresolvedTCPFlows    int64  `json:"unresolvedTcpFlows"`
+	UnresolvedUDPFlows    int64  `json:"unresolvedUdpFlows"`
+	LooseCandidateFlows   int64  `json:"looseCandidateFlows"`
+	ClientCount           int    `json:"mappedClients"`
+	ClientListKnown       bool   `json:"clientListKnown"`
+	WifiAssociatedClients int    `json:"wifiAssociatedClients"`
+	WifiCountKnown        bool   `json:"wifiCountKnown"`
+	SlowestResolveMillis  int64  `json:"slowestResolveMillis"`
+	DumpCount             int64  `json:"dumpCount"`
+	LastDumpMillis        int64  `json:"lastDumpMillis"`
+	SlowestDumpMillis     int64  `json:"slowestDumpMillis"`
+	LastError             string `json:"lastError,omitempty"`
+	LastMiss              string `json:"lastMiss,omitempty"`
+}
+
+// clientPresence is Android's own list of connected hotspot clients.
+type clientPresence struct {
+	clients       map[string]struct{}
+	macs          map[string]string
+	authoritative bool
+	wifiCount      int
+	wifiCountKnown bool
+}
+
+type flowAttributionResolver struct {
+	mu sync.Mutex
+	// refreshMu makes dumpsys single-flight and keeps it outside mu, so flows
+	// that already have an answer never queue behind a slow dumpsys.
+	refreshMu sync.Mutex
+	wifiRefreshMu sync.Mutex
+
+	dumpFn func() (string, error)
+	wifiDumpFn func() (string, error)
+
+	flows            map[flowAttributionKey]string
+	connectedClients map[string]struct{}
+	clientMACs       map[string]string
+	clientListKnown  bool
+	wifiClientCount   int
+	wifiCountKnown    bool
+	lastWifiRefresh   time.Time
+	lastWifiSuccess   time.Time
+	lastWifiError     string
+	lastRefresh      time.Time
+	lastSuccess      time.Time
+	lastError        string
+
+	recentMisses map[flowAttributionKey]time.Time
+
+	resolvedFlows         int64
+	fallbackResolvedFlows int64
+	unresolvedFlows       int64
+	unresolvedTCPFlows    int64
+	unresolvedUDPFlows    int64
+	looseCandidateFlows   int64
+	slowestResolve        time.Duration
+	dumpCount             int64
+	lastDumpDuration      time.Duration
+	slowestDump           time.Duration
+	lastMiss              string
+}
+
+const (
+	attributionRefreshInterval = 100 * time.Millisecond
+	// A rule seen in a dump this recent is trusted without another dump. The
+	// kernel cannot hand the same translated tuple to a second client while
+	// the first conntrack entry (and so its rule) still exists.
+	attributionCacheTTL        = time.Second
+	attributionWait            = 1500 * time.Millisecond
+	attributionMultiClientWait = 3500 * time.Millisecond
+	attributionRetryDelay      = 50 * time.Millisecond
+	attributionDumpTimeout     = 1200 * time.Millisecond
+	attributionDumpWaitDelay   = 200 * time.Millisecond
+	attributionMissMemory      = 5 * time.Second
+	presenceMaxAge             = 15 * time.Second
+	wifiRefreshInterval       = 10 * time.Second
+	wifiPresenceMaxAge        = 20 * time.Second
+)
+
+var ipv4UpstreamRulePattern = regexp.MustCompile(
+	"^(tcp|udp)\\s+\\[[^\\]]*\\]\\s+\\d+\\([^)]*\\)\\s+" +
+		"([0-9.]+):(\\d+)\\s+->\\s+\\d+\\([^)]*\\)\\s+" +
+		"([0-9.]+):(\\d+)\\s+->\\s+([0-9.]+):(\\d+)\\b",
+)
+
+var ipv4TuplePattern = regexp.MustCompile(
+	`([0-9]{1,3}(?:\.[0-9]{1,3}){3}):(\d+)`,
+)
+
 )
 
 var tetheringConnectedClientPattern = regexp.MustCompile(
@@ -117,6 +251,7 @@ var ipv4DownstreamClientMACPattern = regexp.MustCompile(
 func newFlowAttributionResolver() *flowAttributionResolver {
 	return &flowAttributionResolver{
 		dumpFn:           dumpTetheringState,
+		wifiDumpFn:       dumpWifiState,
 		flows:            make(map[flowAttributionKey]string),
 		connectedClients: make(map[string]struct{}),
 		clientMACs:       make(map[string]string),
@@ -128,6 +263,45 @@ func dumpTetheringState() (string, error) {
 	// Use the absolute binary path. The Shizuku shell process does not always
 	// inherit a PATH containing dumpsys on OEM Android builds.
 	return runBoundedDump(attributionDumpTimeout, "/system/bin/dumpsys", "tethering")
+}
+
+// SoftApManager reports the *current* associated station count, unlike the
+// tethering Client Information list which may retain DHCP/IP entries after a
+// phone has left. This is a safety cross-check, not per-device identity.
+func dumpWifiState() (string, error) {
+	return runBoundedDump(2*time.Second, "/system/bin/dumpsys", "wifi")
+}
+
+// Only trust a running, tethered SoftAP manager. Historical metrics, stopped
+// managers, and absent counters must never be mistaken for zero clients.
+func parseRunningSoftApClientCount(raw string) (int, bool) {
+	const marker = "Dump of SoftApManager"
+	if !strings.Contains(raw, marker) {
+		return 0, false
+	}
+	total := 0
+	found := false
+	for _, block := range strings.Split(raw, marker)[1:] {
+		if end := strings.Index(block, "\\nSoftApManager:"); end >= 0 {
+			block = block[:end]
+		}
+		if !strings.Contains(block, "current StateMachine mode: StartedState") ||
+			!strings.Contains(block, "mRole: ROLE_SOFTAP_TETHERED") ||
+			!strings.Contains(block, "mIfaceIsUp: true") {
+			continue
+		}
+		match := softApConnectedCountPattern.FindStringSubmatch(block)
+		if len(match) != 2 {
+			return 0, false
+		}
+		count, err := strconv.Atoi(match[1])
+		if err != nil || count < 0 {
+			return 0, false
+		}
+		total += count
+		found = true
+	}
+	return total, found
 }
 
 func runBoundedDump(timeout time.Duration, name string, args ...string) (string, error) {
@@ -536,6 +710,37 @@ func (r *flowAttributionResolver) refreshIfOlderThan(maxAge time.Duration) {
 	r.lastError = ""
 }
 
+// Wi-Fi checks run separately from NAT attribution. An unavailable dumpsys
+// never logs anyone out and cannot block packet forwarding.
+func (r *flowAttributionResolver) refreshWifiPresence() {
+	if r == nil || r.wifiDumpFn == nil {
+		return
+	}
+	r.wifiRefreshMu.Lock()
+	defer r.wifiRefreshMu.Unlock()
+	r.mu.Lock()
+	stale := time.Since(r.lastWifiRefresh) >= wifiRefreshInterval
+	r.mu.Unlock()
+	if !stale {
+		return
+	}
+	raw, err := r.wifiDumpFn()
+	count, known := parseRunningSoftApClientCount(raw)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lastWifiRefresh = time.Now()
+	r.wifiCountKnown = err == nil && known
+	if err == nil && known {
+		r.wifiClientCount = count
+		r.lastWifiSuccess = r.lastWifiRefresh
+		r.lastWifiError = ""
+	} else if err != nil {
+		r.lastWifiError = err.Error()
+	} else {
+		r.lastWifiError = "no running tethered SoftAP station count"
+	}
+}
+
 func (r *flowAttributionResolver) presence() clientPresence {
 	if r == nil {
 		return clientPresence{}
@@ -547,12 +752,28 @@ func (r *flowAttributionResolver) presence() clientPresence {
 		macs:    make(map[string]string, len(r.clientMACs)),
 		authoritative: r.lastError == "" && r.clientListKnown &&
 			time.Since(r.lastSuccess) < presenceMaxAge,
+		wifiCount: r.wifiClientCount,
+		wifiCountKnown: r.wifiCountKnown && time.Since(r.lastWifiSuccess) < wifiPresenceMaxAge,
 	}
 	for ip := range r.connectedClients {
 		result.clients[ip] = struct{}{}
 	}
 	for ip, mac := range r.clientMACs {
 		result.macs[ip] = mac
+	}
+	if result.wifiCountKnown {
+		switch {
+		case result.wifiCount == 0:
+			// No wireless station is attached: stale tether leases cannot hold
+			// Internet sessions open forever. Normal 45s departure grace applies.
+			result.clients = make(map[string]struct{})
+			result.authoritative = true
+		case result.wifiCount != len(result.clients):
+			// Count mismatch does not reveal WHICH MAC is absent. Mark
+			// presence unknown rather than falsely confirming or evicting a
+			// still-connected user.
+			result.authoritative = false
+		}
 	}
 	return result
 }
@@ -575,6 +796,8 @@ func (r *flowAttributionResolver) snapshot() flowAttributionSnapshot {
 		ClientCount:           len(r.connectedClients),
 		ClientListKnown:       r.lastError == "" && r.clientListKnown &&
 			time.Since(r.lastSuccess) < presenceMaxAge,
+		WifiAssociatedClients: r.wifiClientCount,
+		WifiCountKnown:        r.wifiCountKnown && time.Since(r.lastWifiSuccess) < wifiPresenceMaxAge,
 		SlowestResolveMillis:  r.slowestResolve.Milliseconds(),
 		DumpCount:             r.dumpCount,
 		LastDumpMillis:        r.lastDumpDuration.Milliseconds(),
