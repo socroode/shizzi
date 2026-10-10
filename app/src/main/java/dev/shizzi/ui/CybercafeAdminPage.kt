@@ -976,7 +976,12 @@ private fun ConnectedDevices(
     }
 
     SectionTitle("Identification des appareils")
-    Text("Clients listés par Android : " + diagnostics.mappedClients)
+    Text(
+        "Appareils réellement associés au Wi-Fi : " +
+            if (diagnostics.wifiCountKnown) diagnostics.wifiAssociatedClients.toString()
+            else "information indisponible",
+    )
+    Text("Adresses IP conservées par Android Tethering : " + diagnostics.mappedClients)
     Text(
         "Flux identifiés : " + diagnostics.resolvedFlows +
             " (dont repli client unique : " + diagnostics.fallbackResolvedFlows + ")",
