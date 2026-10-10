@@ -163,7 +163,7 @@ func parseRunningSoftApClientCount(raw string) (int, bool) {
 	total := 0
 	found := false
 	for _, block := range strings.Split(raw, marker)[1:] {
-		if end := strings.Index(block, "\\nSoftApManager:"); end >= 0 {
+		if end := strings.Index(block, "\nSoftApManager:"); end >= 0 {
 			block = block[:end]
 		}
 		if !strings.Contains(block, "current StateMachine mode: StartedState") ||
