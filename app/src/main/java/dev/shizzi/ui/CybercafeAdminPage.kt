@@ -982,6 +982,13 @@ private fun ConnectedDevices(
             else "information indisponible",
     )
     Text("Adresses IP conservées par Android Tethering : " + diagnostics.mappedClients)
+    if (diagnostics.recentBpfFailures > 0) {
+        Text(
+            "Échecs récents d’insertion de règles eBPF Android : " +
+                diagnostics.recentBpfFailures +
+                " (récupération par tuple exact tentée, si non ambiguë)",
+        )
+    }
     Text(
         "Flux identifiés : " + diagnostics.resolvedFlows +
             " (dont repli client unique : " + diagnostics.fallbackResolvedFlows + ")",
