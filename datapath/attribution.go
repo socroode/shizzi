@@ -33,6 +33,7 @@ type flowAttributionSnapshot struct {
 	LooseCandidateFlows   int64  `json:"looseCandidateFlows"`
 	ClientCount           int    `json:"mappedClients"`
 	ClientListKnown       bool   `json:"clientListKnown"`
+	RecentBPFFailures     int    `json:"recentBpfFailures"`
 	WifiAssociatedClients int    `json:"wifiAssociatedClients"`
 	WifiCountKnown        bool   `json:"wifiCountKnown"`
 	SlowestResolveMillis  int64  `json:"slowestResolveMillis"`
@@ -63,6 +64,8 @@ type flowAttributionResolver struct {
 	wifiDumpFn func() (string, error)
 
 	flows            map[flowAttributionKey]string
+	bpfFailedFlows   map[flowAttributionKey]string
+	recentBPFFailures int
 	connectedClients map[string]struct{}
 	clientMACs       map[string]string
 	clientListKnown  bool
@@ -102,6 +105,9 @@ const (
 	attributionDumpTimeout     = 1200 * time.Millisecond
 	attributionDumpWaitDelay   = 200 * time.Millisecond
 	attributionMissMemory      = 5 * time.Second
+	// A failed BPF insertion can identify a packet, but an old kernel error
+	// must never authorize a new client reusing the same tuple.
+	bpfFailureAttributionTTL   = 8 * time.Second
 	presenceMaxAge             = 15 * time.Second
 	wifiRefreshInterval       = 10 * time.Second
 	wifiPresenceMaxAge        = 20 * time.Second
@@ -119,6 +125,13 @@ var ipv4TuplePattern = regexp.MustCompile(
 
 var softApConnectedCountPattern = regexp.MustCompile(`(?m)^getConnectedClientList\(\)\.size\(\):\s*(\d+)\s*$`)
 
+// Match only the outgoing/original-client direction. A reverse error has
+// src4=remote IP and src46=remote IP, so it must never authenticate a phone.
+var bpfFailureTimestampPattern = regexp.MustCompile(`(?m)(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6})\s+-\s+`)
+var bpfFailureFlowPattern = regexp.MustCompile(
+    `l4proto:\s*(6|17),\s*src4:\s*/([0-9.]+),\s*dst4:\s*/([0-9.]+),\s*srcPort:\s*(\d+),\s*dstPort:\s*(\d+).*?src46:\s*/([0-9.]+),\s*dst46:\s*/([0-9.]+),\s*srcPort:\s*(\d+),\s*dstPort:\s*(\d+)`,
+)
+
 var tetheringConnectedClientPattern = regexp.MustCompile(
 	`/([0-9]{1,3}(?:\.[0-9]{1,3}){3})=downstream:`,
 )
@@ -134,6 +147,7 @@ func newFlowAttributionResolver() *flowAttributionResolver {
 		dumpFn:           dumpTetheringState,
 		wifiDumpFn:       dumpWifiState,
 		flows:            make(map[flowAttributionKey]string),
+		bpfFailedFlows:   make(map[flowAttributionKey]string),
 		connectedClients: make(map[string]struct{}),
 		clientMACs:       make(map[string]string),
 		recentMisses:     make(map[flowAttributionKey]time.Time),
@@ -299,6 +313,77 @@ func parseIPv4UpstreamAttributionLine(line string) (flowAttributionKey, string, 
 		DstIP:      dstIP,
 		DstPort:    dstPort,
 	}, clientIP, true
+}
+
+// parseRecentBPFFailedAttributions reads Android's *own* failed offload
+// insertions, observed on OPPO/ColorOS when the BPF map returns E2BIG.
+// These are not guessed port-only matches: the OS explicitly logs the
+// originating IPv4, the translated IPv4/port, the destination and protocol.
+// Old errors and conflicting owners are deliberately unusable.
+func parseRecentBPFFailedAttributions(raw string, now time.Time) (map[flowAttributionKey]string, int) {
+    result := make(map[flowAttributionKey]string)
+    ambiguous := make(map[flowAttributionKey]bool)
+    failures := 0
+    for _, line := range strings.Split(raw, "\n") {
+        if !strings.Contains(line, "Could not insert entry") || !strings.Contains(line, "E2BIG") {
+            continue
+        }
+        // The timestamp in dumpsys tethering uses the phone's local clock.
+        // A missing or non-local timestamp is not safe enough to authenticate.
+        timestamp := bpfFailureTimestampPattern.FindStringSubmatch(line)
+        if len(timestamp) != 2 {
+            continue
+        }
+        at, err := time.ParseInLocation("2006-01-02T15:04:05.999999", timestamp[1], now.Location())
+        if err != nil || now.Sub(at) < -2*time.Second || now.Sub(at) > bpfFailureAttributionTTL {
+            continue
+        }
+        fields := bpfFailureFlowPattern.FindStringSubmatch(line)
+        if len(fields) != 10 {
+            continue
+        }
+        proto := ""
+        switch fields[1] {
+        case "6":
+            proto = "tcp"
+        case "17":
+            proto = "udp"
+        default:
+            continue
+        }
+        originalIP, destinationIP, translatedIP, translatedDest := fields[2], fields[3], fields[6], fields[7]
+        if !validPhysicalIPv4(originalIP) || !isSharedTunnelAddress(translatedIP) ||
+            destinationIP != translatedDest || net.ParseIP(destinationIP) == nil {
+            continue
+        }
+        translatedPort, translatedErr := parseAttributionPort(fields[8])
+        destinationPort, destinationErr := parseAttributionPort(fields[5])
+        translatedDestPort, translatedDestErr := parseAttributionPort(fields[9])
+        if translatedErr != nil || destinationErr != nil || translatedDestErr != nil || destinationPort != translatedDestPort {
+            continue
+        }
+        key := flowAttributionKey{
+            Protocol: proto, PublicIP: translatedIP, PublicPort: translatedPort,
+            DstIP: destinationIP, DstPort: destinationPort,
+        }
+        failures++
+        if oldIP, exists := result[key]; exists && oldIP != originalIP {
+            ambiguous[key] = true
+        } else {
+            result[key] = originalIP
+        }
+    }
+    for key := range ambiguous {
+        // An empty result is deliberately preserved as an ambiguity marker.
+        result[key] = ""
+    }
+    return result, failures
+}
+
+func validPhysicalIPv4(value string) bool {
+    parsed := net.ParseIP(value)
+    return parsed != nil && parsed.To4() != nil && !isSharedTunnelAddress(value) &&
+        !parsed.IsUnspecified() && !parsed.IsMulticast()
 }
 
 func parseAttributionPort(raw string) (uint16, error) {
@@ -471,8 +556,19 @@ func (r *flowAttributionResolver) lookupLocked(
 	key flowAttributionKey,
 ) (clientIP string, fallback bool) {
 	if client := r.flows[key]; client != "" {
-		return client, false
-	}
+        // A freshly failed BPF insertion naming a different phone proves
+        // that cached translated tuple attribution cannot be trusted.
+        if owner, logged := r.bpfFailedFlows[key]; logged && owner != client {
+            return "", false
+        }
+        return client, false
+    }
+    if client := r.bpfFailedFlows[key]; client != "" {
+        return client, true
+    }
+    if _, ambiguous := r.bpfFailedFlows[key]; ambiguous {
+        return "", false
+    }
 
 	if client := r.uniqueClientLocked(func(candidate flowAttributionKey) bool {
 		return candidate.PublicIP == key.PublicIP &&
@@ -550,11 +646,14 @@ func (r *flowAttributionResolver) refreshIfOlderThan(maxAge time.Duration) {
 
 	var (
 		flows   map[flowAttributionKey]string
+		bpfFlows map[flowAttributionKey]string
+		bpfFailures int
 		clients map[string]struct{}
 		macs    map[string]string
 	)
 	if err == nil {
 		flows = parseIPv4UpstreamAttributions(raw)
+		bpfFlows, bpfFailures = parseRecentBPFFailedAttributions(raw, finished)
 		clients = parseTetheringConnectedClients(raw)
 		macs = parseIPv4DownstreamClientMACs(raw)
 	}
@@ -572,6 +671,8 @@ func (r *flowAttributionResolver) refreshIfOlderThan(maxAge time.Duration) {
 		return
 	}
 	r.flows = flows
+	r.bpfFailedFlows = bpfFlows
+	r.recentBPFFailures = bpfFailures
 	r.connectedClients = clients
 	// An explicitly emitted Client Information section can establish that
 	// Android currently lists zero clients. Without it, an empty NAT dump
@@ -675,6 +776,7 @@ func (r *flowAttributionResolver) snapshot() flowAttributionSnapshot {
 		UnresolvedUDPFlows:    r.unresolvedUDPFlows,
 		LooseCandidateFlows:   r.looseCandidateFlows,
 		ClientCount:           len(r.connectedClients),
+		RecentBPFFailures:     r.recentBPFFailures,
 		ClientListKnown:       r.lastError == "" && r.clientListKnown &&
 			time.Since(r.lastSuccess) < presenceMaxAge,
 		WifiAssociatedClients: r.wifiClientCount,
