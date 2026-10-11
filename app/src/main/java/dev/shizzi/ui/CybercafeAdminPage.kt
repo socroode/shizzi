@@ -946,7 +946,7 @@ private fun ConnectedDevices(
         Text(
             "Présence Wi-Fi : " + when (session.presence) {
                 "online" -> "confirmée"
-                "missing" -> "absence détectée (délai de sécurité 45 s)"
+                "missing" -> "absence détectée (délai de sécurité 20 s)"
                 else -> "non vérifiable (session conservée)"
             },
         )
