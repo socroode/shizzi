@@ -541,7 +541,7 @@ type trafficStatsSnapshot struct {
 
 // refreshClientPresence runs outside statistics polling and outside m.mu:
 // dumpsys can take over a second on some Android devices. A lost client is
-// released only after 45 seconds of consecutive authoritative absence.
+// released only after 20 seconds of consecutive authoritative absence.
 func (m *TrafficManager) refreshClientPresence() {
 	m.mu.Lock()
 	active := len(m.portalAuthorized) > 0 || len(m.adminSessions) > 0
@@ -706,5 +706,5 @@ func (m *TrafficManager) pruneDepartedLocked(presence clientPresence, now time.T
 
 const (
 	clientPresenceRefresh = 5 * time.Second
-	departedClientGrace   = 45 * time.Second
+	departedClientGrace   = 20 * time.Second
 )
