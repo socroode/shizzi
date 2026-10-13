@@ -32,6 +32,7 @@ type Session struct {
 	stack   *stack.Stack
 	binding *networkBinding
 	traffic *TrafficManager
+	v2Bridge *v2AccountBridge
 	stopPresence chan struct{}
 }
 
@@ -81,6 +82,7 @@ func Start(tunFD int, mtu int) (*Session, error) {
 
 	binding := &networkBinding{}
 	traffic := newTrafficManager()
+	v2Bridge := newV2AccountBridge(traffic)
 	installForwarders(netStack, &net.Dialer{
 		Timeout: dialTimeout,
 		Control: binding.control,
@@ -90,6 +92,7 @@ func Start(tunFD int, mtu int) (*Session, error) {
 		stack: netStack,
 		binding: binding,
 		traffic: traffic,
+		v2Bridge: v2Bridge,
 		stopPresence: make(chan struct{}),
 	}
 	go session.maintainClientPresence(session.stopPresence)
@@ -190,6 +193,9 @@ func (s *Session) SetPortalConfig(required bool, configJSON string) {
 		return
 	}
 	s.traffic.setPortalConfig(required, configJSON)
+	// Import durable Data, Unlimited and Media entitlements into the separate
+	// V2 policy engine; this does NOT re-enable the legacy Internet forwarder.
+	if s.v2Bridge != nil { s.v2Bridge.Sync() }
 }
 
 // ClearPortalClaims acknowledges recharge requests already handled by Android.

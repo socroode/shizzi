@@ -233,6 +233,35 @@ func (r *Registry) Logout(mac string) error {
     return nil
 }
 
+// RevokeAccount ends the current authenticated device session without
+// disconnecting Wi-Fi or deleting the owner's voucher balance.
+func (r *Registry) RevokeAccount(account string) {
+    r.mu.Lock()
+    defer r.mu.Unlock()
+    mac, ok := r.accountOwner[account]
+    if !ok { return }
+    if s := r.stations[mac]; s != nil { r.revokeLoginLocked(mac, s) }
+}
+
+// ReplaceRights accepts the latest DURABLE account snapshot from Android.
+// Disabled/deleted accounts immediately lose their active sessions. Updating
+// a voucher never disconnects a station or invalidates its successful login.
+func (r *Registry) ReplaceRights(latest map[string]Rights) {
+    r.mu.Lock()
+    defer r.mu.Unlock()
+    next := make(map[string]Rights, len(latest))
+    for account, rights := range latest {
+        next[account] = rights
+    }
+    for account, mac := range r.accountOwner {
+        rights, found := next[account]
+        if !found || rights.Disabled {
+            if s := r.stations[mac]; s != nil { r.revokeLoginLocked(mac, s) }
+        }
+    }
+    r.rights = next
+}
+
 func (r *Registry) SetRights(account string, rights Rights) error {
     account = strings.TrimSpace(account)
     if account == "" { return ErrInvalidAccount }
