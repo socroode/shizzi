@@ -141,3 +141,44 @@ func TestOtherSitesCannotPOSTCredentialsToPortal(t *testing.T) {
     endpoint.ServeHTTP(response, request)
     if response.Code != http.StatusForbidden { t.Fatal("cross-origin PIN login authorized") }
 }
+
+func TestTrustedCrossSiteCaptiveOriginMayLoginPhysicalHotspot(t *testing.T) {
+    sessions := NewRegistry()
+    addStation(t, sessions, phoneA, "192.168.247.161")
+    endpoint := PortalEndpoint{Sessions: sessions, Verifier: fakePINVerifier{}}
+    form := url.Values{"account": {"1001"}, "pin": {"123456"}}
+    request := httptest.NewRequest(http.MethodPost,
+        "http://192.168.247.1:8093/login", strings.NewReader(form.Encode()))
+    request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+    request.Header.Set("Origin", "http://192.0.2.1")
+    request.Header.Set("Sec-Fetch-Site", "cross-site")
+    request.RemoteAddr = "192.168.247.161:45678"
+    response := httptest.NewRecorder()
+    endpoint.ServeHTTP(response, request)
+    if response.Code != http.StatusOK {
+        t.Fatalf("own public captive origin refused: status %d, body %s",
+            response.Code, response.Body.String())
+    }
+    snap, found := sessions.Snapshot(phoneA)
+    if !found || snap.Account != "1001" {
+        t.Fatalf("valid PIN did not open local account session: %+v", snap)
+    }
+}
+
+func TestOtherCrossSiteOriginCannotLoginPhysicalHotspot(t *testing.T) {
+    sessions := NewRegistry()
+    addStation(t, sessions, phoneA, "192.168.247.161")
+    endpoint := PortalEndpoint{Sessions: sessions, Verifier: fakePINVerifier{}}
+    form := url.Values{"account": {"1001"}, "pin": {"123456"}}
+    request := httptest.NewRequest(http.MethodPost,
+        "http://192.168.247.1:8093/login", strings.NewReader(form.Encode()))
+    request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+    request.Header.Set("Origin", "http://attacker.example")
+    request.Header.Set("Sec-Fetch-Site", "cross-site")
+    request.RemoteAddr = "192.168.247.161:45678"
+    response := httptest.NewRecorder()
+    endpoint.ServeHTTP(response, request)
+    if response.Code != http.StatusForbidden {
+        t.Fatalf("untrusted origin logged in using victim's browser: %d", response.Code)
+    }
+}

@@ -111,7 +111,12 @@ func (p PortalEndpoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p PortalEndpoint) login(w http.ResponseWriter, r *http.Request) {
-    if r.Header.Get("Sec-Fetch-Site") == "cross-site" ||
+    // The public captive page is served at 192.0.2.1 while the PIN is
+    // submitted to the physical hotspot gateway. Browsers label that
+    // legitimate IP-to-IP form POST as "cross-site". Permit ONLY that
+    // specific trusted public origin; unrelated cross-site sites stay denied.
+    fromPublicCaptive := r.Header.Get("Origin") == "http://192.0.2.1"
+    if (r.Header.Get("Sec-Fetch-Site") == "cross-site" && !fromPublicCaptive) ||
         !sameOriginIfPresent(r) {
         http.Error(w, "Requête non autorisée.", http.StatusForbidden)
         return
