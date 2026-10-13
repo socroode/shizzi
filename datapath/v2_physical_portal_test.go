@@ -93,3 +93,24 @@ func (p *physicalTestResponse) Write(b []byte) (int, error) {
     if p.status == 0 { p.status = http.StatusOK }
     return p.body.Write(b)
 }
+
+func TestPhysicalHotspotListenerAcceptsOnlyRealSubnetPeers(t *testing.T) {
+    prefix := netip.MustParsePrefix("192.168.81.0/24")
+    for _,peer := range []string{
+        "192.168.81.199:55003","192.168.81.200:50321",
+    } {
+        if !v2HotspotPeerInPrefix(peer,prefix) {
+            t.Fatalf("physical hotspot client %q was refused",peer)
+        }
+    }
+    for _,peer := range []string{
+        "192.168.43.200:5000", "10.0.0.22:5000",
+        "192.0.2.2:5000", "8.8.8.8:5000",
+        "127.0.0.1:5000","192.168.81.0:5000",
+        "not-a-socket", "[::1]:5000",
+    }{
+        if v2HotspotPeerInPrefix(peer,prefix) {
+            t.Fatalf("unrelated network peer %q accepted",peer)
+        }
+    }
+}

@@ -1,6 +1,7 @@
 package core
 
 import (
+    "errors"
     "html/template"
     "net"
     "net/http"
@@ -137,9 +138,16 @@ func (p PortalEndpoint) login(w http.ResponseWriter, r *http.Request) {
         return
     }
     ip, err := netip.ParseAddr(host)
-    if err != nil || p.Sessions == nil ||
-        p.Sessions.AuthenticateFromPhysicalIP(ip, account, pin, p.Verifier) != nil {
-        http.Error(w, "Compte/PIN incorrect ou connexion Wi-Fi non vérifiable.", http.StatusForbidden)
+    if err != nil || p.Sessions == nil {
+        http.Error(w, "Connexion au point d'accès non vérifiable.", http.StatusForbidden)
+        return
+    }
+    if authErr := p.Sessions.AuthenticateFromPhysicalIP(ip, account, pin, p.Verifier); authErr != nil {
+        if errors.Is(authErr, ErrInvalidCredentials) {
+            http.Error(w, "Numéro de compte ou PIN incorrect.", http.StatusForbidden)
+        } else {
+            http.Error(w, "Connexion réseau modifiée. Réessayez le formulaire sans couper le Wi-Fi.", http.StatusForbidden)
+        }
         return
     }
     // Login creates a local account session; Internet is authorized

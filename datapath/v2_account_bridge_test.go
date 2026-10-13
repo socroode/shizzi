@@ -163,8 +163,10 @@ func TestV2PINFromSharedNATAndBadClientCannotLogin(t *testing.T) {
     if code := v2Authorize(t, bridge, "192.0.2.2", "12345"); code != http.StatusForbidden {
         t.Fatalf("shared tunnel was allowed to authenticate: %d", code)
     }
-    if code := v2Authorize(t, bridge, "192.168.247.169", "12345"); code != http.StatusForbidden {
-        t.Fatalf("unknown Wi-Fi client was allowed to authenticate: %d", code)
+    // In a public captive hotspot, no MAC/DHCP dump is required to log in.
+    // The physical listener itself restricts clients to its real subnet.
+    if code := v2Authorize(t, bridge, "192.168.247.169", "12345"); code != http.StatusOK {
+        t.Fatalf("valid account+PIN was blocked only because no MAC was observed: %d", code)
     }
 }
 

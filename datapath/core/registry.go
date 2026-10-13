@@ -6,6 +6,7 @@ import (
     "errors"
     "net"
     "net/netip"
+    "sort"
     "strings"
     "sync"
     "time"
@@ -17,7 +18,8 @@ var (
     ErrStationAbsent = errors.New("station is not associated with Wi-Fi")
     ErrUnboundStation = errors.New("station has no verified IPv4 address")
     ErrInvalidAccount = errors.New("empty account number")
-    ErrLoginDenied = errors.New("invalid credentials or unverifiable Wi-Fi client")
+    ErrLoginDenied = errors.New("physical hotspot client connection cannot be verified")
+    ErrInvalidCredentials = errors.New("invalid account number or PIN")
 )
 
 type Rights struct {
@@ -45,6 +47,7 @@ type station struct {
     // generation changes on every authentication/revocation. It prevents a
     // TCP/UDP socket from inheriting a later session on the same station.
     generation uint64
+    startedAt time.Time
 }
 
 type StationSnapshot struct {
@@ -98,6 +101,12 @@ func validClientIP(ip netip.Addr) bool {
         !ip.IsLoopback() && !ip.IsMulticast() && !ip.IsLinkLocalUnicast()
 }
 
+// peerSessionKey is an ephemeral network-session selector, NOT a MAC address.
+// It is created only after the PIN is verified from the real hotspot TCP peer.
+func peerSessionKey(ip netip.Addr) string {
+    return "peer:" + ip.String()
+}
+
 func (r *Registry) WifiJoined(mac string) error {
     id, err := canonicalMAC(mac)
     if err != nil { return err }
@@ -125,10 +134,24 @@ func (r *Registry) BindAddress(mac string, ip netip.Addr) error {
     if target.ip == ip { return nil }
 
     if oldOwner, taken := r.ipOwner[ip]; taken && oldOwner != id {
-        if old := r.stations[oldOwner]; old != nil {
-            // Address reuse must never inherit the old user's authorization.
-            r.revokeLoginLocked(oldOwner, old)
-            old.ip = netip.Addr{}
+        if previous := r.stations[oldOwner]; previous != nil {
+            // A station verified later may acquire a session that was created
+            // from its original TCP peer IP after account+PIN login. This is
+            // network bookkeeping, NOT a MAC-based account requirement.
+            if oldOwner == peerSessionKey(ip) && previous.ip == ip {
+                if target.ip.IsValid() { delete(r.ipOwner, target.ip) }
+                if target.account != "" { r.revokeLoginLocked(id, target) }
+                r.stations[id] = previous
+                delete(r.stations, oldOwner)
+                r.ipOwner[ip] = id
+                if previous.account != "" && r.accountOwner[previous.account] == oldOwner {
+                    r.accountOwner[previous.account] = id
+                }
+                return nil
+            }
+            // Conflicting real Wi-Fi owners: never transfer credentials.
+            r.revokeLoginLocked(oldOwner, previous)
+            previous.ip = netip.Addr{}
         }
     }
     if target.ip.IsValid() { delete(r.ipOwner, target.ip) }
@@ -148,6 +171,7 @@ func (r *Registry) revokeLoginLocked(mac string, s *station) {
         delete(r.accountOwner, s.account)
     }
     s.account = ""
+    s.startedAt = time.Time{}
 }
 
 func (r *Registry) WifiDeparted(mac string) error {
@@ -186,6 +210,7 @@ func (r *Registry) GrantVerifiedLogin(mac, account string) error {
     r.revokeLoginLocked(id, s)
     s.account = account
     s.generation = r.newGenerationLocked()
+    s.startedAt = time.Now()
     r.accountOwner[account] = id
     return nil
 }
@@ -203,38 +228,62 @@ type PINVerifier interface {
 // Requests reaching gVisor as shared 192.0.2.2 cannot use this entrypoint.
 // A Wi-Fi departure and rejoin during slow PIN verification cannot resurrect
 // the previous session: the old station object no longer exists.
+// AuthenticateFromPhysicalIP validates credentials from the real TCP peer of
+// the dedicated private hotspot listener. It NEVER requires a previously
+// known station MAC, DHCP dump, or NAT rule. This is a public captive hotspot:
+// user identity is account+PIN, connection identity is the socket's peer IP.
+//
+// The listener MUST bind to an actual private SoftAP gateway and constrain
+// callers to that interface/subnet, otherwise a reachable host on another
+// network could impersonate a hotspot client by its own TCP source.
 func (r *Registry) AuthenticateFromPhysicalIP(ip netip.Addr, account, pin string, verifier PINVerifier) error {
     account = strings.TrimSpace(account)
-    if !validClientIP(ip) || ip == netip.MustParseAddr("192.0.2.2") ||
+    if !validClientIP(ip) || !ip.IsPrivate() || ip == netip.MustParseAddr("192.0.2.2") ||
         account == "" || pin == "" || verifier == nil {
         return ErrLoginDenied
     }
 
+    // Remember the current IP binding, if one exists. Credentials are checked
+    // BEFORE opening any session. MAC/DHCP observation is optional.
     r.mu.RLock()
-    mac, known := r.ipOwner[ip]
-    s := r.stations[mac]
+    owner, known := r.ipOwner[ip]
+    previous := r.stations[owner]
     r.mu.RUnlock()
-    if !known || s == nil { return ErrLoginDenied }
 
-    // Credential work is outside the registry lock. Verify again below that
-    // the physical session and its IP have NOT been replaced in the meantime.
-    if !verifier.VerifyPIN(account, pin) { return ErrLoginDenied }
+    if !verifier.VerifyPIN(account, pin) {
+        return ErrInvalidCredentials
+    }
 
     r.mu.Lock()
     defer r.mu.Unlock()
-    current := r.stations[mac]
-    if current != s || current == nil || current.ip != ip || r.ipOwner[ip] != mac {
+    currentOwner, currentKnown := r.ipOwner[ip]
+    if currentKnown != known || currentOwner != owner ||
+        (known && (r.stations[owner] != previous || previous == nil || previous.ip != ip)) {
+        // The physical network identity changed while validating the PIN.
+        // Ask for another POST, but never ask for a Wi-Fi reconnection.
         return ErrLoginDenied
     }
-    if otherMAC, used := r.accountOwner[account]; used && otherMAC != mac {
-        if other := r.stations[otherMAC]; other != nil {
-            r.revokeLoginLocked(otherMAC, other)
+
+    if !known {
+        owner = peerSessionKey(ip)
+        if r.stations[owner] != nil {
+            // An orphaned peer is not sufficient evidence of a current client.
+            return ErrLoginDenied
+        }
+        r.stations[owner] = &station{ip: ip}
+        r.ipOwner[ip] = owner
+        previous = r.stations[owner]
+    }
+    if other, active := r.accountOwner[account]; active && other != owner {
+        if old := r.stations[other]; old != nil {
+            r.revokeLoginLocked(other, old)
         }
     }
-    r.revokeLoginLocked(mac, current)
-    current.account = account
-    current.generation = r.newGenerationLocked()
-    r.accountOwner[account] = mac
+    r.revokeLoginLocked(owner, previous)
+    previous.account = account
+    previous.generation = r.newGenerationLocked()
+    previous.startedAt = time.Now()
+    r.accountOwner[account] = owner
     return nil
 }
 
@@ -293,6 +342,37 @@ func (r *Registry) Snapshot(mac string) (StationSnapshot, bool) {
     s, found := r.stations[id]
     if !found { return StationSnapshot{}, false }
     return StationSnapshot{MAC: id, IP: s.ip, Account: s.account, Associated: true}, true
+}
+
+// ActiveSession exposes current user ACCOUNTS and temporary source IPv4s
+// to the administrator UI. MAC is network metadata only, and is omitted when
+// Android cannot supply it. It is NOT an authentication prerequisite.
+type ActiveSession struct {
+    IP netip.Addr
+    MAC string
+    Account string
+    StartedAt time.Time
+    Internet bool
+}
+
+func (r *Registry) ActiveSessions(now time.Time) []ActiveSession {
+    r.mu.RLock()
+    defer r.mu.RUnlock()
+    current := make([]ActiveSession, 0, len(r.accountOwner))
+    for account, owner := range r.accountOwner {
+        s := r.stations[owner]
+        rights, found := r.rights[account]
+        if s == nil || !s.ip.IsValid() || s.account != account ||
+            r.ipOwner[s.ip] != owner || !found || rights.Disabled { continue }
+        mac := owner
+        if strings.HasPrefix(owner, "peer:") { mac = "" }
+        current = append(current, ActiveSession{
+            IP: s.ip, MAC: mac, Account: account, StartedAt: s.startedAt,
+            Internet: rights.InternetAllowed(now),
+        })
+    }
+    sort.Slice(current, func(i, j int) bool { return current[i].IP.Less(current[j].IP) })
+    return current
 }
 
 // AuthenticatedLease identifies a currently logged-in account on a physical

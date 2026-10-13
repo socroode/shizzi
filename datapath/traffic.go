@@ -592,6 +592,10 @@ func (m *TrafficManager) statsJSON() string {
 	}
 
 	nowMillis := time.Now().UnixMilli()
+	// V2 uses the authoritative account/PIN registry, never the legacy
+	// MAC/NAT guesses or the old portalAuthorized cache. Android's Devices
+	// page must show a successful login even when dumpsys Wi-Fi is missing.
+	if m.v2Bridge == nil {
 	for ip, authorization := range m.portalAuthorized {
 		account := m.portalAccounts[authorization.AccountNumber]
 		presenceStatus := "unknown"
@@ -618,6 +622,32 @@ func (m *TrafficManager) statsJSON() string {
 			},
 		)
 	}
+	} else {
+		for _, session := range m.v2Bridge.registry.ActiveSessions(time.Now()) {
+			account := m.portalAccounts[session.Account]
+			var usedUp, usedDown int64
+			if usage := m.accountUsage[session.Account]; usage != nil {
+				usedUp = usage.UpBytes
+				usedDown = usage.DownBytes
+			}
+			presenceStatus := "unknown"
+			if session.MAC != "" { presenceStatus = "online" }
+			snapshot.PortalAuthorizations = append(snapshot.PortalAuthorizations,
+				PortalAuthorizationStatus{
+					IP: session.IP.String(),
+					MAC: session.MAC,
+					Presence: presenceStatus,
+					AccountNumber: session.Account,
+					StartedAtMillis: session.StartedAt.UnixMilli(),
+					SessionDataUsedBytes: usedUp + usedDown,
+					UpBytes: usedUp, DownBytes: usedDown,
+					Authorized: session.Internet,
+					DownloadBps: account.downloadBps(nowMillis),
+					UploadBps: account.uploadBps(nowMillis),
+				})
+		}
+	}
+
 	sort.Slice(snapshot.PortalAuthorizations, func(i, j int) bool {
 		return snapshot.PortalAuthorizations[i].IP < snapshot.PortalAuthorizations[j].IP
 	})

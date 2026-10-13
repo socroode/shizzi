@@ -25,6 +25,36 @@ type v2PhysicalPortal struct {
     action string
 }
 
+// A captive PIN POST must arrive from the ACTUAL private SoftAP subnet.
+// A private address on the upstream LAN is not proof of hotspot presence.
+func v2LocalHotspotPrefix(gateway netip.Addr) (netip.Prefix, error) {
+    interfaces, err := net.Interfaces()
+    if err != nil { return netip.Prefix{}, err }
+    for _, iface := range interfaces {
+        if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 { continue }
+        addresses, err := iface.Addrs()
+        if err != nil { continue }
+        for _, address := range addresses {
+            network, ok := address.(*net.IPNet)
+            if !ok { continue }
+            parsed, ok := netip.AddrFromSlice(network.IP)
+            if !ok || parsed.Unmap() != gateway { continue }
+            bits, size := network.Mask.Size()
+            if size != 32 || bits < 16 || bits > 30 { continue }
+            return netip.PrefixFrom(gateway, bits).Masked(), nil
+        }
+    }
+    return netip.Prefix{}, errors.New("no verified IPv4 SoftAP interface subnet")
+}
+
+func v2HotspotPeerInPrefix(remote string, prefix netip.Prefix) bool {
+    host, _, err := net.SplitHostPort(remote)
+    if err != nil { return false }
+    ip, err := netip.ParseAddr(host)
+    return err == nil && ip.Is4() && ip.IsPrivate() &&
+        ip != prefix.Addr() && prefix.Contains(ip)
+}
+
 func (p *v2PhysicalPortal) start(gateway string, bridge *v2AccountBridge) (string, error) {
     ip, err := netip.ParseAddr(strings.TrimSpace(gateway))
     if err != nil || !ip.Is4() || !ip.IsPrivate() ||
@@ -32,6 +62,8 @@ func (p *v2PhysicalPortal) start(gateway string, bridge *v2AccountBridge) (strin
         return "", errors.New("v2 login requires a verified private IPv4 hotspot gateway")
     }
     if bridge == nil { return "", errors.New("V2 account bridge is unavailable") }
+    hotspotPrefix, err := v2LocalHotspotPrefix(ip)
+    if err != nil { return "", err }
 
     address := net.JoinHostPort(ip.String(), v2DirectLoginPort)
     p.mu.Lock()
@@ -53,6 +85,10 @@ func (p *v2PhysicalPortal) start(gateway string, bridge *v2AccountBridge) (strin
         // interface. Local TCP binding and original peer IP are independent.
         if r.Host != address {
             http.Error(w, "Hôte Shizzi invalide.", http.StatusMisdirectedRequest)
+            return
+        }
+        if !v2HotspotPeerInPrefix(r.RemoteAddr, hotspotPrefix) {
+            http.Error(w, "Connexion extérieure au réseau Wi-Fi Shizzi.", http.StatusForbidden)
             return
         }
         if local.routePhysical(w, r, bridge.registry) { return }
