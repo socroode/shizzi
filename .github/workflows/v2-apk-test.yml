@@ -80,7 +80,8 @@ jobs:
             [[ "$info" == *"name='$package'"* ]] || { echo "::error::Unexpected Android package id in $apk"; exit 1; }
             [[ "$info" == *"versionCode='$expectedCode'"* ]] || { echo "::error::Unexpected versionCode in $apk"; exit 1; }
             signature="$("$BUILD_TOOLS/apksigner" verify --print-certs "$apk")"
-            cert="$(printf '%s\n' "$signature" | sed -nE 's/^Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]+)$/\1/p' | head -1 | tr '[:upper:]' '[:lower:]')"
+            cert="$(printf '%s\n' "$signature" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
+            echo "::notice::Certificate SHA-256 for $package: $cert"
             if [[ "$cert" != "$CERT_EXPECTED" ]]; then
               echo "::error::Certificate mismatch in $apk. Refusing to deliver an incompatible APK."
               exit 1
