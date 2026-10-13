@@ -20,6 +20,7 @@ type PortalEndpoint struct {
     // LoginAction points at the bound physical hotspot listener, not at
     // the translated 192.0.2.2 tunnel address.
     LoginAction string
+    LocalBase string
 }
 
 const publicPortalHTML = `<!doctype html>
@@ -41,6 +42,7 @@ button{display:block;background:linear-gradient(90deg,#38bdf8,#34d399);color:#06
 .panel{margin-top:20px;padding:16px;border:1px solid #22d3ee55;border-radius:18px;background:#071b2a}
 .panel p{margin:0;color:#cbd5e1;font-size:13px;line-height:1.45}
 .muted{font-size:12px;color:#94a3b8;line-height:1.6}
+a{color:#67e8f9;font-weight:700;display:inline-block;margin-top:8px}
 </style></head><body><main class="card">
 <div class="eyebrow">PORTAIL LOCAL · SHIZZI</div>
 <h1>Bienvenue sur Shizzi</h1>
@@ -55,11 +57,14 @@ button{display:block;background:linear-gradient(90deg,#38bdf8,#34d399);color:#06
 <button type="submit">Se connecter</button></form>
 <p class="muted">Le numéro de compte et le PIN valident la session. Seul un voucher Internet actif autorise ensuite Internet.</p></section>
 <section class="panel"><div class="eyebrow">MEDIA LOCAL</div><h2>Shizzi Media</h2>
-<p>Films, séries, musique, dossiers et vouchers Média indépendants du forfait Internet.</p></section>
+<p>Films, séries et musique avec un voucher Média actif.</p>
+{{if .LocalBase}}<a href="{{.LocalBase}}/media/">Ouvrir la médiathèque</a>{{else}}<p class="muted">Connexion au hotspot en cours de vérification.</p>{{end}}</section>
 <section class="panel"><div class="eyebrow">MESSAGERIE LOCALE</div><h2>Messagerie Shizzi</h2>
-<p>Messages et appels entre utilisateurs connectés au Wi-Fi Shizzi.</p></section>
-<section class="panel"><div class="eyebrow">RECHARGES ET APPLICATIONS</div><h2>Vouchers · Shizzi+ · Admin</h2>
-<p>Ces modules de la v0.4.3.5.3 sont réintégrés dans l'interface Android; leurs accès depuis le portail seront reliés après validation du noyau V2.</p></section>
+<p>Messages et appels entre comptes connectés au Wi-Fi Shizzi.</p>
+{{if .LocalBase}}<a href="{{.LocalBase}}/chat/">Ouvrir la messagerie</a>{{end}}</section>
+<section class="panel"><div class="eyebrow">APPLICATIONS LOCALES</div><h2>Shizzi+ · Admin</h2>
+<p>Téléchargements disponibles sans voucher Internet.</p>
+<p><a href="/shizzi-plus.apk">Télécharger Shizzi+</a> · <a href="/shizzi-admin.apk">Télécharger Shizzi Admin</a></p></section>
 <p class="muted">Cette reconstruction est en cours de validation : aucun accès Internet n'est attribué à un appareil non authentifié.</p>
 </main></body></html>`
 
@@ -87,7 +92,11 @@ func (p PortalEndpoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
         if r.Method == http.MethodHead { w.WriteHeader(http.StatusOK); return }
         action := p.LoginAction
         if action == "" { action = "/login" }
-        _ = portalPage.Execute(w, struct{ LoginAction string }{action})
+        local := p.LocalBase
+        if local == "" && strings.HasPrefix(p.LoginAction,"http://") {
+            local = strings.TrimSuffix(p.LoginAction, "/login")
+        }
+        _ = portalPage.Execute(w, struct{ LoginAction, LocalBase string }{action, local})
 
     case r.URL.Path == "/login" && r.Method == http.MethodPost:
         p.login(w, r)
@@ -130,8 +139,12 @@ func (p PortalEndpoint) login(w http.ResponseWriter, r *http.Request) {
     }
     // Login creates a local account session; Internet is authorized
     // separately by the voucher-aware traffic policy.
-    w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-    _, _ = w.Write([]byte("Compte connecté. Les droits Internet et Média dépendent des vouchers actifs."))
+    w.Header().Set("Content-Type", "text/html; charset=utf-8")
+    _, _ = w.Write([]byte("<!doctype html><html lang=\"fr\"><meta charset=\"utf-8\"><title>Shizzi — connecté</title>"+
+        "<body style=\"font-family:system-ui;max-width:36rem;margin:2rem auto;padding:1rem\">"+
+        "<h1>Compte Shizzi connecté</h1><p>Les droits Internet et Média dépendent des vouchers actifs.</p>"+
+        "<p><a href=\"/media/\">Média</a> · <a href=\"/chat/\">Messagerie</a> · "+
+        "<a href=\"/\">Accueil</a></p></body></html>"))
 }
 
 func sameOriginIfPresent(r *http.Request) bool {

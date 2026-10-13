@@ -260,6 +260,9 @@ func handleV2TCP(client net.Conn, id stack.TransportEndpointID, dialer *net.Dial
     lease, err := traffic.v2Bridge.waitForV2Flow(key, 2500 * time.Millisecond)
     if err != nil {
         traffic.noteRefusedUnauthorized()
+        // HTTP captive detection is an unauthenticated LOCAL response only.
+        // It never falls back to the old NAT/account guessing code.
+        if id.LocalPort == 80 { serveV2CaptiveProbe(client) }
         return
     }
     upstream, err := dialer.Dial("tcp", destinationOf(id))

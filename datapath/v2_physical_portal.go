@@ -43,7 +43,11 @@ func (p *v2PhysicalPortal) start(gateway string, bridge *v2AccountBridge) (strin
     listener, err := net.Listen("tcp4", address)
     if err != nil { return "", fmt.Errorf("V2 gateway bind %s: %w", address, err) }
 
-    endpoint := core.PortalEndpoint{Sessions: bridge.registry, Verifier: bridge}
+    endpoint := core.PortalEndpoint{
+        Sessions: bridge.registry, Verifier: bridge,
+        LoginAction: "/login", LocalBase: "http://" + address,
+    }
+    local := defaultV2LocalBridge()
     handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         // Reject Host header DNS rebinding and accidental access from another
         // interface. Local TCP binding and original peer IP are independent.
@@ -51,7 +55,8 @@ func (p *v2PhysicalPortal) start(gateway string, bridge *v2AccountBridge) (strin
             http.Error(w, "Hôte Shizzi invalide.", http.StatusMisdirectedRequest)
             return
         }
-        if r.URL.Path != "/login" {
+        if local.routePhysical(w, r, bridge.registry) { return }
+        if r.URL.Path != "/" && r.URL.Path != "/login" {
             http.NotFound(w, r)
             return
         }
@@ -61,7 +66,8 @@ func (p *v2PhysicalPortal) start(gateway string, bridge *v2AccountBridge) (strin
         Handler: handler,
         ReadHeaderTimeout: 4 * time.Second,
         ReadTimeout: 12 * time.Second,
-        WriteTimeout: 12 * time.Second,
+        // Long local films must not be cut after 12 seconds of streaming.
+        WriteTimeout: 0,
         IdleTimeout: 10 * time.Second,
         MaxHeaderBytes: 8192,
     }

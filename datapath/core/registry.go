@@ -295,6 +295,40 @@ func (r *Registry) Snapshot(mac string) (StationSnapshot, bool) {
     return StationSnapshot{MAC: id, IP: s.ip, Account: s.account, Associated: true}, true
 }
 
+// AuthenticatedLease identifies a currently logged-in account on a physical
+// hotspot connection. No Internet voucher is required for local messaging.
+func (r *Registry) AuthenticatedLease(ip netip.Addr) (string, uint64, bool) {
+    r.mu.RLock()
+    defer r.mu.RUnlock()
+    mac, found := r.ipOwner[ip]
+    if !found { return "", 0, false }
+    station := r.stations[mac]
+    if station == nil || station.ip != ip || station.account == "" ||
+        r.accountOwner[station.account] != mac { return "", 0, false }
+    rights, exists := r.rights[station.account]
+    if !exists || rights.Disabled { return "", 0, false }
+    return station.account, station.generation, true
+}
+
+// LocalLeaseStillValid is checked throughout streaming so Wi-Fi loss, account
+// takeover, account suspension and Media voucher expiry cut existing requests.
+func (r *Registry) LocalLeaseStillValid(
+    ip netip.Addr, account string, generation uint64, needMedia bool, now time.Time,
+) bool {
+    r.mu.RLock()
+    defer r.mu.RUnlock()
+    mac, found := r.ipOwner[ip]
+    if !found { return false }
+    station := r.stations[mac]
+    if station == nil || station.ip != ip || station.account != account ||
+        station.generation != generation || r.accountOwner[account] != mac {
+        return false
+    }
+    rights, ok := r.rights[account]
+    if !ok || rights.Disabled { return false }
+    return !needMedia || rights.MediaAllowed(now)
+}
+
 // InternetLease contains a temporary routing authorization. The account is
 // the USER identity; IP/MAC are only ephemeral network/session selectors.
 // Never expose generation as a credential or persist a device/account tie.

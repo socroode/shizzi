@@ -30,6 +30,14 @@ func servePublicPortalConn(conn net.Conn, loginAction string) {
     defer request.Body.Close()
     request.RemoteAddr = conn.RemoteAddr().String()
 
+    // Public APK endpoints are available before credentials. Stream the real
+    // file directly from the router's loopback distribution server so large
+    // downloads aren't silently replaced by a tiny HTML response.
+    if (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+        (isClientAppDownloadPath(request.URL.Path) || isAdminAppDownloadPath(request.URL.Path)) {
+        defaultV2LocalBridge().servePublicDownload(conn, request)
+        return
+    }
     response := &publicPortalResponse{header: make(http.Header)}
     (core.PortalEndpoint{LoginAction: loginAction}).ServeHTTP(response, request)
     response.send(conn)
