@@ -112,6 +112,18 @@ func TestV2OldStreamsDieOnTakeover(t *testing.T){
     if _,err:=bridge.openV2Flow(v2TestFlowKey(),time.Now());err==nil{
         t.Fatal("Wi-Fi rejoin silently restored account access")
     }
+    // Even after valid reauthentication with exactly the SAME station and
+    // DHCP address, its PRE-departure TCP lease must never become valid again.
+    if err:=bridge.registry.AuthenticateFromPhysicalIP(b,"1001","7788",bridge);err!=nil{
+        t.Fatalf("fresh PIN after Wi-Fi rejoin rejected: %v",err)
+    }
+    if newer.allowed(time.Now()) {
+        t.Fatal("old TCP lease resurrected after Wi-Fi rejoin + fresh PIN")
+    }
+    newest,err:=bridge.openV2Flow(v2TestFlowKey(),time.Now())
+    if err!=nil || !newest.allowed(time.Now()) {
+        t.Fatalf("new Wi-Fi session cannot authenticate: %v",err)
+    }
 }
 
 func TestV2SameWifiNewLoginRevokesOldGeneration(t *testing.T) {
@@ -158,5 +170,22 @@ func TestV2PrivateAndLocalDestinationsNeverDialWAN(t *testing.T) {
             LocalPort:80,
         }
         if _,ok:=v2Key(id,"tcp");ok{t.Fatalf("local destination %s was allowed to WAN",address)}
+    }
+}
+
+func TestV2UDPFinalPacketDoesNotWasteRemainingData(t *testing.T) {
+    _,m,lease:=v2SetupFlow(t)
+    if count:=lease.reserve(998,directionDownload);count!=998{
+        t.Fatalf("unexpected initial usage: %d",count)
+    }
+    if count:=lease.reserveDatagram(8,directionUpload);count!=0{
+        t.Fatalf("truncated UDP packet was billed: %d",count)
+    }
+    m.mu.Lock()
+    used:=m.accountUsage["1001"].DataBytes
+    m.mu.Unlock()
+    if used!=998 {t.Fatalf("dropped UDP packet consumed quota: %d",used)}
+    if count:=lease.reserveDatagram(2,directionUpload);count!=2{
+        t.Fatalf("valid final UDP packet denied: %d",count)
     }
 }

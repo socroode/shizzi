@@ -64,6 +64,9 @@ type StationSnapshot struct {
 // Account rights persist independently of the station's Wi-Fi lifetime.
 type Registry struct {
     mu sync.RWMutex
+    // Global, monotonically increasing token: never reuse a session ID even
+    // if an Android station leaves/rejoins with the same MAC and DHCP IP.
+    nextGeneration uint64
     stations map[string]*station
     ipOwner map[netip.Addr]string
     accountOwner map[string]string
@@ -134,8 +137,13 @@ func (r *Registry) BindAddress(mac string, ip netip.Addr) error {
     return nil
 }
 
+func (r *Registry) newGenerationLocked() uint64 {
+    r.nextGeneration++
+    return r.nextGeneration
+}
+
 func (r *Registry) revokeLoginLocked(mac string, s *station) {
-    s.generation++
+    s.generation = r.newGenerationLocked()
     if s.account != "" && r.accountOwner[s.account] == mac {
         delete(r.accountOwner, s.account)
     }
@@ -177,7 +185,7 @@ func (r *Registry) GrantVerifiedLogin(mac, account string) error {
     }
     r.revokeLoginLocked(id, s)
     s.account = account
-    s.generation++
+    s.generation = r.newGenerationLocked()
     r.accountOwner[account] = id
     return nil
 }
@@ -225,7 +233,7 @@ func (r *Registry) AuthenticateFromPhysicalIP(ip netip.Addr, account, pin string
     }
     r.revokeLoginLocked(mac, current)
     current.account = account
-    current.generation++
+    current.generation = r.newGenerationLocked()
     r.accountOwner[account] = mac
     return nil
 }

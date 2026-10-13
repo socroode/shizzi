@@ -91,6 +91,16 @@ func (lease *v2FlowLease) allowed(now time.Time) bool {
 // Note: a failed/short network write may overcount rather than leak free
 // traffic; this will be reconciled during the real-device accounting phase.
 func (lease *v2FlowLease) reserve(requested int, dir direction) int {
+    return lease.reserveSized(requested, dir, false)
+}
+
+// A datagram is indivisible: when its payload exceeds the remaining quota,
+// reject it before debiting any bytes. TCP may transfer a final short chunk.
+func (lease *v2FlowLease) reserveDatagram(requested int, dir direction) int {
+    return lease.reserveSized(requested, dir, true)
+}
+
+func (lease *v2FlowLease) reserveSized(requested int, dir direction, allOrNothing bool) int {
     if requested <= 0 || !lease.allowed(time.Now()) { return 0 }
     m := lease.bridge.manager
     m.mu.Lock()
@@ -144,7 +154,7 @@ func (lease *v2FlowLease) reserve(requested int, dir direction) int {
         if remaining <= 0 { return 0 }
         if int64(count) > remaining { count = int(remaining) }
     }
-    if count <= 0 { return 0 }
+    if count <= 0 || (allOrNothing && count != requested) { return 0 }
     usage := m.usageLocked(lease.account)
     if dir == directionDownload {
         usage.DownBytes += int64(count)
@@ -211,7 +221,7 @@ func v2DatagramCopy(dst, src net.Conn, lease *v2FlowLease, dir direction) {
         if n > 0 {
             // UDP packets cannot be truncated. Reject the last datagram
             // if the remaining Data quota is smaller than its payload.
-            allowed := lease.reserve(n, dir)
+            allowed := lease.reserveDatagram(n, dir)
             if allowed != n { return }
             if !lease.allowed(time.Now()) { return }
             _ = dst.SetWriteDeadline(time.Now().Add(10 * time.Second))
