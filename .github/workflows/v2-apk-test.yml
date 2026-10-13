@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: shizzi-v2-test-apk-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   signed-update-test:
@@ -30,7 +30,14 @@ jobs:
         with:
           go-version-file: datapath/go.mod
           cache-dependency-path: datapath/go.sum
-      - uses: android-actions/setup-android@v4
+      # The hosted Ubuntu runner already has Android SDK command-line tools.
+      # Avoid the setup-android action here: some hosted runners can hang
+      # during its update/license step while the equivalent debug build passes.
+      - name: Check preinstalled Android SDK
+        run: |
+          test -n "${ANDROID_SDK_ROOT:-}"
+          command -v sdkmanager
+          sdkmanager --version
       - name: Install Android NDK
         run: sdkmanager --install "ndk;27.0.12077973"
       - name: Install gomobile
