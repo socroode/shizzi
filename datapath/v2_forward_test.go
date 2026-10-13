@@ -114,7 +114,7 @@ func TestV2OldStreamsDieOnTakeover(t *testing.T){
     }
     // Even after valid reauthentication with exactly the SAME station and
     // DHCP address, its PRE-departure TCP lease must never become valid again.
-    if err:=bridge.registry.AuthenticateFromPhysicalIP(b,"1001","7788",bridge);err!=nil{
+    if err:=bridge.registry.AuthenticateFromPhysicalIP(netip.MustParseAddr("192.168.247.162"),"1001","7788",bridge);err!=nil{
         t.Fatalf("fresh PIN after Wi-Fi rejoin rejected: %v",err)
     }
     if newer.allowed(time.Now()) {
@@ -187,5 +187,26 @@ func TestV2UDPFinalPacketDoesNotWasteRemainingData(t *testing.T) {
     if used!=998 {t.Fatalf("dropped UDP packet consumed quota: %d",used)}
     if count:=lease.reserveDatagram(2,directionUpload);count!=2{
         t.Fatalf("valid final UDP packet denied: %d",count)
+    }
+}
+
+func TestV2WaitsForExactFreshNATWithoutGuessing(t *testing.T) {
+    bridge,_,_:=v2SetupFlow(t)
+    bridge.nat.Invalidate()
+    done:=make(chan struct{})
+    go func(){
+        time.Sleep(110*time.Millisecond)
+        bridge.nat.Replace(v2TestNAT("192.168.247.161",""),time.Now())
+        close(done)
+    }()
+    lease,err:=bridge.waitForV2Flow(v2TestFlowKey(),500*time.Millisecond)
+    if err!=nil || !lease.allowed(time.Now()){
+        t.Fatalf("late exact NAT was not accepted: %v",err)
+    }
+    <-done
+    key:=v2TestFlowKey()
+    key.Destination=netip.MustParseAddrPort("4.4.4.4:443")
+    if _,err:=bridge.waitForV2Flow(key,120*time.Millisecond);err==nil {
+        t.Fatal("missing tuple was guessed after waiting")
     }
 }

@@ -46,6 +46,25 @@ func (b *v2AccountBridge) openV2Flow(key core.FlowKey, now time.Time) (*v2FlowLe
     return &v2FlowLease{bridge: b, physicalIP: ip, account: account, generation: gen}, nil
 }
 
+// waitForV2Flow allows a short grace for Android to publish a NEW exact NAT
+// tuple AFTER TCP/UDP establishment. It checks only the in-memory snapshot:
+// NEVER invoke dumpsys or fall back to another station in the flow handler.
+// When the tuple is ambiguous or the account has no entitlement, deny now.
+func (b *v2AccountBridge) waitForV2Flow(key core.FlowKey, maxWait time.Duration) (*v2FlowLease, error) {
+    deadline := time.Now().Add(maxWait)
+    for {
+        lease, err := b.openV2Flow(key, time.Now())
+        if err == nil { return lease, nil }
+        if err.Error() != string(core.MissingNAT) && err.Error() != string(core.StaleNAT) {
+            return nil, err
+        }
+        remaining := time.Until(deadline)
+        if remaining <= 0 { return nil, err }
+        if remaining > 100 * time.Millisecond { remaining = 100 * time.Millisecond }
+        time.Sleep(remaining)
+    }
+}
+
 // freshNATSnapshot is fed ONLY from a bounded asynchronous system snapshot,
 // never from a live connection handler. Malformed/error snapshots immediately
 // invalidate the index, so stale NAT ownership cannot be recycled.
@@ -238,7 +257,7 @@ func handleV2TCP(client net.Conn, id stack.TransportEndpointID, dialer *net.Dial
     if traffic == nil || traffic.v2Bridge == nil { return }
     key, valid := v2Key(id, "tcp")
     if !valid { return }
-    lease, err := traffic.v2Bridge.openV2Flow(key, time.Now())
+    lease, err := traffic.v2Bridge.waitForV2Flow(key, 2500 * time.Millisecond)
     if err != nil {
         traffic.noteRefusedUnauthorized()
         return
@@ -253,7 +272,7 @@ func handleV2UDP(client net.Conn, id stack.TransportEndpointID, dialer *net.Dial
     if traffic == nil || traffic.v2Bridge == nil { return }
     key, valid := v2Key(id, "udp")
     if !valid { return }
-    lease, err := traffic.v2Bridge.openV2Flow(key, time.Now())
+    lease, err := traffic.v2Bridge.waitForV2Flow(key, 2500 * time.Millisecond)
     if err != nil {
         traffic.noteRefusedUnauthorized()
         return

@@ -67,3 +67,19 @@ Data, préservation Média, débits partagés et cumul up/down.
 
 Branche `rebuild/shizzi-v2` uniquement. Package `dev.shizzi`,
 version de développement `0.5.0-alpha.1`.
+
+## Révision de sûreté
+
+- Un identifiant de génération **global et monotone** empêche qu'une session
+  TCP morte redevienne active après déconnexion Wi-Fi, reconnexion avec la
+  même MAC/IP et nouvelle authentification sur le même compte.
+- UDP ne décompte désormais aucun octet pour un datagramme refusé faute de
+  volume restant.
+- Les nouveaux flux peuvent attendre jusqu'à **2,5 secondes maximum**
+  l'apparition d'un tuple NAT complet dans le snapshot asynchrone. Cette
+  attente ne fait **aucun** appel dumpsys dans le handler et n'autorise pas
+  les rapprochements approximatifs.
+- Test virtuel de huit comptes et huit stations simultanés sur la même IP
+  partagée de TUN, avec consommation distincte et suspension ciblée. Ce test
+  ne remplace PAS une simulation Android radio + navigateur ni des appareils
+  physiques.
