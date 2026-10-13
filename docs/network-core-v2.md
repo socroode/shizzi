@@ -51,3 +51,16 @@ Conserver le package Android `dev.shizzi`, utiliser la **même clé privée de s
 `FA:DF:C5:E8:7F:A6:03:51:F7:DC:B7:5D:34:F1:AB:91:11:08:24:33:3C:D1:09:7A:38:B3:C7:03:F7:AF:3D:B7`.
 
 Ne jamais inclure les secrets de signature dans le dépôt ni publier une APK avec une clé de debug.
+
+## Étape 2 — portail public et login PIN (code de fondation)
+
+- Le moteur TCP gVisor reconnaît uniquement la destination locale `192.0.2.1:80` et sert l'accueil sans dépendre des règles NAT ou de l'identification du terminal.
+- GET / et HEAD / sont accessibles à un visiteur inconnu sur le réseau. La page présente le numéro de compte et le code PIN.
+- Les sites Internet externes ne bénéficient **d'aucune exception** de cette route. La permission de lire la page locale ne confère ni accès Internet ni Média.
+- `Registry.AuthenticateFromPhysicalIP` valide le PIN via une autorité de comptes externe, puis associe le compte à la session Wi-Fi prouvée par son IP originale, sans fixer le compte à l'appareil. Le second appareil authentifié prend la place du premier. L'expiration des vouchers ne supprime pas la session locale.
+- Une requête `POST /login` reçue depuis l'adresse NAT partagée `192.0.2.2` **échoue volontairement** : l'identification ne doit pas être accordée au mauvais appareil. Le portail s'ouvre cependant.
+- Le point d'entrée HTTP qui recevra la véritable IP hotspot *avant NAT* ainsi que le validateur PIN issu des comptes 0.4.3.5.3 **restent à raccorder**. Le dépôt ne prétend donc pas que l'identification complète fonctionne sur Android à cette étape.
+- Le forwarder original n'applique pas encore la politique de vouchers aux flux Internet : ne pas distribuer d'APK de ce code tant que le blocage Internet par défaut et la révocation des connexions actives ne sont pas vérifiés.
+- Le réseau de test observé est parfois **ouvert**, et le protocole demandé est HTTP. Un PIN saisi sur un Wi-Fi non chiffré peut être intercepté : prévoir un canal protégé pour les authentifications de production et des protections anti-bruteforce.
+
+Tests supplémentaires : portail anonyme, formulaire GET, login PIN vérifié sur IP physique, refus des PIN incorrects, impossibilité de login depuis NAT partagé, absence de détournement d'IP par en-tête HTTP, départ Wi-Fi durant vérification du PIN, et aucune exception d'accès Internet pour un client inconnu.

@@ -117,8 +117,13 @@ func TestUnauthenticatedStationAndInvalidBindings(t *testing.T) {
     if err := r.GrantVerifiedLogin(phoneA, "1001"); err != ErrUnboundStation { t.Fatal(err) }
     if err := r.BindAddress(phoneA, mustIP("127.0.0.1")); err != ErrInvalidIP { t.Fatal(err) }
     if err := r.WifiJoined("00:00:00:00:00:00"); err != ErrInvalidStation { t.Fatal(err) }
-    if got := r.AuthorizeDirect(mustIP("192.168.247.200"), Portal, time.Now()); got != DenyUnknownStation {
-        t.Fatal(got)
+    // The local landing page is public on the hotspot, while Internet
+    // always remains gated by a verified account session and voucher.
+    if got := r.AuthorizeDirect(mustIP("192.168.247.200"), Portal, time.Now()); got != Allow {
+        t.Fatalf("anonymous hotspot portal rejected: %s", got)
+    }
+    if got := r.AuthorizeDirect(mustIP("192.168.247.200"), Internet, time.Now()); got != DenyUnknownStation {
+        t.Fatalf("anonymous Internet accepted: %s", got)
     }
 }
 

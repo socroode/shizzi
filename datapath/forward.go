@@ -54,6 +54,20 @@ func installForwarders(netStack *stack.Stack, dialer *net.Dialer) {
 func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer) {
 	id := request.ID()
 
+	// A browser must see the captive landing page WITHOUT an account,
+	// voucher, MAC identification or Android NAT entry.
+	if isPublicPortalFlow(id) {
+		var queue waiter.Queue
+		endpoint, tcpipErr := request.CreateEndpoint(&queue)
+		if tcpipErr != nil {
+			request.Complete(true)
+			return
+		}
+		request.Complete(false)
+		go servePublicPortalConn(gonet.NewTCPConn(&queue, endpoint))
+		return
+	}
+
 	upstream, err := dialer.Dial("tcp", destinationOf(id))
 	if err != nil {
 		request.Complete(true)

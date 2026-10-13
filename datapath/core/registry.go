@@ -17,6 +17,7 @@ var (
     ErrStationAbsent = errors.New("station is not associated with Wi-Fi")
     ErrUnboundStation = errors.New("station has no verified IPv4 address")
     ErrInvalidAccount = errors.New("empty account number")
+    ErrLoginDenied = errors.New("invalid credentials or unverifiable Wi-Fi client")
 )
 
 type Rights struct {
@@ -176,6 +177,53 @@ func (r *Registry) GrantVerifiedLogin(mac, account string) error {
     return nil
 }
 
+
+// PINVerifier is the only credential authority. The raw PIN must be checked
+// against a securely stored password hash by the account module. Never
+// authenticate based only on a station MAC, IP, voucher code or HTTP cookie.
+type PINVerifier interface {
+    VerifyPIN(accountNumber, pin string) bool
+}
+
+// AuthenticateFromPhysicalIP is called by the portal listener only when its
+// remote address is the ORIGINAL physical hotspot-client IP, before NAT.
+// Requests reaching gVisor as shared 192.0.2.2 cannot use this entrypoint.
+// A Wi-Fi departure and rejoin during slow PIN verification cannot resurrect
+// the previous session: the old station object no longer exists.
+func (r *Registry) AuthenticateFromPhysicalIP(ip netip.Addr, account, pin string, verifier PINVerifier) error {
+    account = strings.TrimSpace(account)
+    if !validClientIP(ip) || ip == netip.MustParseAddr("192.0.2.2") ||
+        account == "" || pin == "" || verifier == nil {
+        return ErrLoginDenied
+    }
+
+    r.mu.RLock()
+    mac, known := r.ipOwner[ip]
+    s := r.stations[mac]
+    r.mu.RUnlock()
+    if !known || s == nil { return ErrLoginDenied }
+
+    // Credential work is outside the registry lock. Verify again below that
+    // the physical session and its IP have NOT been replaced in the meantime.
+    if !verifier.VerifyPIN(account, pin) { return ErrLoginDenied }
+
+    r.mu.Lock()
+    defer r.mu.Unlock()
+    current := r.stations[mac]
+    if current != s || current == nil || current.ip != ip || r.ipOwner[ip] != mac {
+        return ErrLoginDenied
+    }
+    if otherMAC, used := r.accountOwner[account]; used && otherMAC != mac {
+        if other := r.stations[otherMAC]; other != nil {
+            r.revokeLoginLocked(otherMAC, other)
+        }
+    }
+    r.revokeLoginLocked(mac, current)
+    current.account = account
+    r.accountOwner[account] = mac
+    return nil
+}
+
 func (r *Registry) Logout(mac string) error {
     id, err := canonicalMAC(mac)
     if err != nil { return err }
@@ -227,11 +275,15 @@ const (
 func (r *Registry) AuthorizeDirect(ip netip.Addr, service Service, now time.Time) Decision {
     r.mu.RLock()
     defer r.mu.RUnlock()
+    // Public captive portal: an unrecognized physical client is allowed to
+    // SEE the login page. Device recognition is needed only before binding
+    // authenticated rights to a particular Wi-Fi session. The HTTP listener
+    // must still be scoped to the private hotspot, never a WAN listener.
+    if service == Portal && validClientIP(ip) { return Allow }
     mac, known := r.ipOwner[ip]
     if !known { return DenyUnknownStation }
     s, ok := r.stations[mac]
     if !ok || s.ip != ip { return DenyUnknownStation }
-    if service == Portal { return Allow }
     if s.account == "" { return DenyLoginRequired }
     rights, ok := r.rights[s.account]
     if !ok { return DenyVoucherRequired }

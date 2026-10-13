@@ -134,7 +134,14 @@ type Gate struct {
     NAT *NATIndex
 }
 
+// The local captive portal is reachable even before any NAT rule or login.
+// This exemption is strictly scoped to HTTP on Shizzi's local portal IP.
 func (g Gate) CheckTranslated(key FlowKey, service Service, now time.Time) (Decision, Attribution) {
+    if service == Portal && strings.EqualFold(key.Protocol, "tcp") &&
+        key.Destination == netip.MustParseAddrPort("192.0.2.1:80") {
+        return Allow, MissingNAT
+    }
+    if service == Portal { return DenyUnknownStation, MissingNAT }
     if g.Sessions == nil || g.NAT == nil { return DenyUnknownStation, MissingNAT }
     client, reason := g.NAT.ResolveExact(key, now)
     if reason != ExactNAT { return DenyUnknownStation, reason }
