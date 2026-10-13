@@ -1,0 +1,37 @@
+name: Shizzi V2 network core
+
+on:
+  push:
+    branches:
+      - rebuild/shizzi-v2
+    paths:
+      - 'datapath/core/**'
+      - 'docs/network-core-v2.md'
+      - '.github/workflows/network-core-v2.yml'
+  pull_request:
+    paths:
+      - 'datapath/core/**'
+      - '.github/workflows/network-core-v2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  invariants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+      - name: Verify client sessions, voucher gates and NAT isolation
+        working-directory: datapath/core
+        env:
+          GO111MODULE: 'off'
+        run: go test -race -count=1 -v ./...
+      - name: Vet network core
+        working-directory: datapath/core
+        env:
+          GO111MODULE: 'off'
+        run: go vet ./...

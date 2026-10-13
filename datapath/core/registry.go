@@ -1,0 +1,241 @@
+// Package core contains the device-identity and authorization invariants for
+// Shizzi V2. It does not depend on Android APIs or on the TUN implementation.
+package core
+
+import (
+    "errors"
+    "net"
+    "net/netip"
+    "strings"
+    "sync"
+    "time"
+)
+
+var (
+    ErrInvalidStation = errors.New("invalid Wi-Fi station MAC")
+    ErrInvalidIP = errors.New("invalid client IPv4 address")
+    ErrStationAbsent = errors.New("station is not associated with Wi-Fi")
+    ErrUnboundStation = errors.New("station has no verified IPv4 address")
+    ErrInvalidAccount = errors.New("empty account number")
+)
+
+type Rights struct {
+    Disabled bool
+    DataBytes int64
+    DataValidUntil time.Time
+    UnlimitedUntil time.Time
+    MediaUntil time.Time
+}
+
+func (r Rights) InternetAllowed(now time.Time) bool {
+    if r.Disabled { return false }
+    unlimited := !r.UnlimitedUntil.IsZero() && now.Before(r.UnlimitedUntil)
+    data := r.DataBytes > 0 && !r.DataValidUntil.IsZero() && now.Before(r.DataValidUntil)
+    return unlimited || data
+}
+
+func (r Rights) MediaAllowed(now time.Time) bool {
+    return !r.Disabled && !r.MediaUntil.IsZero() && now.Before(r.MediaUntil)
+}
+
+type station struct {
+    ip netip.Addr
+    account string
+}
+
+type StationSnapshot struct {
+    MAC string
+    IP netip.Addr
+    Account string
+    Associated bool
+}
+
+// Registry keeps only an ephemeral association between a Wi-Fi station, its
+// VERIFIED DHCP/neighbor IPv4 address, and its logged-in account. An address
+// or MAC alone is not proof of credentials and never creates authorization.
+//
+// WifiDeparted must be called on an authoritative SoftAP departure event.
+// An absent DNS/NAT rule, a sleeping device, or a timed-out dumpsys is NOT a
+// departure event. A later WifiJoined starts a new unauthenticated session.
+// Account rights persist independently of the station's Wi-Fi lifetime.
+type Registry struct {
+    mu sync.RWMutex
+    stations map[string]*station
+    ipOwner map[netip.Addr]string
+    accountOwner map[string]string
+    rights map[string]Rights
+}
+
+func NewRegistry() *Registry {
+    return &Registry{
+        stations: make(map[string]*station),
+        ipOwner: make(map[netip.Addr]string),
+        accountOwner: make(map[string]string),
+        rights: make(map[string]Rights),
+    }
+}
+
+func canonicalMAC(value string) (string, error) {
+    parsed, err := net.ParseMAC(strings.TrimSpace(value))
+    if err != nil || len(parsed) != 6 || parsed[0]&1 != 0 {
+        return "", ErrInvalidStation
+    }
+    allZero := true
+    for _, b := range parsed { if b != 0 { allZero = false } }
+    if allZero { return "", ErrInvalidStation }
+    return strings.ToLower(parsed.String()), nil
+}
+
+func validClientIP(ip netip.Addr) bool {
+    return ip.IsValid() && ip.Is4() && !ip.IsUnspecified() &&
+        !ip.IsLoopback() && !ip.IsMulticast() && !ip.IsLinkLocalUnicast()
+}
+
+func (r *Registry) WifiJoined(mac string) error {
+    id, err := canonicalMAC(mac)
+    if err != nil { return err }
+    r.mu.Lock()
+    defer r.mu.Unlock()
+    // A second join notification is not a disconnect or a new login.
+    if _, present := r.stations[id]; !present {
+        r.stations[id] = &station{}
+    }
+    return nil
+}
+
+// BindAddress requires independent Android DHCP/neighbor evidence linking
+// the IPv4 address to the already associated MAC. It must not be called with
+// an address guessed from an unrelated NAT flow.
+func (r *Registry) BindAddress(mac string, ip netip.Addr) error {
+    id, err := canonicalMAC(mac)
+    if err != nil { return err }
+    if !validClientIP(ip) { return ErrInvalidIP }
+
+    r.mu.Lock()
+    defer r.mu.Unlock()
+    target, present := r.stations[id]
+    if !present { return ErrStationAbsent }
+    if target.ip == ip { return nil }
+
+    if oldOwner, taken := r.ipOwner[ip]; taken && oldOwner != id {
+        if old := r.stations[oldOwner]; old != nil {
+            // Address reuse must never inherit the old user's authorization.
+            r.revokeLoginLocked(oldOwner, old)
+            old.ip = netip.Addr{}
+        }
+    }
+    if target.ip.IsValid() { delete(r.ipOwner, target.ip) }
+    target.ip = ip
+    r.ipOwner[ip] = id
+    return nil
+}
+
+func (r *Registry) revokeLoginLocked(mac string, s *station) {
+    if s.account != "" && r.accountOwner[s.account] == mac {
+        delete(r.accountOwner, s.account)
+    }
+    s.account = ""
+}
+
+func (r *Registry) WifiDeparted(mac string) error {
+    id, err := canonicalMAC(mac)
+    if err != nil { return err }
+    r.mu.Lock()
+    defer r.mu.Unlock()
+    s, found := r.stations[id]
+    if !found { return nil }
+    if s.ip.IsValid() && r.ipOwner[s.ip] == id { delete(r.ipOwner, s.ip) }
+    r.revokeLoginLocked(id, s)
+    delete(r.stations, id)
+    return nil
+}
+
+// GrantVerifiedLogin MUST be called only AFTER the credential validator has
+// approved the account number and password. A successful login takes over the
+// account from its previous device without disconnecting either device's Wi-Fi.
+func (r *Registry) GrantVerifiedLogin(mac, account string) error {
+    id, err := canonicalMAC(mac)
+    if err != nil { return err }
+    account = strings.TrimSpace(account)
+    if account == "" { return ErrInvalidAccount }
+
+    r.mu.Lock()
+    defer r.mu.Unlock()
+    s, found := r.stations[id]
+    if !found { return ErrStationAbsent }
+    if !s.ip.IsValid() { return ErrUnboundStation }
+
+    if otherMAC, ok := r.accountOwner[account]; ok && otherMAC != id {
+        if other := r.stations[otherMAC]; other != nil {
+            r.revokeLoginLocked(otherMAC, other)
+        }
+    }
+    r.revokeLoginLocked(id, s)
+    s.account = account
+    r.accountOwner[account] = id
+    return nil
+}
+
+func (r *Registry) Logout(mac string) error {
+    id, err := canonicalMAC(mac)
+    if err != nil { return err }
+    r.mu.Lock()
+    defer r.mu.Unlock()
+    if s := r.stations[id]; s != nil { r.revokeLoginLocked(id, s) }
+    return nil
+}
+
+func (r *Registry) SetRights(account string, rights Rights) error {
+    account = strings.TrimSpace(account)
+    if account == "" { return ErrInvalidAccount }
+    r.mu.Lock()
+    r.rights[account] = rights
+    r.mu.Unlock()
+    return nil
+}
+
+func (r *Registry) Snapshot(mac string) (StationSnapshot, bool) {
+    id, err := canonicalMAC(mac)
+    if err != nil { return StationSnapshot{}, false }
+    r.mu.RLock()
+    defer r.mu.RUnlock()
+    s, found := r.stations[id]
+    if !found { return StationSnapshot{}, false }
+    return StationSnapshot{MAC: id, IP: s.ip, Account: s.account, Associated: true}, true
+}
+
+type Service int
+
+const (
+    Portal Service = iota
+    Internet
+    Media
+)
+
+type Decision string
+
+const (
+    Allow Decision = "allowed"
+    DenyUnknownStation Decision = "unknown_station"
+    DenyLoginRequired Decision = "login_required"
+    DenyVoucherRequired Decision = "voucher_required"
+)
+
+// AuthorizeDirect checks requests whose original physical-client address is
+// visible (for example a portal listener bound directly on the hotspot).
+// No NAT tuple matching is required for this local path.
+func (r *Registry) AuthorizeDirect(ip netip.Addr, service Service, now time.Time) Decision {
+    r.mu.RLock()
+    defer r.mu.RUnlock()
+    mac, known := r.ipOwner[ip]
+    if !known { return DenyUnknownStation }
+    s, ok := r.stations[mac]
+    if !ok || s.ip != ip { return DenyUnknownStation }
+    if service == Portal { return Allow }
+    if s.account == "" { return DenyLoginRequired }
+    rights, ok := r.rights[s.account]
+    if !ok { return DenyVoucherRequired }
+    if service == Internet && rights.InternetAllowed(now) { return Allow }
+    if service == Media && rights.MediaAllowed(now) { return Allow }
+    return DenyVoucherRequired
+}
