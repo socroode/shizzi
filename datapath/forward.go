@@ -48,9 +48,8 @@ func isDNSPort(port uint16) bool { return port == 53 }
 // connection is tracked as established, which cannot happen while the SYN is
 // held waiting for that same rule. Identification, the portal decision and
 // the account check all happen before any upstream dial.
-// UI recovery stage: the legacy 0.4.3.5.3 policy backend is included only
-// to compile its router, Media, Messaging and Admin UI. It is NOT allowed
-// to forward Internet until the V2 account/PIN and voucher gate is wired.
+// Legacy 0.4.3.5.3 NAT/session decisions remain disabled permanently.
+// Internet flows use ONLY the strict V2 authenticated-session relay below.
 const v2UIRecoveryOnly = true
 
 func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer, traffic *TrafficManager) {
@@ -71,9 +70,19 @@ func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer, traffic *Traf
 		return
 	}
 	if v2UIRecoveryOnly {
-		request.Complete(true)
-		return
-	}
+        // Do not execute the legacy forwarder. After the TCP handshake,
+        // a separate goroutine checks fresh exact NAT + the account/PIN
+        // session + the voucher before ANY upstream socket is opened.
+        var queue waiter.Queue
+        endpoint, tcpipErr := request.CreateEndpoint(&queue)
+        if tcpipErr != nil {
+            request.Complete(true)
+            return
+        }
+        request.Complete(false)
+        go handleV2TCP(gonet.NewTCPConn(&queue, endpoint), id, dialer, traffic)
+        return
+    }
 	if traffic != nil && traffic.refuseClientIPv6(sourceOf(id)) {
 		// RST at once so the client falls back to IPv4 immediately.
 		request.Complete(true)
@@ -174,8 +183,13 @@ func handleTCP(
 // the first datagrams wait in the endpoint queue meanwhile.
 func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer, traffic *TrafficManager) bool {
 	if v2UIRecoveryOnly {
-		return false
-	}
+        id := request.ID()
+        var queue waiter.Queue
+        endpoint, tcpipErr := request.CreateEndpoint(&queue)
+        if tcpipErr != nil { return false }
+        go handleV2UDP(gonet.NewUDPConn(&queue, endpoint), id, dialer, traffic)
+        return true
+    }
 	id := request.ID()
 	if traffic != nil && traffic.refuseClientIPv6(sourceOf(id)) {
 		return false

@@ -138,6 +138,8 @@ type TrafficManager struct {
 
 	flowAttribution *flowAttributionResolver
 	v2Physical *v2PhysicalPortal
+	v2Bridge *v2AccountBridge
+	v2Limits map[string]*v2RatePair
 
 	requireClientAttribution bool
 
@@ -186,6 +188,7 @@ func newTrafficManager() *TrafficManager {
 		requireClientAttribution: true,
 		epoch:                    time.Now().UnixNano(),
 		flowAttribution:          newFlowAttributionResolver(),
+		v2Limits:                 make(map[string]*v2RatePair),
 		globalDownloadLimiter:    newBandwidthLimiter(0),
 		globalUploadLimiter:      newBandwidthLimiter(0),
 		clients:                  make(map[string]*clientTraffic),

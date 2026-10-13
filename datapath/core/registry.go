@@ -42,6 +42,9 @@ func (r Rights) MediaAllowed(now time.Time) bool {
 type station struct {
     ip netip.Addr
     account string
+    // generation changes on every authentication/revocation. It prevents a
+    // TCP/UDP socket from inheriting a later session on the same station.
+    generation uint64
 }
 
 type StationSnapshot struct {
@@ -132,6 +135,7 @@ func (r *Registry) BindAddress(mac string, ip netip.Addr) error {
 }
 
 func (r *Registry) revokeLoginLocked(mac string, s *station) {
+    s.generation++
     if s.account != "" && r.accountOwner[s.account] == mac {
         delete(r.accountOwner, s.account)
     }
@@ -173,6 +177,7 @@ func (r *Registry) GrantVerifiedLogin(mac, account string) error {
     }
     r.revokeLoginLocked(id, s)
     s.account = account
+    s.generation++
     r.accountOwner[account] = id
     return nil
 }
@@ -220,6 +225,7 @@ func (r *Registry) AuthenticateFromPhysicalIP(ip netip.Addr, account, pin string
     }
     r.revokeLoginLocked(mac, current)
     current.account = account
+    current.generation++
     r.accountOwner[account] = mac
     return nil
 }
@@ -279,6 +285,37 @@ func (r *Registry) Snapshot(mac string) (StationSnapshot, bool) {
     s, found := r.stations[id]
     if !found { return StationSnapshot{}, false }
     return StationSnapshot{MAC: id, IP: s.ip, Account: s.account, Associated: true}, true
+}
+
+// InternetLease contains a temporary routing authorization. The account is
+// the USER identity; IP/MAC are only ephemeral network/session selectors.
+// Never expose generation as a credential or persist a device/account tie.
+func (r *Registry) InternetLease(ip netip.Addr, now time.Time) (string, uint64, bool) {
+    r.mu.RLock()
+    defer r.mu.RUnlock()
+    mac, ok := r.ipOwner[ip]
+    if !ok { return "", 0, false }
+    s := r.stations[mac]
+    if s == nil || s.ip != ip || s.account == "" ||
+        r.accountOwner[s.account] != mac { return "", 0, false }
+    rights, found := r.rights[s.account]
+    if !found || !rights.InternetAllowed(now) { return "", 0, false }
+    return s.account, s.generation, true
+}
+
+// LeaseStillValid is called for EACH internet transfer, not just connect.
+// This revokes existing TCP/UDP flows after Wi-Fi departure, takeover, new
+// login on the same station, IP reuse, disabling or voucher expiry.
+func (r *Registry) LeaseStillValid(ip netip.Addr, account string, generation uint64, now time.Time) bool {
+    r.mu.RLock()
+    defer r.mu.RUnlock()
+    mac, ok := r.ipOwner[ip]
+    if !ok { return false }
+    s := r.stations[mac]
+    if s == nil || s.ip != ip || s.account != account ||
+        s.generation != generation || r.accountOwner[account] != mac { return false }
+    rights, exists := r.rights[account]
+    return exists && rights.InternetAllowed(now)
 }
 
 type Service int

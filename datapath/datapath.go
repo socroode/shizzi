@@ -86,6 +86,7 @@ func Start(tunFD int, mtu int) (*Session, error) {
 	v2Physical := &v2PhysicalPortal{}
 	traffic.v2Physical = v2Physical
 	v2Bridge := newV2AccountBridge(traffic)
+	traffic.v2Bridge = v2Bridge
 	installForwarders(netStack, &net.Dialer{
 		Timeout: dialTimeout,
 		Control: binding.control,
@@ -100,6 +101,7 @@ func Start(tunFD int, mtu int) (*Session, error) {
 		stopPresence: make(chan struct{}),
 	}
 	go session.maintainClientPresence(session.stopPresence)
+	go session.refreshV2NAT(session.stopPresence)
 	return session, nil
 }
 
@@ -121,6 +123,24 @@ func (s *Session) maintainClientPresence(stop <-chan struct{}) {
 			}
 		}
 	}
+}
+
+// refreshV2NAT is deliberately off the hot path. A missing or malformed
+// Android NAT snapshot invalidates the entire temporary flow index; it never
+// grants access based on an old rule, sole-client guess, or a MAC address.
+func (s *Session) refreshV2NAT(stop <-chan struct{}) {
+    ticker := time.NewTicker(1200 * time.Millisecond)
+    defer ticker.Stop()
+    if s.v2Bridge == nil { return }
+    s.v2Bridge.freshNATSnapshot()
+    for {
+        select {
+        case <-stop:
+            return
+        case <-ticker.C:
+            s.v2Bridge.freshNATSnapshot()
+        }
+    }
 }
 
 // SetNetwork pins every subsequent dial to a handle from

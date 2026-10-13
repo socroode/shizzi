@@ -16,6 +16,7 @@ import (
 type v2AccountBridge struct {
     manager *TrafficManager
     registry *core.Registry
+    nat *core.NATIndex
     mu sync.Mutex
     credentialVersions map[string]string
 }
@@ -26,6 +27,7 @@ func newV2AccountBridge(manager *TrafficManager) *v2AccountBridge {
     return &v2AccountBridge{
         manager: manager,
         registry: core.NewRegistry(),
+        nat: core.NewNATIndex(v2NATSnapshotAge),
         credentialVersions: make(map[string]string),
     }
 }
