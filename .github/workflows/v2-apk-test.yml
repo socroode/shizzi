@@ -71,7 +71,7 @@ jobs:
           BUILD_TOOLS="$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | grep -v -- '-rc' | sort -V | tail -1)"
           CERT_EXPECTED="$(printf '%s' 'FA:DF:C5:E8:7F:A6:03:51:F7:DC:B7:5D:34:F1:AB:91:11:08:24:33:3C:D1:09:7A:38:B3:C7:03:F7:AF:3D:B7' | tr -d ':' | tr '[:upper:]' '[:lower:]')"
           mkdir -p test-apks-signed
-          for spec in 'app:Shizzi-V2-0.5.0-alpha.1-SIGNED.apk:dev.shizzi:32' 'conso:Shizzi-Plus-SIGNED.apk:dev.shizzi.conso:14' 'admin:Shizzi-Admin-SIGNED.apk:dev.shizzi.admin:11'; do
+          for spec in 'app:Shizzi-V2-0.5.0-alpha.2-SIGNED.apk:dev.shizzi:33' 'conso:Shizzi-Plus-SIGNED.apk:dev.shizzi.conso:14' 'admin:Shizzi-Admin-SIGNED.apk:dev.shizzi.admin:11'; do
             IFS=: read -r module filename package expectedCode <<< "$spec"
             apk="$module/build/outputs/apk/release/$module-release.apk"
             test -s "$apk"
@@ -132,7 +132,7 @@ jobs:
         run: |
           test -s app/build/outputs/apk/debug/app-debug.apk
           grep -F 'applicationId = "dev.shizzi"' app/build.gradle.kts
-          grep -F 'versionCode = 32' app/build.gradle.kts
+          grep -F 'versionCode = 33' app/build.gradle.kts
       - name: Upload debug APK for clean-install device only
         uses: actions/upload-artifact@v5
         with:

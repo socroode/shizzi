@@ -67,7 +67,7 @@ jobs:
       - name: Confirm new package version
         run: |
           grep -F 'applicationId = "dev.shizzi"' app/build.gradle.kts
-          grep -F 'versionCode = 32' app/build.gradle.kts
-          grep -F 'versionName = "0.5.0-alpha.1"' app/build.gradle.kts
+          grep -F 'versionCode = 33' app/build.gradle.kts
+          grep -F 'versionName = "0.5.0-alpha.2"' app/build.gradle.kts
       # Deliberately NO artifact upload or release: debug APK is NOT
       # signed with the permanent certificate of 0.4.3.5.3.
