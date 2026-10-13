@@ -15,20 +15,27 @@ class TetherService : ITetherService.Stub {
     private val session: TetherSession by lazy { TetherSession(shellContext) }
     private val compatibility: CompatibilityCheck by lazy { CompatibilityCheck(shellContext) }
     private val apexInstaller: ApexInstaller by lazy { ApexInstaller() }
+    private val clientAppDistribution: ClientAppDistributionServer by lazy {
+        ClientAppDistributionServer(
+            readClientAppAssetFromInstalledShizzi(context),
+            readAdminAppAssetFromInstalledShizzi(context),
+        )
+    }
 
     @Suppress("unused")
     constructor() : this(acquireSystemContext())
 
     constructor(context: Context) {
         this.context = context
+        ensureClientAppDistribution()
         liveInstance = this
     }
 
     override fun getContractVersion(): Int = CONTRACT_VERSION
 
-    override fun start(logging: Boolean, vpnMode: String?): String {
+    override fun start(logging: Boolean, vpnMode: String?, ipv4Only: Boolean): String {
         SessionLog.setEnabled(logging)
-        return runCatching { session.start(parseVpnMode(vpnMode)) }
+        return runCatching { session.start(parseVpnMode(vpnMode), ipv4Only) }
             .getOrElse { failure -> sessionError("start", failure) }
     }
 
@@ -43,6 +50,58 @@ class TetherService : ITetherService.Stub {
     override fun getStatus(): String =
         runCatching { session.status() }
             .getOrElse { failure -> sessionError("getStatus", failure) }
+
+    override fun getTrafficStats(): String =
+        runCatching { session.trafficStats() }
+            .getOrElse { "{}" }
+
+    override fun setRequireClientAttribution(required: Boolean) {
+        session.setRequireClientAttribution(required)
+    }
+
+    override fun setGlobalTrafficPolicy(
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+    ) {
+        session.setGlobalTrafficPolicy(downloadBps, uploadBps, quotaBytes)
+    }
+
+    override fun setDefaultClientTrafficPolicy(
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) {
+        session.setDefaultClientTrafficPolicy(downloadBps, uploadBps, quotaBytes, blocked)
+    }
+
+    override fun setClientTrafficPolicy(
+        ip: String?,
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) {
+        session.setClientTrafficPolicy(ip.orEmpty(), downloadBps, uploadBps, quotaBytes, blocked)
+    }
+
+    override fun resetTrafficStats() {
+        session.resetTrafficStats()
+    }
+
+    override fun setPortalConfig(required: Boolean, configJson: String?) {
+        ensureClientAppDistribution()
+        session.setPortalConfig(required, configJson.orEmpty())
+    }
+
+    override fun clearPortalClaims() {
+        session.clearPortalClaims()
+    }
+
+    override fun revokePortalClient(ip: String?) {
+        session.revokePortalClient(ip.orEmpty())
+    }
 
     override fun setLogging(enabled: Boolean) {
         SessionLog.setEnabled(enabled)
@@ -75,6 +134,24 @@ class TetherService : ITetherService.Stub {
             runCatching { runner.run(attemptTethering, availabilityTimeoutMs) }
                 .getOrElse { failure -> errorReport("runProbes", failure) },
         )
+
+    private fun ensureClientAppDistribution() {
+        runCatching { clientAppDistribution.start() }
+            .onSuccess { started ->
+                if (started) {
+                    Log.i(
+                        TAG,
+                        "Shizzi+ / Shizzi Admin distribution hosted in shell process on 127.0.0.1:" +
+                            ClientAppDistributionServer.PORT,
+                    )
+                } else {
+                    Log.w(TAG, "embedded app shell distribution asset unavailable")
+                }
+            }
+            .onFailure { failure ->
+                Log.e(TAG, "embedded app shell distribution failed", failure)
+            }
+    }
 
     private fun publish(report: String): String {
         runCatching { java.io.File(REPORT_PATH).writeText(report) }

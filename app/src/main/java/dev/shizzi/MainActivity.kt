@@ -50,6 +50,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         registerShizukuListeners()
 
+        if (MediaPrefs.isEnabled(this)) {
+            MediaServerService.start(this)
+        }
+
         setContent {
             val settings by viewModel.settings.collectAsState()
             val loaded = settings ?: return@setContent

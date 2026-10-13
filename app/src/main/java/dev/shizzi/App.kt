@@ -12,9 +12,17 @@ class App : Application() {
 
     val settingsStore: SettingsStore by lazy { SettingsStore(this) }
 
+    val cybercafeStore: CybercafeStore by lazy { CybercafeStore(this) }
+
     override fun onCreate() {
         super.onCreate()
         instance = this
+
+        // The media server runs in its own process so a client/parser failure
+        // can never take down the hotspot/TUN process. Keep that process lean:
+        // SettingsStore uses DataStore, which must not be opened independently
+        // from both processes.
+        if (Application.getProcessName().endsWith(":media")) return
 
         SessionLog.useAppStorage(filesDir)
         applyStoredSettings()

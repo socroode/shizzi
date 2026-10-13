@@ -22,6 +22,7 @@ import dev.shizzi.ui.theme.standardTween
 enum class Screen(val depth: Int) {
     HOME(0),
     SETTINGS(1),
+    CYBERCAFE(1),
     LOG(2),
     EASTER_EGG(1),
 }

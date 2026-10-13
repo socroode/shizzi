@@ -203,10 +203,14 @@ class TetherClient {
         bound.rebootDevice()
     }
 
-    suspend fun start(logging: Boolean, vpnMode: VpnMode): String = withContext(Dispatchers.IO) {
+    suspend fun start(
+        logging: Boolean,
+        vpnMode: VpnMode,
+        ipv4Only: Boolean = false,
+    ): String = withContext(Dispatchers.IO) {
         val bound = service()
         verifyContract(bound)
-        bound.start(logging, vpnMode.name)
+        bound.start(logging, vpnMode.name, ipv4Only)
     }
 
     fun setLogging(enabled: Boolean) {
@@ -241,6 +245,76 @@ class TetherClient {
 
     suspend fun status(): String = withContext(Dispatchers.IO) {
         service().status
+    }
+
+    suspend fun trafficStats(): String = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.trafficStats
+    }
+
+    suspend fun setRequireClientAttribution(required: Boolean) = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.setRequireClientAttribution(required)
+    }
+
+    suspend fun setGlobalTrafficPolicy(
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+    ) = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.setGlobalTrafficPolicy(downloadBps, uploadBps, quotaBytes)
+    }
+
+    suspend fun setDefaultClientTrafficPolicy(
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.setDefaultClientTrafficPolicy(downloadBps, uploadBps, quotaBytes, blocked)
+    }
+
+    suspend fun setClientTrafficPolicy(
+        ip: String,
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.setClientTrafficPolicy(ip, downloadBps, uploadBps, quotaBytes, blocked)
+    }
+
+    suspend fun resetTrafficStats() = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.resetTrafficStats()
+    }
+
+    suspend fun setPortalConfig(required: Boolean, configJson: String) =
+        withContext(Dispatchers.IO) {
+            val bound = service()
+            verifyContract(bound)
+            bound.setPortalConfig(required, configJson)
+        }
+
+    suspend fun clearPortalClaims() = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.clearPortalClaims()
+    }
+
+    suspend fun revokePortalClient(ip: String) = withContext(Dispatchers.IO) {
+        val bound = service()
+        verifyContract(bound)
+        bound.revokePortalClient(ip)
     }
 
     private fun verifyContract(bound: ITetherService) {

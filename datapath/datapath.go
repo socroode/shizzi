@@ -9,6 +9,7 @@ package datapath
 import (
 	"fmt"
 	"net"
+	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
@@ -30,6 +31,8 @@ const nicID tcpip.NICID = 1
 type Session struct {
 	stack   *stack.Stack
 	binding *networkBinding
+	traffic *TrafficManager
+	stopPresence chan struct{}
 }
 
 // Start builds a netstack over tunFD, already open, and attaches it to the TUN.
@@ -77,12 +80,40 @@ func Start(tunFD int, mtu int) (*Session, error) {
 	})
 
 	binding := &networkBinding{}
+	traffic := newTrafficManager()
 	installForwarders(netStack, &net.Dialer{
 		Timeout: dialTimeout,
 		Control: binding.control,
-	})
+	}, traffic)
 
-	return &Session{stack: netStack, binding: binding}, nil
+	session := &Session{
+		stack: netStack,
+		binding: binding,
+		traffic: traffic,
+		stopPresence: make(chan struct{}),
+	}
+	go session.maintainClientPresence(session.stopPresence)
+	return session, nil
+}
+
+// Keep account/device presence in sync without blocking traffic statistics,
+// authentication, NAT attribution or the local captive portal.
+func (s *Session) maintainClientPresence(stop <-chan struct{}) {
+	ticker := time.NewTicker(clientPresenceRefresh)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			select {
+			case <-stop:
+				return
+			default:
+				s.traffic.refreshClientPresence()
+			}
+		}
+	}
 }
 
 // SetNetwork pins every subsequent dial to a handle from
@@ -102,10 +133,104 @@ func (s *Session) SetNetwork(handle int64) {
 	s.binding.set(uint64(handle))
 }
 
+
+// SetRequireClientAttribution enables fail-closed client identification.
+// Once enabled, a shared 192.0.2.2/2001:db8::2 flow is not forwarded until
+// Android's tethering NAT state resolves it to one physical hotspot client.
+func (s *Session) SetRequireClientAttribution(required bool) {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.setRequireClientAttribution(required)
+}
+
+// SetGlobalPolicy configures an optional aggregate speed/quota ceiling.
+// Values <= 0 mean unlimited.
+func (s *Session) SetGlobalPolicy(downloadBps, uploadBps, quotaBytes int64) {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.setGlobalPolicy(downloadBps, uploadBps, quotaBytes)
+}
+
+// SetDefaultClientPolicy configures newly discovered physical clients.
+func (s *Session) SetDefaultClientPolicy(
+	downloadBps, uploadBps, quotaBytes int64,
+	blocked bool,
+) {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.setDefaultClientPolicy(downloadBps, uploadBps, quotaBytes, blocked)
+}
+
+// SetClientPolicy configures one resolved physical client IP.
+func (s *Session) SetClientPolicy(
+	ip string,
+	downloadBps, uploadBps, quotaBytes int64,
+	blocked bool,
+) {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.setClientPolicy(ip, ClientPolicy{
+		DownloadBitsPerSecond: downloadBps,
+		UploadBitsPerSecond:   uploadBps,
+		QuotaBytes:            quotaBytes,
+		Blocked:               blocked,
+	})
+}
+
+
+// SetPortalConfig enables/disables account-gated captive access and supplies
+// the current account snapshot from Android. The Android store remains the
+// durable source of truth.
+func (s *Session) SetPortalConfig(required bool, configJSON string) {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.setPortalConfig(required, configJSON)
+}
+
+// ClearPortalClaims acknowledges recharge requests already handled by Android.
+func (s *Session) ClearPortalClaims() {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.clearPortalClaims()
+}
+
+func (s *Session) RevokePortalClient(ip string) {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.revokePortalClient(ip)
+}
+
+// TrafficStatsJSON exposes per-client counters and attribution diagnostics.
+func (s *Session) TrafficStatsJSON() string {
+	if s.traffic == nil {
+		return "{}"
+	}
+	return s.traffic.statsJSON()
+}
+
+// ResetTrafficStats clears byte counters without changing policies.
+func (s *Session) ResetTrafficStats() {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.resetStats()
+}
+
 // Stop tears the netstack down. It does not close the TUN fd.
 func (s *Session) Stop() {
 	if s.stack == nil {
 		return
+	}
+	if s.stopPresence != nil {
+		close(s.stopPresence)
+		s.stopPresence = nil
 	}
 	s.stack.Close()
 	s.stack = nil

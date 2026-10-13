@@ -51,6 +51,48 @@ val gomobileBind by tasks.registering(Exec::class) {
     )
 }
 
+
+val embeddedShizziPlusDebugDir =
+    layout.buildDirectory.dir("generated/shizziPlusAssets/debug")
+val embeddedShizziPlusReleaseDir =
+    layout.buildDirectory.dir("generated/shizziPlusAssets/release")
+val embeddedShizziAdminDebugDir =
+    layout.buildDirectory.dir("generated/shizziAdminAssets/debug")
+val embeddedShizziAdminReleaseDir =
+    layout.buildDirectory.dir("generated/shizziAdminAssets/release")
+
+val prepareEmbeddedShizziPlusDebug by tasks.registering(Sync::class) {
+    dependsOn(":conso:assembleDebug")
+    from(rootProject.layout.projectDirectory.file("conso/build/outputs/apk/debug/conso-debug.apk"))
+    into(embeddedShizziPlusDebugDir.map { it.dir("shizzi") })
+    rename { "Shizzi-Plus.apk" }
+    outputs.dir(embeddedShizziPlusDebugDir)
+}
+
+val prepareEmbeddedShizziPlusRelease by tasks.registering(Sync::class) {
+    dependsOn(":conso:assembleRelease")
+    from(rootProject.layout.projectDirectory.file("conso/build/outputs/apk/release/conso-release.apk"))
+    into(embeddedShizziPlusReleaseDir.map { it.dir("shizzi") })
+    rename { "Shizzi-Plus.apk" }
+    outputs.dir(embeddedShizziPlusReleaseDir)
+}
+
+val prepareEmbeddedShizziAdminDebug by tasks.registering(Sync::class) {
+    dependsOn(":admin:assembleDebug")
+    from(rootProject.layout.projectDirectory.file("admin/build/outputs/apk/debug/admin-debug.apk"))
+    into(embeddedShizziAdminDebugDir.map { it.dir("shizzi") })
+    rename { "Shizzi-Admin.apk" }
+    outputs.dir(embeddedShizziAdminDebugDir)
+}
+
+val prepareEmbeddedShizziAdminRelease by tasks.registering(Sync::class) {
+    dependsOn(":admin:assembleRelease")
+    from(rootProject.layout.projectDirectory.file("admin/build/outputs/apk/release/admin-release.apk"))
+    into(embeddedShizziAdminReleaseDir.map { it.dir("shizzi") })
+    rename { "Shizzi-Admin.apk" }
+    outputs.dir(embeddedShizziAdminReleaseDir)
+}
+
 android {
     namespace = "dev.shizzi"
     compileSdk = 35
@@ -60,8 +102,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.4.0-rc.3"
+        versionCode = 32
+        versionName = "0.5.0-alpha.1"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 
@@ -85,6 +127,13 @@ android {
                 keyPassword = keystoreProperties.getProperty("keyPassword")
             }
         }
+    }
+
+    sourceSets {
+        getByName("debug").assets.srcDir(embeddedShizziPlusDebugDir)
+        getByName("debug").assets.srcDir(embeddedShizziAdminDebugDir)
+        getByName("release").assets.srcDir(embeddedShizziPlusReleaseDir)
+        getByName("release").assets.srcDir(embeddedShizziAdminReleaseDir)
     }
 
     buildTypes {
@@ -131,12 +180,34 @@ android {
 
 tasks.named("preBuild") { dependsOn(gomobileBind) }
 
+// Every Android task that consumes a variant's source sets must see the
+// generated Shizzi+ asset first. Keeping the generated APK under build/
+// avoids treating src/main/assets as a task output and keeps lint deterministic.
+tasks.configureEach {
+    when {
+        name != "prepareEmbeddedShizziPlusDebug" &&
+            name != "prepareEmbeddedShizziAdminDebug" &&
+            name.contains("Debug", ignoreCase = true) -> {
+            dependsOn(prepareEmbeddedShizziPlusDebug)
+            dependsOn(prepareEmbeddedShizziAdminDebug)
+        }
+
+        name != "prepareEmbeddedShizziPlusRelease" &&
+            name != "prepareEmbeddedShizziAdminRelease" &&
+            name.contains("Release", ignoreCase = true) -> {
+            dependsOn(prepareEmbeddedShizziPlusRelease)
+            dependsOn(prepareEmbeddedShizziAdminRelease)
+        }
+    }
+}
+
 dependencies {
 
     implementation(files(layout.buildDirectory.file("gomobile/datapath.aar")))
 
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("androidx.activity:activity-compose:1.9.3")
 
     implementation("androidx.datastore:datastore-preferences:1.1.1")

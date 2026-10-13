@@ -22,25 +22,42 @@ type PortalEndpoint struct {
 const publicPortalHTML = `<!doctype html>
 <html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Shizzi — Accueil</title>
+<title>Shizzi Hotspot — Accueil</title>
 <style>
-body{font-family:system-ui,sans-serif;max-width:32rem;margin:2rem auto;padding:1rem;line-height:1.5}
-label{display:block;margin:.8rem 0 .2rem}
-input{box-sizing:border-box;width:100%;padding:.7rem;font-size:1rem}
-button{margin-top:1rem;padding:.75rem 1.3rem;font-size:1rem}
-small{display:block;margin-top:1rem}
-</style></head><body><main>
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:radial-gradient(circle at 15% 0%,#123f50 0,#081724 42%,#05101b 100%);font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#e2e8f0;padding:28px 12px}
+.card{max-width:540px;margin:0 auto;border:1px solid #22d3ee55;border-radius:22px;background:#0d2235;box-shadow:0 28px 85px #0006;padding:25px}
+.eyebrow{font-size:11px;font-weight:800;letter-spacing:.15em;color:#4adecc}
+h1{font-size:30px;line-height:1.15;margin:12px 0;color:#f0fdff}
+h2{font-size:18px;margin:0 0 7px}
+.sub{color:#a9c1cc;font-size:14px;line-height:1.5}
+label{display:block;margin:14px 0 6px;color:#d8eaf1;font-weight:700;font-size:13px}
+input{background:#071727;color:#f6ffff;width:100%;border:1px solid #316b82;border-radius:12px;padding:13px;font-size:16px}
+input:focus{outline:2px solid #38bdf8}
+button{display:block;background:linear-gradient(90deg,#38bdf8,#34d399);color:#06202a;padding:14px 16px;border:0;border-radius:14px;font-weight:900;width:100%;margin-top:18px;font-size:16px}
+.panel{margin-top:20px;padding:16px;border:1px solid #22d3ee55;border-radius:18px;background:#071b2a}
+.panel p{margin:0;color:#cbd5e1;font-size:13px;line-height:1.45}
+.muted{font-size:12px;color:#94a3b8;line-height:1.6}
+</style></head><body><main class="card">
+<div class="eyebrow">PORTAIL LOCAL · SHIZZI</div>
 <h1>Bienvenue sur Shizzi</h1>
-<p>Le portail local est accessible dès la connexion au Wi-Fi, même sans forfait Internet.</p>
+<p class="sub">Connecté au Wi-Fi Shizzi ? La page d'accueil reste accessible même sans forfait Internet.</p>
+<section class="panel"><div class="eyebrow">COMPTE SHIZZI</div>
+<h2>Se connecter</h2>
 <form method="post" action="/login" autocomplete="on">
 <label for="account">Numéro de compte</label>
 <input id="account" name="account" inputmode="numeric" pattern="[0-9]+" autocomplete="username" required maxlength="40">
 <label for="pin">Code PIN</label>
 <input id="pin" name="pin" type="password" autocomplete="current-password" required maxlength="128">
-<button type="submit">Se connecter</button>
-</form>
-<small>L'accès Internet demande un compte et un PIN valides ainsi qu'un voucher Internet actif.
-Le Média dépend de ses propres droits.</small>
+<button type="submit">Se connecter</button></form>
+<p class="muted">Le numéro de compte et le PIN valident la session. Seul un voucher Internet actif autorise ensuite Internet.</p></section>
+<section class="panel"><div class="eyebrow">MEDIA LOCAL</div><h2>Shizzi Media</h2>
+<p>Films, séries, musique, dossiers et vouchers Média indépendants du forfait Internet.</p></section>
+<section class="panel"><div class="eyebrow">MESSAGERIE LOCALE</div><h2>Messagerie Shizzi</h2>
+<p>Messages et appels entre utilisateurs connectés au Wi-Fi Shizzi.</p></section>
+<section class="panel"><div class="eyebrow">RECHARGES ET APPLICATIONS</div><h2>Vouchers · Shizzi+ · Admin</h2>
+<p>Ces modules de la v0.4.3.5.3 sont réintégrés dans l'interface Android; leurs accès depuis le portail seront reliés après validation du noyau V2.</p></section>
+<p class="muted">Cette reconstruction est en cours de validation : aucun accès Internet n'est attribué à un appareil non authentifié.</p>
 </main></body></html>`
 
 var portalPage = template.Must(template.New("login").Parse(publicPortalHTML))

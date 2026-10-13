@@ -19,6 +19,7 @@ class TetherSession(private val context: Context) {
 
     private var activeSince: Long = 0
     private var vpnMode = VpnMode.AUTO
+    private var ipv4Only = false
     private var watchdog: SessionWatchdog? = null
     private val teardown = SessionTeardown(context)
     private val downstream = DownstreamInspector()
@@ -26,10 +27,11 @@ class TetherSession(private val context: Context) {
 
     val isActive: Boolean get() = state == SessionState.ACTIVE
 
-    fun start(mode: VpnMode = VpnMode.AUTO): String {
+    fun start(mode: VpnMode = VpnMode.AUTO, ipv4Only: Boolean = false): String {
         if (isActive) return status()
 
         vpnMode = mode
+        this.ipv4Only = ipv4Only
         state = SessionState.STARTING
         SessionLog.info("session start requested (vpn mode ${mode.name.lowercase()})")
 
@@ -56,9 +58,23 @@ class TetherSession(private val context: Context) {
         val group = SessionResources(testNetworkApi, context.connectivityManager())
         resources = group
 
-        val name = group.acquire(tunAddresses(), TEST_NETWORK_DNS_SERVERS, AVAILABILITY_TIMEOUT_MS)
+        // Without an IPv6 address and IPv6 DNS on the TUN, tethering does not
+        // provision IPv6 downstream: clients stay IPv4-only, and every flow
+        // reaches the datapath NATed to 192.0.2.2 where it can be attributed.
+        val dnsServers = if (ipv4Only) {
+            TEST_NETWORK_DNS_SERVERS.filterIsInstance<java.net.Inet4Address>()
+        } else {
+            TEST_NETWORK_DNS_SERVERS
+        }
+        val name = group.acquire(tunAddresses(), dnsServers, AVAILABILITY_TIMEOUT_MS)
         interfaceName = name
-        SessionLog.info("tun up: $name (mtu $TUN_MTU, $TUN_ADDRESS, $TUN_ADDRESS_V6)")
+        SessionLog.info(
+            if (ipv4Only) {
+                "tun up: $name (mtu $TUN_MTU, $TUN_ADDRESS, IPv4-only for cybercafe)"
+            } else {
+                "tun up: $name (mtu $TUN_MTU, $TUN_ADDRESS, $TUN_ADDRESS_V6)"
+            },
+        )
 
         group.startDatapath(TUN_MTU)
         SessionLog.info("datapath attached to $name")
@@ -122,26 +138,37 @@ class TetherSession(private val context: Context) {
         val control = DownstreamControl(context)
         control.stopWifiTethering()
 
-        val (didStart, startDetail) = control.startWifiTethering()
-        check(didStart) { "restartDownstream: hotspot did not start ($startDetail)" }
+        val outcome = startDownstreamWith(
+            start = {
+                val (accepted, detail) = control.startWifiTethering()
+                DownstreamStartAttempt(accepted = accepted, detail = detail)
+            },
+            isTethered = ::awaitDownstreamTethered,
+            onRetry = SessionLog::warn,
+        )
 
-        awaitDownstreamTethered()
+        check(outcome.success) {
+            "restartDownstream: hotspot did not start after ${outcome.attempts} attempts " +
+                "(${outcome.detail})"
+        }
+        SessionLog.info(
+            "hotspot started automatically after ${outcome.attempts} attempt(s): ${outcome.detail}",
+        )
     }
 
-    private fun awaitDownstreamTethered() {
+    private fun awaitDownstreamTethered(): Boolean {
         val deadline = System.currentTimeMillis() + DOWNSTREAM_SETTLE_MS
         val downstream = DownstreamInspector()
 
         while (System.currentTimeMillis() < deadline) {
-
             if (downstream.findTetheredDownstream() != null) {
                 SessionLog.info("downstream tethered")
-                return
+                return true
             }
             Thread.sleep(DOWNSTREAM_POLL_MS)
         }
 
-        SessionLog.warn("downstream not tethered after ${DOWNSTREAM_SETTLE_MS}ms; continuing")
+        return false
     }
 
     private fun verifyUpstream(name: String) {
@@ -214,6 +241,51 @@ class TetherSession(private val context: Context) {
         }
     }
 
+    fun trafficStats(): String = resources?.trafficStats() ?: "{}"
+
+    fun setRequireClientAttribution(required: Boolean) {
+        resources?.setRequireClientAttribution(required)
+    }
+
+    fun setGlobalTrafficPolicy(downloadBps: Long, uploadBps: Long, quotaBytes: Long) {
+        resources?.setGlobalTrafficPolicy(downloadBps, uploadBps, quotaBytes)
+    }
+
+    fun setDefaultClientTrafficPolicy(
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) {
+        resources?.setDefaultClientTrafficPolicy(downloadBps, uploadBps, quotaBytes, blocked)
+    }
+
+    fun setClientTrafficPolicy(
+        ip: String,
+        downloadBps: Long,
+        uploadBps: Long,
+        quotaBytes: Long,
+        blocked: Boolean,
+    ) {
+        resources?.setClientTrafficPolicy(ip, downloadBps, uploadBps, quotaBytes, blocked)
+    }
+
+    fun resetTrafficStats() {
+        resources?.resetTrafficStats()
+    }
+
+    fun setPortalConfig(required: Boolean, configJson: String) {
+        resources?.setPortalConfig(required, configJson)
+    }
+
+    fun clearPortalClaims() {
+        resources?.clearPortalClaims()
+    }
+
+    fun revokePortalClient(ip: String) {
+        resources?.revokePortalClient(ip)
+    }
+
     fun status(): String = JSONObject().apply {
         put("state", state.name)
         put("detail", detail)
@@ -235,10 +307,12 @@ class TetherSession(private val context: Context) {
         return vpn.isVpnPresent()
     }
 
-    private fun tunAddresses() = listOf(
-        buildLinkAddress(java.net.InetAddress.getByName(TUN_ADDRESS), TUN_PREFIX_LENGTH),
-        buildLinkAddress(java.net.InetAddress.getByName(TUN_ADDRESS_V6), TUN_PREFIX_LENGTH_V6),
-    )
+    private fun tunAddresses() = buildList {
+        add(buildLinkAddress(java.net.InetAddress.getByName(TUN_ADDRESS), TUN_PREFIX_LENGTH))
+        if (!ipv4Only) {
+            add(buildLinkAddress(java.net.InetAddress.getByName(TUN_ADDRESS_V6), TUN_PREFIX_LENGTH_V6))
+        }
+    }
 
     private companion object {
         const val TAG = "TetherSession"

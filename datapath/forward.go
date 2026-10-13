@@ -1,7 +1,6 @@
 package datapath
 
 import (
-	"io"
 	"net"
 	"strconv"
 	"time"
@@ -15,47 +14,47 @@ import (
 )
 
 const (
-	// maxInFlightTCP bounds half-open connections the forwarder will track.
-	// Tethered clients are few; this exists to cap memory under a SYN flood
-	// from a misbehaving client, not to shape normal traffic.
-	maxInFlightTCP = 512
-
-	// rcvWnd of 0 lets netstack pick its default receive window.
-	defaultRcvWnd = 0
-
-	// dialTimeout bounds how long a client waits for an unreachable host.
-	dialTimeout = 10 * time.Second
-
-	// udpFlowTimeout closes an idle UDP association. DNS exchanges finish in
-	// milliseconds; QUIC keeps its own keepalives well inside this.
-	udpFlowTimeout = 60 * time.Second
+	maxInFlightTCP    = 512
+	defaultRcvWnd     = 0
+	dialTimeout       = 10 * time.Second
+	udpFlowTimeout    = 60 * time.Second
+	tcpCopyBufferSize = 32 * 1024
 )
 
-// installForwarders routes inbound flows to userspace handlers.
-//
-// Without these the stack silently drops every packet: nothing is listening on
-// the addresses tethered clients dial, because those addresses belong to hosts
-// out on the internet rather than to this stack.
-func installForwarders(netStack *stack.Stack, dialer *net.Dialer) {
-	tcpForwarder := tcp.NewForwarder(netStack, defaultRcvWnd, maxInFlightTCP,
-		func(request *tcp.ForwarderRequest) { forwardTCP(request, dialer) })
+func installForwarders(netStack *stack.Stack, dialer *net.Dialer, traffic *TrafficManager) {
+	tcpForwarder := tcp.NewForwarder(
+		netStack,
+		defaultRcvWnd,
+		maxInFlightTCP,
+		func(request *tcp.ForwarderRequest) {
+			forwardTCP(request, dialer, traffic)
+		},
+	)
 	netStack.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpForwarder.HandlePacket)
 
-	udpForwarder := udp.NewForwarder(netStack,
-		func(request *udp.ForwarderRequest) bool { return forwardUDP(request, dialer) })
+	udpForwarder := udp.NewForwarder(
+		netStack,
+		func(request *udp.ForwarderRequest) bool {
+			return forwardUDP(request, dialer, traffic)
+		},
+	)
 	netStack.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
 }
 
-// forwardTCP proxies one client connection to its intended destination.
-//
-// The upstream socket is dialed before the client endpoint is created, so a
-// refused or unreachable destination sends the client a RST rather than
-// completing a handshake that then dies.
-func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer) {
-	id := request.ID()
+func isDNSPort(port uint16) bool { return port == 53 }
 
-	// A browser must see the captive landing page WITHOUT an account,
-	// voucher, MAC identification or Android NAT entry.
+// forwardTCP accepts the client's handshake first and only then identifies the
+// client. Android publishes the tethering NAT rule for a TCP flow once the
+// connection is tracked as established, which cannot happen while the SYN is
+// held waiting for that same rule. Identification, the portal decision and
+// the account check all happen before any upstream dial.
+// UI recovery stage: the legacy 0.4.3.5.3 policy backend is included only
+// to compile its router, Media, Messaging and Admin UI. It is NOT allowed
+// to forward Internet until the V2 account/PIN and voucher gate is wired.
+const v2UIRecoveryOnly = true
+
+func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer, traffic *TrafficManager) {
+	id := request.ID()
 	if isPublicPortalFlow(id) {
 		var queue waiter.Queue
 		endpoint, tcpipErr := request.CreateEndpoint(&queue)
@@ -67,9 +66,12 @@ func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer) {
 		go servePublicPortalConn(gonet.NewTCPConn(&queue, endpoint))
 		return
 	}
-
-	upstream, err := dialer.Dial("tcp", destinationOf(id))
-	if err != nil {
+	if v2UIRecoveryOnly {
+		request.Complete(true)
+		return
+	}
+	if traffic != nil && traffic.refuseClientIPv6(sourceOf(id)) {
+		// RST at once so the client falls back to IPv4 immediately.
 		request.Complete(true)
 		return
 	}
@@ -77,98 +79,194 @@ func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer) {
 	var queue waiter.Queue
 	endpoint, tcpipErr := request.CreateEndpoint(&queue)
 	if tcpipErr != nil {
-		upstream.Close()
 		request.Complete(true)
 		return
 	}
 	request.Complete(false)
-
 	client := gonet.NewTCPConn(&queue, endpoint)
-	go relay(client, upstream)
+
+	go handleTCP(client, id, dialer, traffic)
 }
 
-// forwardUDP proxies one client datagram flow to its destination.
-//
-// Returning false leaves the request unhandled, which makes the stack send the
-// client an ICMP port unreachable — the right answer when the destination
-// could not be reached, and better than dropping the datagram silently.
-func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer) bool {
-	id := request.ID()
+func handleTCP(
+	client net.Conn,
+	id stack.TransportEndpointID,
+	dialer *net.Dialer,
+	traffic *TrafficManager,
+) {
+	destinationIP := addressString(id.LocalAddress)
+	destinationPort := uint16(id.LocalPort)
+	dns := isDNSPort(destinationPort)
+	clientIP := sourceOf(id)
 
-	upstream, err := dialer.Dial("udp", destinationOf(id))
+	if traffic != nil && dns {
+		// DNS is carried unbilled whoever sent it. Most of it is the
+		// router's own resolver forwarding hotspot queries (never in the
+		// NAT rules), so it is not worth a dumpsys lookup.
+		clientIP = ""
+	} else if traffic != nil {
+		clientIP = traffic.resolveFlowClient(
+			"tcp",
+			clientIP,
+			uint16(id.RemotePort),
+			destinationIP,
+			destinationPort,
+			true,
+		)
+		if clientIP == "" && !dns {
+			// Android may publish the exact translated NAT tuple just AFTER
+			// the first attribution window. For captive HTTP, give it three
+			// short additional chances before presenting a recovery page.
+			// Never infer an IP from another connected hotspot client.
+			if destinationPort == 80 && traffic.portalRecoveryNeeded(destinationIP) {
+				for retry := 0; retry < 3 && clientIP == ""; retry++ {
+					time.Sleep(350 * time.Millisecond)
+					clientIP = traffic.resolveFlowClient(
+						"tcp",
+						sourceOf(id),
+						uint16(id.RemotePort),
+						destinationIP,
+						destinationPort,
+						false,
+					)
+				}
+				if clientIP == "" {
+					traffic.serveUnidentifiedPortal(client)
+					return
+				}
+			} else {
+				client.Close()
+				return
+			}
+		}
+
+		if destinationPort == 80 && clientIP != "" &&
+			(destinationIP == portalIP || traffic.portalRequiredFor(clientIP)) {
+			traffic.servePortal(client, clientIP)
+			return
+		}
+		if destinationPort == 80 && clientIP == "" && destinationIP == portalIP {
+			client.Close()
+			return
+		}
+		if !dns && !traffic.flowAllowed(clientIP) {
+			traffic.noteRefusedUnauthorized()
+			client.Close()
+			return
+		}
+	}
+
+	upstream, err := dialer.Dial("tcp", destinationOf(id))
 	if err != nil {
+		client.Close()
+		return
+	}
+	relay(client, upstream, clientIP, traffic, dns)
+}
+
+// forwardUDP runs inside the netstack's packet dispatch: it must never block,
+// or every client on the shared TUN stalls while one flow waits for its NAT
+// rule. It only creates the endpoint; identification runs in a goroutine and
+// the first datagrams wait in the endpoint queue meanwhile.
+func forwardUDP(request *udp.ForwarderRequest, dialer *net.Dialer, traffic *TrafficManager) bool {
+	if v2UIRecoveryOnly {
+		return false
+	}
+	id := request.ID()
+	if traffic != nil && traffic.refuseClientIPv6(sourceOf(id)) {
 		return false
 	}
 
 	var queue waiter.Queue
 	endpoint, tcpipErr := request.CreateEndpoint(&queue)
 	if tcpipErr != nil {
-		upstream.Close()
 		return false
 	}
-
 	client := gonet.NewUDPConn(&queue, endpoint)
-	go relayDatagrams(client, upstream)
+
+	go handleUDP(client, id, dialer, traffic)
 	return true
 }
 
-// relay copies bytes both ways until either side finishes, then closes both.
-//
-// Half-close is deliberately not propagated: a client that shuts down its write
-// side still expects to read the response, but tracking that per direction adds
-// state this prototype does not need. Both sides close when either completes.
-func relay(client, upstream net.Conn) {
-	defer client.Close()
-	defer upstream.Close()
+func handleUDP(
+	client net.Conn,
+	id stack.TransportEndpointID,
+	dialer *net.Dialer,
+	traffic *TrafficManager,
+) {
+	destinationPort := uint16(id.LocalPort)
+	dns := isDNSPort(destinationPort)
+	clientIP := sourceOf(id)
 
-	done := make(chan struct{}, 2)
-
-	go func() {
-		io.Copy(upstream, client)
-		done <- struct{}{}
-	}()
-	go func() {
-		io.Copy(client, upstream)
-		done <- struct{}{}
-	}()
-
-	<-done
-}
-
-// relayDatagrams copies datagrams both ways until the flow goes idle.
-//
-// Unlike TCP there is no close to observe, so an idle deadline is the only
-// thing that reclaims the association.
-func relayDatagrams(client, upstream net.Conn) {
-	defer client.Close()
-	defer upstream.Close()
-
-	done := make(chan struct{}, 2)
-
-	go func() {
-		copyWithIdleTimeout(upstream, client)
-		done <- struct{}{}
-	}()
-	go func() {
-		copyWithIdleTimeout(client, upstream)
-		done <- struct{}{}
-	}()
-
-	<-done
-}
-
-// copyWithIdleTimeout copies until either side errors or the flow goes idle.
-func copyWithIdleTimeout(dst, src net.Conn) {
-	buffer := make([]byte, maxDatagramSize)
-
-	for {
-		if err := src.SetReadDeadline(time.Now().Add(udpFlowTimeout)); err != nil {
+	if traffic != nil && dns {
+		// DNS is carried unbilled whoever sent it; see handleTCP.
+		clientIP = ""
+	} else if traffic != nil {
+		clientIP = traffic.resolveFlowClient(
+			"udp",
+			clientIP,
+			uint16(id.RemotePort),
+			addressString(id.LocalAddress),
+			destinationPort,
+			!dns,
+		)
+		if clientIP == "" && !dns {
+			client.Close()
 			return
 		}
+		if !dns && !traffic.flowAllowed(clientIP) {
+			traffic.noteRefusedUnauthorized()
+			client.Close()
+			return
+		}
+	}
 
+	upstream, err := dialer.Dial("udp", destinationOf(id))
+	if err != nil {
+		client.Close()
+		return
+	}
+	relayDatagrams(client, upstream, clientIP, traffic, dns)
+}
+
+func relay(client, upstream net.Conn, clientIP string, traffic *TrafficManager, bypassPortal bool) {
+	defer client.Close()
+	defer upstream.Close()
+
+	done := make(chan struct{}, 2)
+	go func() {
+		copyStreamManaged(upstream, client, clientIP, directionUpload, traffic, bypassPortal)
+		done <- struct{}{}
+	}()
+	go func() {
+		copyStreamManaged(client, upstream, clientIP, directionDownload, traffic, bypassPortal)
+		done <- struct{}{}
+	}()
+	<-done
+}
+
+func copyStreamManaged(
+	dst, src net.Conn,
+	clientIP string,
+	dir direction,
+	traffic *TrafficManager,
+	bypassPortal bool,
+) {
+	buffer := make([]byte, tcpCopyBufferSize)
+
+	for {
 		read, err := src.Read(buffer)
 		if read > 0 {
-			if _, writeErr := dst.Write(buffer[:read]); writeErr != nil {
+			if traffic != nil &&
+				!traffic.waitAllowedWithPortalBypass(clientIP, dir, read, bypassPortal) {
+				return
+			}
+
+			written, writeErr := dst.Write(buffer[:read])
+			if written > 0 && traffic != nil {
+				traffic.account(clientIP, dir, written)
+			}
+			if writeErr != nil {
 				return
 			}
 		}
@@ -178,19 +276,73 @@ func copyWithIdleTimeout(dst, src net.Conn) {
 	}
 }
 
-// maxDatagramSize is large enough for any UDP payload a client can send
-// through a 1500-byte-MTU link without fragmentation surprises.
+func relayDatagrams(
+	client, upstream net.Conn,
+	clientIP string,
+	traffic *TrafficManager,
+	bypassPortal bool,
+) {
+	defer client.Close()
+	defer upstream.Close()
+
+	done := make(chan struct{}, 2)
+	go func() {
+		copyDatagramsManaged(upstream, client, clientIP, directionUpload, traffic, bypassPortal)
+		done <- struct{}{}
+	}()
+	go func() {
+		copyDatagramsManaged(client, upstream, clientIP, directionDownload, traffic, bypassPortal)
+		done <- struct{}{}
+	}()
+	<-done
+}
+
+func copyDatagramsManaged(
+	dst, src net.Conn,
+	clientIP string,
+	dir direction,
+	traffic *TrafficManager,
+	bypassPortal bool,
+) {
+	buffer := make([]byte, maxDatagramSize)
+
+	for {
+		if err := src.SetReadDeadline(time.Now().Add(udpFlowTimeout)); err != nil {
+			return
+		}
+
+		read, err := src.Read(buffer)
+		if read > 0 {
+			if traffic != nil &&
+				!traffic.waitAllowedWithPortalBypass(clientIP, dir, read, bypassPortal) {
+				return
+			}
+
+			written, writeErr := dst.Write(buffer[:read])
+			if written > 0 && traffic != nil {
+				traffic.account(clientIP, dir, written)
+			}
+			if writeErr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
 const maxDatagramSize = 65535
 
-// destinationOf renders the address a flow was actually addressed to.
-//
-// LocalAddress is the destination from the stack's perspective: the client
-// dialed it, and this stack received it only because the NIC is promiscuous.
 func destinationOf(id stack.TransportEndpointID) string {
 	return net.JoinHostPort(
 		addressString(id.LocalAddress),
 		strconv.Itoa(int(id.LocalPort)),
 	)
+}
+
+func sourceOf(id stack.TransportEndpointID) string {
+	return addressString(id.RemoteAddress)
 }
 
 func addressString(address tcpip.Address) string {

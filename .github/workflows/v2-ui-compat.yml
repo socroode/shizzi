@@ -1,0 +1,73 @@
+name: Shizzi V2 restored interface
+
+on:
+  push:
+    branches:
+      - rebuild/shizzi-v2
+    paths:
+      - 'app/**'
+      - 'admin/**'
+      - 'conso/**'
+      - 'datapath/**'
+      - 'settings.gradle.kts'
+      - '.github/workflows/v2-ui-compat.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shizzi-v2-ui-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: datapath/go.mod
+          cache-dependency-path: datapath/go.sum
+      - name: Test isolated V2 core and captive portal
+        working-directory: datapath
+        run: go test -race -count=1 -timeout=5m ./...
+      - name: Static Go checks
+        working-directory: datapath
+        run: go vet ./...
+
+  android-ui:
+    needs: go-safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: datapath/go.mod
+          cache-dependency-path: datapath/go.sum
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+      - name: Install Android NDK
+        run: sdkmanager --install "ndk;27.0.12077973"
+      - name: Set up gomobile
+        working-directory: datapath
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile
+          go install golang.org/x/mobile/cmd/gobind
+          gomobile init
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Unit tests — router, Shizzi+ and Shizzi Admin
+        run: ./gradlew :app:testDebugUnitTest :conso:testDebugUnitTest :admin:testDebugUnitTest --no-daemon
+      - name: Verify full debug build and embedded companion apps
+        run: ./gradlew :app:assembleDebug --no-daemon
+      - name: Confirm new package version
+        run: |
+          grep -F 'applicationId = "dev.shizzi"' app/build.gradle.kts
+          grep -F 'versionCode = 32' app/build.gradle.kts
+          grep -F 'versionName = "0.5.0-alpha.1"' app/build.gradle.kts
+      # Deliberately NO artifact upload or release: debug APK is NOT
+      # signed with the permanent certificate of 0.4.3.5.3.
