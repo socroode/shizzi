@@ -30,14 +30,10 @@ jobs:
         with:
           go-version-file: datapath/go.mod
           cache-dependency-path: datapath/go.sum
-      # The hosted Ubuntu runner already has Android SDK command-line tools.
-      # Avoid the setup-android action here: some hosted runners can hang
-      # during its update/license step while the equivalent debug build passes.
-      - name: Check preinstalled Android SDK
-        run: |
-          test -n "${ANDROID_SDK_ROOT:-}"
-          command -v sdkmanager
-          sdkmanager --version
+      # SDK tools are not guaranteed to be present on every hosted runner.
+      # Bound setup duration so a stalled SDK update cannot hang indefinitely.
+      - uses: android-actions/setup-android@v4
+        timeout-minutes: 8
       - name: Install Android NDK
         run: sdkmanager --install "ndk;27.0.12077973"
       - name: Install gomobile
