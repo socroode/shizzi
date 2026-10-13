@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: shizzi-v2-test-apk-${{ github.ref }}
+  group: shizzi-v2-alpha2-signed-retry-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
