@@ -33,6 +33,7 @@ type Session struct {
 	binding *networkBinding
 	traffic *TrafficManager
 	v2Bridge *v2AccountBridge
+	v2Physical *v2PhysicalPortal
 	stopPresence chan struct{}
 }
 
@@ -82,6 +83,8 @@ func Start(tunFD int, mtu int) (*Session, error) {
 
 	binding := &networkBinding{}
 	traffic := newTrafficManager()
+	v2Physical := &v2PhysicalPortal{}
+	traffic.v2Physical = v2Physical
 	v2Bridge := newV2AccountBridge(traffic)
 	installForwarders(netStack, &net.Dialer{
 		Timeout: dialTimeout,
@@ -93,6 +96,7 @@ func Start(tunFD int, mtu int) (*Session, error) {
 		binding: binding,
 		traffic: traffic,
 		v2Bridge: v2Bridge,
+		v2Physical: v2Physical,
 		stopPresence: make(chan struct{}),
 	}
 	go session.maintainClientPresence(session.stopPresence)
@@ -229,11 +233,43 @@ func (s *Session) ResetTrafficStats() {
 	s.traffic.resetStats()
 }
 
+// StartV2DirectPortal binds the PIN endpoint ONLY to the private IPv4
+// assigned to the actual hotspot interface by Android. This is not the
+// legacy translated TUN listener; the physical TCP peer remains visible.
+// A distinct failure message means the client can still read the homepage.
+func (s *Session) StartV2DirectPortal(gatewayIP string) string {
+    if s == nil || s.stack == nil || s.v2Physical == nil {
+        return "ERROR: V2 TUN session is not active"
+    }
+    action, err := s.v2Physical.start(gatewayIP, s.v2Bridge)
+    if err != nil { return "ERROR: " + err.Error() }
+    return action
+}
+
+// AssociateV2WifiStation must only be fed evidence verified by two Android
+// sources: current SoftAP association and tethering lease (MAC + IP).
+func (s *Session) AssociateV2WifiStation(mac, physicalIP string) string {
+    if s == nil || s.v2Bridge == nil { return "ERROR: V2 bridge unavailable" }
+    if err := s.v2Bridge.Associated(mac, physicalIP); err != nil {
+        return "ERROR: " + err.Error()
+    }
+    return "OK"
+}
+
+// DepartV2WifiStation is for an AUTHORITY-confirmed SoftAP disassociation.
+// Never call this on silence, an idle timer, or a dumpsys timeout.
+func (s *Session) DepartV2WifiStation(mac string) string {
+    if s == nil || s.v2Bridge == nil { return "ERROR: V2 bridge unavailable" }
+    if err := s.v2Bridge.Departed(mac); err != nil { return "ERROR: " + err.Error() }
+    return "OK"
+}
+
 // Stop tears the netstack down. It does not close the TUN fd.
 func (s *Session) Stop() {
 	if s.stack == nil {
 		return
 	}
+	if s.v2Physical != nil { s.v2Physical.stop() }
 	if s.stopPresence != nil {
 		close(s.stopPresence)
 		s.stopPresence = nil

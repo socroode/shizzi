@@ -22,7 +22,7 @@ func isPublicPortalFlow(id stack.TransportEndpointID) bool {
 // It deliberately does not receive the physical IP: translated 192.0.2.2
 // cannot authenticate a user. /login remains fail closed on this path until
 // the physical-hotspot listener is connected with a real PIN verifier.
-func servePublicPortalConn(conn net.Conn) {
+func servePublicPortalConn(conn net.Conn, loginAction string) {
     defer conn.Close()
     _ = conn.SetDeadline(time.Now().Add(10 * time.Second))
     request, err := http.ReadRequest(bufio.NewReader(io.LimitReader(conn, 16*1024)))
@@ -31,7 +31,7 @@ func servePublicPortalConn(conn net.Conn) {
     request.RemoteAddr = conn.RemoteAddr().String()
 
     response := &publicPortalResponse{header: make(http.Header)}
-    (core.PortalEndpoint{}).ServeHTTP(response, request)
+    (core.PortalEndpoint{LoginAction: loginAction}).ServeHTTP(response, request)
     response.send(conn)
 }
 

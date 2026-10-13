@@ -17,6 +17,9 @@ import (
 type PortalEndpoint struct {
     Sessions *Registry
     Verifier PINVerifier
+    // LoginAction points at the bound physical hotspot listener, not at
+    // the translated 192.0.2.2 tunnel address.
+    LoginAction string
 }
 
 const publicPortalHTML = `<!doctype html>
@@ -44,7 +47,7 @@ button{display:block;background:linear-gradient(90deg,#38bdf8,#34d399);color:#06
 <p class="sub">Connecté au Wi-Fi Shizzi ? La page d'accueil reste accessible même sans forfait Internet.</p>
 <section class="panel"><div class="eyebrow">COMPTE SHIZZI</div>
 <h2>Se connecter</h2>
-<form method="post" action="/login" autocomplete="on">
+<form method="post" action="{{.LoginAction}}" autocomplete="on">
 <label for="account">Numéro de compte</label>
 <input id="account" name="account" inputmode="numeric" pattern="[0-9]+" autocomplete="username" required maxlength="40">
 <label for="pin">Code PIN</label>
@@ -66,13 +69,25 @@ func (p PortalEndpoint) ServeHTTP(w http.ResponseWriter, r *http.Request) {
     w.Header().Set("Cache-Control", "no-store, max-age=0")
     w.Header().Set("X-Content-Type-Options", "nosniff")
     w.Header().Set("X-Frame-Options", "DENY")
-    w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
+    csp := "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"
+    // The public TUN page deliberately POSTs to the private SoftAP gateway,
+    // because only that real TCP peer address can identify a Wi-Fi station.
+    // The action is constructed by the trusted server from a numeric gateway.
+    if strings.HasPrefix(p.LoginAction, "http://") &&
+        strings.HasSuffix(p.LoginAction, ":8093/login") {
+        origin := strings.TrimSuffix(p.LoginAction, "/login")
+        csp = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' " +
+            origin + "; frame-ancestors 'none'"
+    }
+    w.Header().Set("Content-Security-Policy", csp)
 
     switch {
     case r.URL.Path == "/" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
         w.Header().Set("Content-Type", "text/html; charset=utf-8")
         if r.Method == http.MethodHead { w.WriteHeader(http.StatusOK); return }
-        _ = portalPage.Execute(w, nil)
+        action := p.LoginAction
+        if action == "" { action = "/login" }
+        _ = portalPage.Execute(w, struct{ LoginAction string }{action})
 
     case r.URL.Path == "/login" && r.Method == http.MethodPost:
         p.login(w, r)
@@ -124,5 +139,5 @@ func sameOriginIfPresent(r *http.Request) bool {
     if origin == "" { return true }
     // Captive portal is intentionally HTTP and reachable on the hotspot only.
     // Reject cross-origin form posts that could silently take over a session.
-    return origin == "http://"+r.Host
+    return origin == "http://"+r.Host || origin == "http://192.0.2.1"
 }

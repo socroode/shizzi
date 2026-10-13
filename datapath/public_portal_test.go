@@ -32,7 +32,7 @@ func TestPortalOverRawTranslatedTCPBeforeAuthentication(t *testing.T) {
     defer client.Close()
     done := make(chan struct{})
     go func() {
-        servePublicPortalConn(server)
+        servePublicPortalConn(server, "")
         close(done)
     }()
 
@@ -54,7 +54,7 @@ func TestPortalOverRawTranslatedTCPBeforeAuthentication(t *testing.T) {
 func TestPortalDoesNotAcceptPINFromUnverifiedTUNConnection(t *testing.T) {
     client, server := net.Pipe()
     defer client.Close()
-    go servePublicPortalConn(server)
+    go servePublicPortalConn(server, "")
 
     form := "account=1001&pin=123456"
     raw := "POST /login HTTP/1.1\r\nHost: 192.0.2.1\r\n" +

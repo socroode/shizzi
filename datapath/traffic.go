@@ -137,6 +137,7 @@ type TrafficManager struct {
 	epoch int64
 
 	flowAttribution *flowAttributionResolver
+	v2Physical *v2PhysicalPortal
 
 	requireClientAttribution bool
 

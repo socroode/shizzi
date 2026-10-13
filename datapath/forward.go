@@ -63,7 +63,11 @@ func forwardTCP(request *tcp.ForwarderRequest, dialer *net.Dialer, traffic *Traf
 			return
 		}
 		request.Complete(false)
-		go servePublicPortalConn(gonet.NewTCPConn(&queue, endpoint))
+		action := ""
+		if traffic != nil && traffic.v2Physical != nil {
+			action = traffic.v2Physical.loginAction()
+		}
+		go servePublicPortalConn(gonet.NewTCPConn(&queue, endpoint), action)
 		return
 	}
 	if v2UIRecoveryOnly {

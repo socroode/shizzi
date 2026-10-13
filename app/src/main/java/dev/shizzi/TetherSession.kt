@@ -21,6 +21,7 @@ class TetherSession(private val context: Context) {
     private var vpnMode = VpnMode.AUTO
     private var ipv4Only = false
     private var watchdog: SessionWatchdog? = null
+    private var v2HotspotMonitor: V2HotspotMonitor? = null
     private val teardown = SessionTeardown(context)
     private val downstream = DownstreamInspector()
     private val vpn = VpnUpstream(context) { problem -> tearDownAfter(problem) }
@@ -92,6 +93,9 @@ class TetherSession(private val context: Context) {
 
         teardown.installShutdownHook()
         startWatchdog(name)
+        // The direct hotspot endpoint observes each original physical IP.
+        // The public 192.0.2.1 TUN portal remains NAT-independent.
+        v2HotspotMonitor = V2HotspotMonitor(group).also { it.start() }
         return status()
     }
 
@@ -187,6 +191,8 @@ class TetherSession(private val context: Context) {
         inspector.observe().liveInterfaceNames(owned)
 
     fun stop(): String {
+        v2HotspotMonitor?.stop()
+        v2HotspotMonitor = null
         watchdog?.stop()
         watchdog = null
         vpn.stop()

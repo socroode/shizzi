@@ -77,6 +77,16 @@ class SessionResources(
 
     fun trafficStats(): String = datapathSession?.trafficStatsJSON() ?: "{}"
 
+    fun startV2DirectPortal(gatewayIP: String): String =
+        datapathSession?.startV2DirectPortal(gatewayIP) ?: "ERROR: datapath inactive"
+
+    fun associateV2WifiStation(mac: String, physicalIP: String): String =
+        datapathSession?.associateV2WifiStation(mac, physicalIP) ?: "ERROR: datapath inactive"
+
+    fun departV2WifiStation(mac: String): String =
+        datapathSession?.departV2WifiStation(mac) ?: "ERROR: datapath inactive"
+
+
     fun setRequireClientAttribution(required: Boolean) {
         datapathSession?.setRequireClientAttribution(required)
     }
