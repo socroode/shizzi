@@ -979,6 +979,13 @@ private fun ConnectedDevices(
 
     SectionTitle("Identification des appareils")
     Text(
+        "Fuseau des journaux Android : " +
+            (if (diagnostics.androidTimezoneKnown) diagnostics.androidTimezone +
+                (if (diagnostics.androidTimezoneSource == "android-offset") " (décalage fourni par Android)" else "")
+            else "information indisponible"),
+    )
+    if (diagnostics.timezoneError.isNotBlank()) Text("Fuseau : " + diagnostics.timezoneError)
+    Text(
         "Appareils réellement associés au Wi-Fi : " +
             if (diagnostics.wifiCountKnown) diagnostics.wifiAssociatedClients.toString()
             else "information indisponible",
@@ -989,6 +996,13 @@ private fun ConnectedDevices(
             "Échecs récents d’insertion de règles eBPF Android : " +
                 diagnostics.recentBpfFailures +
                 " (récupération par tuple exact tentée, si non ambiguë)",
+        )
+    }
+    if (diagnostics.bpfObservedFailures > 0) {
+        Text(
+            "Erreurs eBPF du dernier relevé : " + diagnostics.bpfObservedFailures +
+                " · horodatages ignorés : " + diagnostics.bpfRejectedTimestamps +
+                " · fuseau indisponible : " + diagnostics.bpfClockSkipped,
         )
     }
     Text(
@@ -1008,7 +1022,7 @@ private fun ConnectedDevices(
     if (diagnostics.looseCandidateFlows > 0L) {
         Text(
             "Refus avec port traduit connu : " + diagnostics.looseCandidateFlows +
-                " — à signaler, le format dumpsys de cet appareil diffère.",
+                " — aucune correspondance exacte de protocole et destination.",
         )
     }
     Text(
@@ -1020,6 +1034,15 @@ private fun ConnectedDevices(
     Text("DNS transporté (non facturé) : " + formatBytes(diagnostics.unattributedDnsBytes))
     if (diagnostics.lastError.isNotBlank()) Text("Erreur : " + diagnostics.lastError)
     if (diagnostics.lastMiss.isNotBlank()) Text("Dernier refus : " + diagnostics.lastMiss)
+    if (diagnostics.lastUnresolvedFlow.isNotBlank()) {
+        Text("Dernier flux non identifié : " + diagnostics.lastUnresolvedFlow +
+            " · " + formatDate(diagnostics.lastUnresolvedMillis))
+    }
+    if (diagnostics.lastDumpError.isNotBlank()) {
+        Text("Dernier échec dumpsys : " + diagnostics.lastDumpError +
+            " · " + formatDate(diagnostics.lastDumpErrorMillis) +
+            " · total : " + diagnostics.dumpFailures)
+    }
 }
 
 @Composable

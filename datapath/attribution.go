@@ -7,6 +7,7 @@ import (
 	"net"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,6 +44,18 @@ type flowAttributionSnapshot struct {
 	SlowestDumpMillis     int64  `json:"slowestDumpMillis"`
 	LastError             string `json:"lastError,omitempty"`
 	LastMiss              string `json:"lastMiss,omitempty"`
+	AndroidTimezone       string `json:"androidTimezone,omitempty"`
+	AndroidTimezoneKnown  bool   `json:"androidTimezoneKnown"`
+	AndroidTimezoneSource string `json:"androidTimezoneSource,omitempty"`
+	TimezoneError         string `json:"timezoneError,omitempty"`
+	BPFObservedFailures   int    `json:"bpfObservedFailures"`
+	BPFRejectedTimestamps int    `json:"bpfRejectedTimestamps"`
+	BPFClockSkipped       int    `json:"bpfClockSkipped"`
+	DumpFailures          int64  `json:"dumpFailures"`
+	LastDumpError         string `json:"lastDumpError,omitempty"`
+	LastDumpErrorMillis   int64  `json:"lastDumpErrorMillis,omitempty"`
+	LastUnresolvedFlow    string `json:"lastUnresolvedFlow,omitempty"`
+	LastUnresolvedMillis  int64  `json:"lastUnresolvedMillis,omitempty"`
 }
 
 // clientPresence is Android's own list of connected hotspot clients.
@@ -65,21 +78,29 @@ type flowAttributionResolver struct {
 	dumpFn     func() (string, error)
 	wifiDumpFn func() (string, error)
 
-	flows             map[flowAttributionKey]string
-	bpfFailedFlows    map[flowAttributionKey]string
-	recentBPFFailures int
-	connectedClients  map[string]struct{}
-	clientMACs        map[string]string
-	clientListKnown   bool
-	eventPresence     *clientPresence
-	wifiClientCount   int
-	wifiCountKnown    bool
-	lastWifiRefresh   time.Time
-	lastWifiSuccess   time.Time
-	lastWifiError     string
-	lastRefresh       time.Time
-	lastSuccess       time.Time
-	lastError         string
+	flows              map[flowAttributionKey]string
+	bpfFailedFlows     map[flowAttributionKey]string
+	recentBPFFailures  int
+	bpfDiagnostics     bpfFailureDiagnostics
+	logLocation        *time.Location
+	logTimezone        string
+	logTimezoneKnown   bool
+	logTimezoneSource  string
+	logTimezoneError   string
+	logClockRequired   bool
+	logClockGeneration uint64
+	connectedClients   map[string]struct{}
+	clientMACs         map[string]string
+	clientListKnown    bool
+	eventPresence      *clientPresence
+	wifiClientCount    int
+	wifiCountKnown     bool
+	lastWifiRefresh    time.Time
+	lastWifiSuccess    time.Time
+	lastWifiError      string
+	lastRefresh        time.Time
+	lastSuccess        time.Time
+	lastError          string
 
 	recentMisses map[flowAttributionKey]time.Time
 
@@ -94,6 +115,11 @@ type flowAttributionResolver struct {
 	lastDumpDuration      time.Duration
 	slowestDump           time.Duration
 	lastMiss              string
+	dumpFailures          int64
+	lastDumpError         string
+	lastDumpErrorMillis   int64
+	lastUnresolvedFlow    string
+	lastUnresolvedMillis  int64
 }
 
 const (
@@ -154,6 +180,9 @@ func newFlowAttributionResolver() *flowAttributionResolver {
 		connectedClients: make(map[string]struct{}),
 		clientMACs:       make(map[string]string),
 		recentMisses:     make(map[flowAttributionKey]time.Time),
+		// Go's Android time.Local defaults to UTC. Android must provide its
+		// own clock zone before local, offset-less log timestamps are trusted.
+		logClockRequired: runtime.GOOS == "android",
 	}
 }
 
@@ -324,21 +353,41 @@ func parseIPv4UpstreamAttributionLine(line string) (flowAttributionKey, string, 
 // originating IPv4, the translated IPv4/port, the destination and protocol.
 // Old errors and conflicting owners are deliberately unusable.
 func parseRecentBPFFailedAttributions(raw string, now time.Time) (map[flowAttributionKey]string, int) {
+	flows, failures, _ := parseBPFFailureAttributions(raw, now, true)
+	return flows, failures
+}
+
+type bpfFailureDiagnostics struct {
+	observed           int
+	rejectedTimestamps int
+	clockSkipped       int
+}
+
+func parseBPFFailureAttributions(raw string, now time.Time, clockKnown bool) (map[flowAttributionKey]string, int, bpfFailureDiagnostics) {
 	result := make(map[flowAttributionKey]string)
 	ambiguous := make(map[flowAttributionKey]bool)
 	failures := 0
+	diagnostics := bpfFailureDiagnostics{}
 	for _, line := range strings.Split(raw, "\n") {
 		if !strings.Contains(line, "Could not insert entry") || !strings.Contains(line, "E2BIG") {
 			continue
 		}
+		diagnostics.observed++
+		if !clockKnown {
+			diagnostics.clockSkipped++
+			continue
+		}
 		// The timestamp in dumpsys tethering uses the phone's local clock.
-		// A missing or non-local timestamp is not safe enough to authenticate.
+		// now must already use the trusted Android zone, not Go's Android
+		// time.Local (UTC). Never widen the age window to compensate for a zone.
 		timestamp := bpfFailureTimestampPattern.FindStringSubmatch(line)
 		if len(timestamp) != 2 {
+			diagnostics.rejectedTimestamps++
 			continue
 		}
 		at, err := time.ParseInLocation("2006-01-02T15:04:05.999999", timestamp[1], now.Location())
 		if err != nil || now.Sub(at) < -2*time.Second || now.Sub(at) > bpfFailureAttributionTTL {
+			diagnostics.rejectedTimestamps++
 			continue
 		}
 		fields := bpfFailureFlowPattern.FindStringSubmatch(line)
@@ -380,7 +429,7 @@ func parseRecentBPFFailedAttributions(raw string, now time.Time) (map[flowAttrib
 		// An empty result is deliberately preserved as an ambiguity marker.
 		result[key] = ""
 	}
-	return result, failures
+	return result, failures, diagnostics
 }
 
 func validPhysicalIPv4(value string) bool {
@@ -513,6 +562,8 @@ func (r *flowAttributionResolver) resolve(key flowAttributionKey, waitForRule bo
 		r.unresolvedTCPFlows++
 	}
 	r.lastMiss = formatFlowAttributionKey(key)
+	r.lastUnresolvedFlow = r.lastMiss
+	r.lastUnresolvedMillis = time.Now().UnixMilli()
 	if waitForRule {
 		r.recentMisses[key] = time.Now()
 		for missed, at := range r.recentMisses {
@@ -551,8 +602,8 @@ func (r *flowAttributionResolver) onlyClientInRulesLocked(clientIP string) bool 
 	return true
 }
 
-// lookupLocked accepts an exact rule, or a rule that differs only by protocol
-// label (some OEM dumps print it differently). Matching on the translated
+// lookupLocked accepts only an exact protocol/source/destination tuple.
+// Matching on the translated
 // port alone is NOT accepted: two phones may share a translated port towards
 // different destinations, and the second one's rule may not be published yet.
 func (r *flowAttributionResolver) lookupLocked(
@@ -637,17 +688,26 @@ func (r *flowAttributionResolver) refreshIfOlderThan(maxAge time.Duration) {
 	started := time.Now()
 	raw, err := r.dumpFn()
 	finished := time.Now()
+	r.mu.Lock()
+	logNow := finished
+	if r.logLocation != nil {
+		logNow = finished.In(r.logLocation)
+	}
+	clockKnown := !r.logClockRequired || r.logTimezoneKnown
+	clockGeneration := r.logClockGeneration
+	r.mu.Unlock()
 
 	var (
-		flows       map[flowAttributionKey]string
-		bpfFlows    map[flowAttributionKey]string
-		bpfFailures int
-		clients     map[string]struct{}
-		macs        map[string]string
+		flows          map[flowAttributionKey]string
+		bpfFlows       map[flowAttributionKey]string
+		bpfFailures    int
+		bpfDiagnostics bpfFailureDiagnostics
+		clients        map[string]struct{}
+		macs           map[string]string
 	)
 	if err == nil {
 		flows = parseIPv4UpstreamAttributions(raw)
-		bpfFlows, bpfFailures = parseRecentBPFFailedAttributions(raw, finished)
+		bpfFlows, bpfFailures, bpfDiagnostics = parseBPFFailureAttributions(raw, logNow, clockKnown)
 		clients = parseTetheringConnectedClients(raw)
 		macs = parseIPv4DownstreamClientMACs(raw)
 	}
@@ -662,13 +722,27 @@ func (r *flowAttributionResolver) refreshIfOlderThan(maxAge time.Duration) {
 	}
 	if err != nil {
 		r.lastError = err.Error()
+		r.dumpFailures++
+		r.lastDumpError = r.lastError
+		r.lastDumpErrorMillis = finished.UnixMilli()
 		r.flows = make(map[flowAttributionKey]string)
 		r.bpfFailedFlows = make(map[flowAttributionKey]string)
+		r.recentBPFFailures = 0
+		r.bpfDiagnostics = bpfFailureDiagnostics{}
 		return
+	}
+	if clockGeneration != r.logClockGeneration {
+		// A clock change raced parsing. NAT rules are independent of the
+		// log zone, but no identity parsed with the old zone may be installed.
+		bpfFlows = make(map[flowAttributionKey]string)
+		bpfFailures = 0
+		bpfDiagnostics = bpfFailureDiagnostics{}
+		r.lastRefresh = time.Time{}
 	}
 	r.flows = flows
 	r.bpfFailedFlows = bpfFlows
 	r.recentBPFFailures = bpfFailures
+	r.bpfDiagnostics = bpfDiagnostics
 	r.connectedClients = clients
 	// An explicitly emitted Client Information section can establish that
 	// Android currently lists zero clients. Without it, an empty NAT dump
@@ -787,6 +861,18 @@ func (r *flowAttributionResolver) snapshot() flowAttributionSnapshot {
 		SlowestDumpMillis:     r.slowestDump.Milliseconds(),
 		LastError:             r.lastError,
 		LastMiss:              r.lastMiss,
+		AndroidTimezone:       r.logTimezone,
+		AndroidTimezoneKnown:  r.logTimezoneKnown,
+		AndroidTimezoneSource: r.logTimezoneSource,
+		TimezoneError:         r.logTimezoneError,
+		BPFObservedFailures:   r.bpfDiagnostics.observed,
+		BPFRejectedTimestamps: r.bpfDiagnostics.rejectedTimestamps,
+		BPFClockSkipped:       r.bpfDiagnostics.clockSkipped,
+		DumpFailures:          r.dumpFailures,
+		LastDumpError:         r.lastDumpError,
+		LastDumpErrorMillis:   r.lastDumpErrorMillis,
+		LastUnresolvedFlow:    r.lastUnresolvedFlow,
+		LastUnresolvedMillis:  r.lastUnresolvedMillis,
 	}
 }
 
@@ -803,16 +889,25 @@ func isSharedTunnelAddress(ip string) bool {
 // from browser-submitted identities. A lease is usable only for an associated MAC.
 func (r *flowAttributionResolver) setPresenceJSON(raw string) {
 	var event struct {
-		WifiKnown      bool     `json:"wifiKnown"`
-		LeasesKnown    bool     `json:"leasesKnown"`
-		AssociatedMACs []string `json:"associatedMacs"`
-		Leases         []struct {
+		AndroidTimezone         *string  `json:"androidTimezone"`
+		AndroidUTCOffsetSeconds *int     `json:"androidUtcOffsetSeconds"`
+		WifiKnown               bool     `json:"wifiKnown"`
+		LeasesKnown             bool     `json:"leasesKnown"`
+		AssociatedMACs          []string `json:"associatedMacs"`
+		Leases                  []struct {
 			IP  string `json:"ip"`
 			MAC string `json:"mac"`
 		} `json:"leases"`
 	}
 	if json.Unmarshal([]byte(raw), &event) != nil {
 		return
+	}
+	if event.AndroidTimezone != nil || event.AndroidUTCOffsetSeconds != nil {
+		zone := ""
+		if event.AndroidTimezone != nil {
+			zone = *event.AndroidTimezone
+		}
+		r.setAndroidLogTimezone(zone, event.AndroidUTCOffsetSeconds)
 	}
 	p := clientPresence{eventBased: true, clients: make(map[string]struct{}), macs: make(map[string]string),
 		wifiCount: len(event.AssociatedMACs), wifiCountKnown: event.WifiKnown}

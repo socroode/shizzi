@@ -1363,6 +1363,13 @@ class MainActivity : Activity() {
         val attribution = traffic.optJSONObject("attribution") ?: JSONObject()
         info(
             "Clients Android : " + attribution.optInt("mappedClients") +
+                "\nFuseau Android : " + (if (attribution.optBoolean("androidTimezoneKnown"))
+                    attribution.optString("androidTimezone") else "indisponible"),
+        )
+        info(
+            "Erreurs eBPF du dernier relevé : " + attribution.optInt("bpfObservedFailures") +
+                "\nHorodatages eBPF ignorés : " + attribution.optInt("bpfRejectedTimestamps") +
+                "\nFuseau indisponible : " + attribution.optInt("bpfClockSkipped") +
                 "\nFlux identifiés : " + attribution.optLong("resolvedFlows") +
                 "\nFlux non identifiés : " + attribution.optLong("unresolvedFlows") +
                 " (TCP " + attribution.optLong("unresolvedTcpFlows") +
@@ -1372,6 +1379,18 @@ class MainActivity : Activity() {
                 "\nRefus sans session/forfait : " + traffic.optLong("refusedUnauthorizedFlows") +
                 "\nDNS non facturé : " + formatBytes(traffic.optLong("unattributedDnsBytes")),
         )
+        if (attribution.optString("timezoneError").isNotBlank()) {
+            info("Fuseau : " + attribution.optString("timezoneError"))
+        }
+        if (attribution.optString("lastUnresolvedFlow").isNotBlank()) {
+            info("Dernier flux non identifié : " + attribution.optString("lastUnresolvedFlow") +
+                "\nDate : " + java.util.Date(attribution.optLong("lastUnresolvedMillis")))
+        }
+        if (attribution.optString("lastDumpError").isNotBlank()) {
+            info("Dernier échec dumpsys : " + attribution.optString("lastDumpError") +
+                "\nDate : " + java.util.Date(attribution.optLong("lastDumpErrorMillis")) +
+                "\nTotal : " + attribution.optLong("dumpFailures"))
+        }
     }
 
     private fun renderMediaDiagnostics(events: JSONArray) {

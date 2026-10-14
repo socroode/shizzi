@@ -1,10 +1,15 @@
 package dev.shizzi
 
 import android.content.Context
+import android.content.BroadcastReceiver
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 import org.json.JSONArray
 import org.json.JSONObject
 import java.lang.reflect.Proxy
 import java.util.concurrent.Executor
+import java.util.TimeZone
 
 /** Event-based association identity; MACs belong to sessions, never to accounts. */
 class ClientPresenceMonitor(private val context: Context, private val publish: (String) -> Unit) {
@@ -16,6 +21,29 @@ class ClientPresenceMonitor(private val context: Context, private val publish: (
     private val executor = Executor { it.run() }
 
     fun start() {
+        // Publish the clock even when privileged station/lease callbacks are
+        // unavailable, and before the hotspot begins accepting clients.
+        synchronized(this) { emit() }
+        val clockReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                // The Shizuku helper may not receive ActivityThread's normal
+                // timezone cache reset. Reload Android's current default.
+                if (intent?.action == Intent.ACTION_TIMEZONE_CHANGED) TimeZone.setDefault(null)
+                synchronized(this@ClientPresenceMonitor) { emit() }
+            }
+        }
+        runCatching {
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_TIMEZONE_CHANGED)
+                addAction(Intent.ACTION_TIME_CHANGED)
+            }
+            if (Build.VERSION.SDK_INT >= 33) {
+                context.registerReceiver(clockReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                context.registerReceiver(clockReceiver, filter)
+            }
+            registrations += { context.unregisterReceiver(clockReceiver) }
+        }.onFailure { SessionLog.warn("presence clock receiver unavailable: ${it.message}") }
         register("wifi", "android.net.wifi.WifiManager\$SoftApCallback", "registerSoftApCallback", "unregisterSoftApCallback") { name, args ->
             synchronized(this) {
                 when (name) {
@@ -80,6 +108,9 @@ class ClientPresenceMonitor(private val context: Context, private val publish: (
 
     private fun emit() {
         publish(JSONObject().apply {
+            val zone = TimeZone.getDefault()
+            put("androidTimezone", zone.id)
+            put("androidUtcOffsetSeconds", zone.getOffset(System.currentTimeMillis()) / 1000)
             put("wifiKnown", wifiKnown); put("leasesKnown", leasesKnown)
             put("associatedMacs", JSONArray(stations.toList()))
             put("leases", JSONArray().apply {
