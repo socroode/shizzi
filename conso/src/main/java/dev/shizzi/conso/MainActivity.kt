@@ -49,6 +49,7 @@ class MainActivity : Activity() {
     private var boundWifiNetwork: Network? = null
     private var mediaBaseUrl: String? = null
     private var requestedBaseUrl: String? = null
+    @Volatile private var routerPin = ""
     private var requestedLabel: String = "Shizzi"
     private var fullscreenView: View? = null
     private var fullscreenContainer: FrameLayout? = null
@@ -244,6 +245,19 @@ class MainActivity : Activity() {
                 }
             }
             webViewClient = object : WebViewClient() {
+                override fun onReceivedSslError(view: WebView?, handler: android.webkit.SslErrorHandler?, error: android.net.http.SslError?) {
+                    val encoded = error?.certificate?.let(android.net.http.SslCertificate::saveState)?.getByteArray("x509-certificate")
+                    val valid = runCatching {
+                        val target = URL(error?.url.orEmpty())
+                        val certificate = java.security.cert.CertificateFactory.getInstance("X.509")
+                            .generateCertificate(encoded!!.inputStream()) as java.security.cert.X509Certificate
+                        certificate.checkValidity()
+                        target.protocol == "https" && target.host == PORTAL_HOST &&
+                            routerPin.isNotBlank() && RouterTls.fingerprint(certificate.encoded) == routerPin
+                    }.getOrDefault(false)
+                    if (valid) handler?.proceed() else handler?.cancel()
+                }
+
                 override fun onPageStarted(
                     view: WebView?,
                     url: String?,
@@ -814,6 +828,23 @@ class MainActivity : Activity() {
     }
 
     private fun openPortal(url: String, label: String = "Shizzi") {
+        val localRouter = runCatching { URL(url).host == PORTAL_HOST }.getOrDefault(false)
+        if (!localRouter) { openPortalPage(url, label); return }
+        if (!bindPortalToWifi()) {
+            showNavigationFailure("Aucun Wi-Fi Shizzi connecté.", "")
+            return
+        }
+        thread {
+            runCatching { RouterTls.pair(this) }.onSuccess { pin ->
+                routerPin = pin
+                runOnUiThread { openPortalPage(url.replace("http://", "https://"), label) }
+            }.onFailure { failure ->
+                runOnUiThread { showNavigationFailure("Association du routeur impossible", failure.message.orEmpty()) }
+            }
+        }
+    }
+
+    private fun openPortalPage(url: String, label: String) {
         deactivateSecureChat(force = true)
         requestedBaseUrl = url.substringBeforeLast('/', url) + "/"
         requestedLabel = label

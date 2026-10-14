@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -28,6 +29,7 @@ type PortalAccount struct {
 	Name                           string `json:"name"`
 	PinSalt                        string `json:"pinSalt"`
 	PinHash                        string `json:"pinHash"`
+	PinKDFIterations               int    `json:"pinKdfIterations"`
 	Enabled                        bool   `json:"enabled"`
 	DataBalanceBytes               int64  `json:"dataBalanceBytes"`
 	DataValidUntilMillis           int64  `json:"dataValidUntilMillis"`
@@ -90,12 +92,13 @@ func (a PortalAccount) uploadBps(nowMillis int64) int64 {
 }
 
 type remoteAdminConfig struct {
-	Enabled      bool   `json:"enabled"`
-	Username     string `json:"username"`
-	PasswordSalt string `json:"passwordSalt"`
-	PasswordHash string `json:"passwordHash"`
-	DownloadBps  int64  `json:"downloadBps"`
-	UploadBps    int64  `json:"uploadBps"`
+	Enabled               bool   `json:"enabled"`
+	Username              string `json:"username"`
+	PasswordSalt          string `json:"passwordSalt"`
+	PasswordHash          string `json:"passwordHash"`
+	PasswordKDFIterations int    `json:"passwordKdfIterations"`
+	DownloadBps           int64  `json:"downloadBps"`
+	UploadBps             int64  `json:"uploadBps"`
 }
 
 type AdminCommand struct {
@@ -114,13 +117,17 @@ type AdminCommandResult struct {
 }
 
 type adminSession struct {
-	Token          string
-	IP             string
-	LastSeenMillis int64
-	missingSince   time.Time
+	Token           string
+	IP              string
+	LastSeenMillis  int64
+	missingSince    time.Time
+	CreatedAtMillis int64
+	MAC             string
+	done            chan struct{}
 }
 
 type adminChallenge struct {
+	IP              string
 	Nonce           string
 	Username        string
 	ExpiresAtMillis int64
@@ -149,24 +156,30 @@ type MediaDiagnostic struct {
 }
 
 type portalConfig struct {
-	Title        string               `json:"title"`
-	Message      string               `json:"message"`
-	HTML         string               `json:"html"`
-	Accounts     []PortalAccount      `json:"accounts"`
-	Admin        remoteAdminConfig    `json:"admin"`
-	AdminState   json.RawMessage      `json:"adminState"`
-	ClientApp    portalClientApp      `json:"clientApp"`
+	Cameras            []CameraProfile   `json:"cameras"`
+	TLS                portalTLSIdentity `json:"tls"`
+	RequireSecureAdmin bool              `json:"requireSecureAdmin"`
+	UpstreamAvailable  *bool             `json:"upstreamAvailable"`
+	Title              string            `json:"title"`
+	Message            string            `json:"message"`
+	HTML               string            `json:"html"`
+	Accounts           []PortalAccount   `json:"accounts"`
+	Admin              remoteAdminConfig `json:"admin"`
+	AdminState         json.RawMessage   `json:"adminState"`
+	ClientApp          portalClientApp   `json:"clientApp"`
 	// ClaimResults lets Android tell the portal how a voucher claim ended so
 	// the client sees "accepted"/"rejected" instead of a silent drop.
-	ClaimResults []PortalClaimResult   `json:"claimResults"`
-	AdminResults []AdminCommandResult  `json:"adminResults"`
+	ClaimResults []PortalClaimResult  `json:"claimResults"`
+	AdminResults []AdminCommandResult `json:"adminResults"`
 }
 
 type PortalClaimResult struct {
-	IP      string `json:"ip"`
-	Code    string `json:"code"`
-	Success bool   `json:"success"`
-	Message string `json:"message"`
+	ID        string `json:"id,omitempty"`
+	SessionID string `json:"sessionId,omitempty"`
+	IP        string `json:"ip"`
+	Code      string `json:"code"`
+	Success   bool   `json:"success"`
+	Message   string `json:"message"`
 }
 
 // PortalAuthorization is one logged-in session: one physical client (IP as
@@ -174,12 +187,16 @@ type PortalClaimResult struct {
 // have only one active device session at a time, but remains portable after
 // logout, admin disconnect, or departed-client cleanup.
 type PortalAuthorization struct {
+	Camera          bool
 	AccountNumber   string
 	StartedAtMillis int64
 	UpBytes         int64
 	DownBytes       int64
 
 	missingSince time.Time
+	MAC          string
+	ID           string
+	done         chan struct{}
 }
 
 type PortalAuthorizationStatus struct {
@@ -197,6 +214,8 @@ type PortalAuthorizationStatus struct {
 }
 
 type PortalRechargeClaim struct {
+	ID              string `json:"id"`
+	SessionID       string `json:"sessionId"`
 	IP              string `json:"ip"`
 	AccountNumber   string `json:"accountNumber"`
 	Code            string `json:"code"`
@@ -206,7 +225,9 @@ type PortalRechargeClaim struct {
 func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 	var config portalConfig
 	if strings.TrimSpace(raw) != "" {
-		_ = json.Unmarshal([]byte(raw), &config)
+		if json.Unmarshal([]byte(raw), &config) != nil {
+			return
+		}
 	}
 
 	accounts := make(map[string]PortalAccount)
@@ -218,6 +239,10 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 		account.Number = number
 		account.PinSalt = strings.TrimSpace(account.PinSalt)
 		account.PinHash = strings.ToLower(strings.TrimSpace(account.PinHash))
+		decoded, err := hex.DecodeString(account.PinHash)
+		if err != nil || len(decoded) != 32 || (account.PinKDFIterations != 0 && account.PinKDFIterations != pinKDFIterations) {
+			continue
+		}
 		accounts[number] = account
 	}
 
@@ -234,7 +259,18 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 		}
 	}
 
+	m.requireSecureAdmin = config.RequireSecureAdmin
+	if config.TLS.CertificatePEM != "" {
+		if certificate, err := tls.X509KeyPair([]byte(config.TLS.CertificatePEM), []byte(config.TLS.PrivateKeyPEM)); err == nil {
+			m.tlsCertificate = &certificate
+		}
+	}
 	m.portalRequired = required
+	if config.UpstreamAvailable != nil {
+		m.upstreamAvailable = *config.UpstreamAvailable
+	} else {
+		m.upstreamAvailable = true
+	}
 	m.portalTitle = strings.TrimSpace(config.Title)
 	if m.portalTitle == "" {
 		m.portalTitle = "Shizzi Hotspot"
@@ -259,6 +295,9 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 		m.adminState = append(json.RawMessage(nil), config.AdminState...)
 	}
 	if credentialsChanged || !m.adminConfig.Enabled {
+		for token := range m.adminSessions {
+			m.revokeAdminLocked(token)
+		}
 		m.adminSessions = make(map[string]*adminSession)
 		m.adminChallenges = make(map[string]adminChallenge)
 	}
@@ -283,17 +322,32 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 		newAccount, stillExists := accounts[authorization.AccountNumber]
 		if !existed || !stillExists || oldAccount.PinSalt != newAccount.PinSalt ||
 			oldAccount.PinHash != newAccount.PinHash {
-			delete(m.portalAuthorized, ip)
+			m.revokeAuthorizationLocked(ip)
 			delete(m.portalClaimResults, ip)
 			m.removePendingClaimsForIPLocked(ip)
 		}
 	}
 	m.portalAccounts = accounts
+	profiles := make(map[string]CameraProfile)
+	for _, profile := range config.Cameras {
+		profile.AccountNumber = normalizeAccountNumber(profile.AccountNumber)
+		profile.MAC = strings.ToLower(profile.MAC)
+		if validClientMAC(profile.MAC) && profile.EnrollmentID != "" {
+			if old := m.cameraProfiles[profile.AccountNumber]; old != profile {
+				delete(m.cameraSuppressed, profile.AccountNumber)
+			}
+			profiles[profile.AccountNumber] = profile
+		}
+	}
+	m.cameraProfiles = profiles
+	m.reconcileCamerasLocked(m.flowAttribution.presence())
 	if m.portalClaimResults == nil {
 		m.portalClaimResults = make(map[string]PortalClaimResult)
 	}
 	for _, result := range config.ClaimResults {
-		m.portalClaimResults[result.IP] = result
+		if auth := m.portalAuthorized[result.IP]; auth != nil && (result.SessionID == "" || auth.ID == result.SessionID) {
+			m.portalClaimResults[result.IP] = result
+		}
 	}
 
 	// A deleted or suspended account ends every session using it. Nothing
@@ -301,7 +355,7 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 	for ip, authorization := range m.portalAuthorized {
 		account, ok := accounts[authorization.AccountNumber]
 		if !ok || !account.Enabled {
-			delete(m.portalAuthorized, ip)
+			m.revokeAuthorizationLocked(ip)
 			delete(m.portalClaimResults, ip)
 			m.removePendingClaimsForIPLocked(ip)
 		}
@@ -434,19 +488,33 @@ func (m *TrafficManager) submitPortalAccountLogin(
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	key := "account|" + number
+	if m.loginBlockedLocked(key, time.Now()) {
+		return false, "Trop de tentatives. Réessayez dans quelques secondes."
+	}
 	account, ok := m.portalAccounts[number]
 	if !ok || !account.Enabled {
+		m.failedLoginLocked(key, time.Now())
 		return false, "Compte ou code incorrect."
 	}
-	if hashPortalPin(account.PinSalt, pin) != account.PinHash {
+	if !hmac.Equal([]byte(accountPinHash(account, pin)), []byte(account.PinHash)) {
+		m.failedLoginLocked(key, time.Now())
 		return false, "Compte ou code incorrect."
 	}
+	return m.authorizeAccountLocked(ip, number, now)
+}
+
+func (m *TrafficManager) authorizeAccountLocked(ip, number string, now int64) (bool, string) {
+	delete(m.cameraSuppressed, number)
+	account := m.portalAccounts[number]
+	key := "account|" + number
+	delete(m.loginAttempts, key)
 	// One account = one active device. A successful login takes over the
 	// account from any previous client without disconnecting its Wi-Fi.
 	// Remove old authorizations only AFTER verifying the new credentials.
 	for otherIP, authorization := range m.portalAuthorized {
 		if otherIP != ip && authorization != nil && authorization.AccountNumber == number {
-			delete(m.portalAuthorized, otherIP)
+			m.revokeAuthorizationLocked(otherIP)
 			delete(m.portalClaimResults, otherIP)
 			m.removePendingClaimsForIPLocked(otherIP)
 		}
@@ -455,9 +523,13 @@ func (m *TrafficManager) submitPortalAccountLogin(
 	if previous := m.portalAuthorized[ip]; previous != nil && previous.AccountNumber != number {
 		m.removePendingClaimsForIPLocked(ip)
 	}
+	m.revokeAuthorizationLocked(ip)
 	m.portalAuthorized[ip] = &PortalAuthorization{
 		AccountNumber:   number,
 		StartedAtMillis: now,
+		MAC:             m.flowAttribution.presence().macs[ip],
+		ID:              randomHex(16),
+		done:            make(chan struct{}),
 	}
 	delete(m.portalClaimResults, ip)
 	if !m.accountHasInternetLocked(account, now) {
@@ -469,10 +541,11 @@ func (m *TrafficManager) submitPortalAccountLogin(
 func (m *TrafficManager) submitPortalLogout(ip string) (bool, string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.suppressCameraLocked(ip)
 	if _, ok := m.portalAuthorized[ip]; !ok {
 		return false, "Aucune session ouverte sur cet appareil."
 	}
-	delete(m.portalAuthorized, ip)
+	m.revokeAuthorizationLocked(ip)
 	delete(m.portalClaimResults, ip)
 	// A pending voucher claim belongs to the authenticated session that
 	// submitted it, not to the next phone assigned the same IP.
@@ -502,7 +575,12 @@ func (m *TrafficManager) submitPortalRecharge(ip, rawCode string) (bool, string)
 	}
 
 	delete(m.portalClaimResults, ip)
+	if len(m.portalRechargeClaims) >= 128 {
+		return false, "Trop de recharges en attente. Réessayez."
+	}
 	m.portalRechargeClaims = append(m.portalRechargeClaims, PortalRechargeClaim{
+		ID:              randomHex(16),
+		SessionID:       authorization.ID,
 		IP:              ip,
 		AccountNumber:   authorization.AccountNumber,
 		Code:            code,
@@ -522,7 +600,8 @@ func (m *TrafficManager) clearPortalClaims() {
 func (m *TrafficManager) revokePortalClient(ip string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.portalAuthorized, ip)
+	m.suppressCameraLocked(ip)
+	m.revokeAuthorizationLocked(ip)
 	delete(m.portalClaimResults, ip)
 	m.removePendingClaimsForIPLocked(ip)
 }
@@ -555,7 +634,7 @@ func (m *TrafficManager) adminAuthorizedLocked(ip string) bool {
 		return false
 	}
 	for _, session := range m.adminSessions {
-		if session.IP == ip {
+		if session.IP == ip && m.adminSessionValidLocked(session.Token, time.Now()) {
 			return true
 		}
 	}
@@ -563,12 +642,13 @@ func (m *TrafficManager) adminAuthorizedLocked(ip string) bool {
 }
 
 func (m *TrafficManager) requireAdminTokenLocked(request *http.Request, ip string) (*adminSession, bool) {
+	m.checkIdentityLocked(ip)
 	token := strings.TrimSpace(request.Header.Get("X-Shizzi-Admin-Token"))
 	if token == "" || !m.adminConfig.Enabled {
 		return nil, false
 	}
 	session := m.adminSessions[token]
-	if session == nil || session.IP != ip {
+	if session == nil || session.IP != ip || !m.adminSessionValidLocked(token, time.Now()) {
 		return nil, false
 	}
 	session.LastSeenMillis = time.Now().UnixMilli()
@@ -583,7 +663,7 @@ func adminProof(passwordHash, nonce string) string {
 
 func adminActionAllowed(action string) bool {
 	switch action {
-	case "account.create",
+	case "camera.enroll", "camera.remove", "account.create",
 		"account.rename",
 		"account.pin",
 		"account.enable",
@@ -630,29 +710,45 @@ func (m *TrafficManager) serveAdminAPI(conn net.Conn, request *http.Request, cli
 		return false
 	}
 
+	m.mu.Lock()
+	secureRequired := m.requireSecureAdmin
+	m.mu.Unlock()
+	if secureRequired && request.TLS == nil {
+		writeJSONStatus(conn, "426 Upgrade Required", map[string]any{"ok": false, "message": "Utilisez la version compatible de Shizzi Admin avec connexion sécurisée."})
+		return true
+	}
 	switch {
 	case request.Method == http.MethodGet && path == "/api/v1/admin/challenge":
 		username := strings.TrimSpace(request.URL.Query().Get("username"))
 		m.mu.Lock()
-		defer m.mu.Unlock()
+
 		if !m.adminConfig.Enabled || m.adminConfig.PasswordHash == "" {
+			m.mu.Unlock()
 			writeJSONStatus(conn, "503 Service Unavailable", map[string]any{
 				"ok": false, "message": "Administration distante indisponible.",
 			})
 			return true
 		}
+		for nonce, challenge := range m.adminChallenges {
+			if challenge.ExpiresAtMillis < time.Now().UnixMilli() {
+				delete(m.adminChallenges, nonce)
+			}
+		}
+		if len(m.adminChallenges) >= 128 {
+			m.mu.Unlock()
+			writeJSONStatus(conn, "429 Too Many Requests", map[string]any{"ok": false})
+			return true
+		}
 		nonce := randomHex(24)
 		m.adminChallenges[nonce] = adminChallenge{
-			Nonce: nonce,
-			Username: username,
+			IP:              clientIP,
+			Nonce:           nonce,
+			Username:        username,
 			ExpiresAtMillis: time.Now().Add(60 * time.Second).UnixMilli(),
 		}
-		writeJSONStatus(conn, "200 OK", map[string]any{
-			"ok": true,
-			"nonce": nonce,
-			"salt": m.adminConfig.PasswordSalt,
-			"routerName": m.portalTitle,
-		})
+		salt, routerName, iterations := m.adminConfig.PasswordSalt, m.portalTitle, m.adminConfig.PasswordKDFIterations
+		m.mu.Unlock()
+		writeJSONStatus(conn, "200 OK", map[string]any{"ok": true, "nonce": nonce, "salt": salt, "iterations": iterations, "routerName": routerName})
 		return true
 
 	case request.Method == http.MethodPost && path == "/api/v1/admin/login":
@@ -662,33 +758,52 @@ func (m *TrafficManager) serveAdminAPI(conn net.Conn, request *http.Request, cli
 		proof := strings.ToLower(strings.TrimSpace(request.Form.Get("proof")))
 
 		m.mu.Lock()
-		defer m.mu.Unlock()
+
+		key := "admin|" + clientIP
+		if m.loginBlockedLocked(key, time.Now()) {
+			m.mu.Unlock()
+			writeJSONStatus(conn, "429 Too Many Requests", map[string]any{"ok": false})
+			return true
+		}
 		challenge, ok := m.adminChallenges[nonce]
 		delete(m.adminChallenges, nonce)
-		valid := ok &&
+		valid := ok && challenge.IP == clientIP &&
 			challenge.ExpiresAtMillis >= time.Now().UnixMilli() &&
 			m.adminConfig.Enabled &&
 			username == m.adminConfig.Username &&
 			challenge.Username == username &&
 			hmac.Equal([]byte(proof), []byte(adminProof(m.adminConfig.PasswordHash, nonce)))
 		if !valid {
+			m.failedLoginLocked(key, time.Now())
+			m.mu.Unlock()
 			writeJSONStatus(conn, "401 Unauthorized", map[string]any{
 				"ok": false, "message": "Identifiant ou mot de passe admin incorrect.",
 			})
 			return true
 		}
+		delete(m.loginAttempts, key)
+		if len(m.adminSessions) >= 32 {
+			m.mu.Unlock()
+			writeJSONStatus(conn, "429 Too Many Requests", map[string]any{"ok": false})
+			return true
+		}
 		token := randomHex(32)
 		m.adminSessions[token] = &adminSession{
-			Token: token,
-			IP: clientIP,
-			LastSeenMillis: time.Now().UnixMilli(),
+			Token:           token,
+			IP:              clientIP,
+			LastSeenMillis:  time.Now().UnixMilli(),
+			CreatedAtMillis: time.Now().UnixMilli(),
+			MAC:             m.flowAttribution.presence().macs[clientIP],
+			done:            make(chan struct{}),
 		}
+		name, download, upload := m.portalTitle, m.adminConfig.DownloadBps, m.adminConfig.UploadBps
+		m.mu.Unlock()
 		writeJSONStatus(conn, "200 OK", map[string]any{
-			"ok": true,
-			"token": token,
-			"routerName": m.portalTitle,
-			"downloadBps": m.adminConfig.DownloadBps,
-			"uploadBps": m.adminConfig.UploadBps,
+			"ok":          true,
+			"token":       token,
+			"routerName":  name,
+			"downloadBps": download,
+			"uploadBps":   upload,
 		})
 		return true
 
@@ -697,7 +812,7 @@ func (m *TrafficManager) serveAdminAPI(conn net.Conn, request *http.Request, cli
 		token := strings.TrimSpace(request.Header.Get("X-Shizzi-Admin-Token"))
 		session, ok := m.requireAdminTokenLocked(request, clientIP)
 		if ok {
-			delete(m.adminSessions, token)
+			m.revokeAdminLocked(token)
 		}
 		m.mu.Unlock()
 		if session == nil {
@@ -741,10 +856,10 @@ func (m *TrafficManager) serveAdminAPI(conn net.Conn, request *http.Request, cli
 		var trafficValue any
 		_ = json.Unmarshal([]byte(m.statsJSON()), &trafficValue)
 		writeJSONStatus(conn, "200 OK", map[string]any{
-			"ok": true,
+			"ok":         true,
 			"routerName": routerName,
-			"state": stateValue,
-			"traffic": trafficValue,
+			"state":      stateValue,
+			"traffic":    trafficValue,
 		})
 		return true
 
@@ -780,11 +895,16 @@ func (m *TrafficManager) serveAdminAPI(conn net.Conn, request *http.Request, cli
 		}
 		id := randomHex(16)
 		m.mu.Lock()
+		if len(m.adminCommands) >= 64 || len(m.adminResults) >= 256 {
+			m.mu.Unlock()
+			writeJSONStatus(conn, "429 Too Many Requests", map[string]any{"ok": false})
+			return true
+		}
 		m.adminCommands = append(m.adminCommands, AdminCommand{
-			ID: id,
-			IP: clientIP,
-			Action: payload.Action,
-			Params: payload.Params,
+			ID:              id,
+			IP:              clientIP,
+			Action:          payload.Action,
+			Params:          payload.Params,
 			CreatedAtMillis: time.Now().UnixMilli(),
 		})
 		m.mu.Unlock()
@@ -796,7 +916,7 @@ func (m *TrafficManager) serveAdminAPI(conn net.Conn, request *http.Request, cli
 		_, ok := m.requireAdminTokenLocked(request, clientIP)
 		id := strings.TrimSpace(request.URL.Query().Get("id"))
 		result, found := m.adminResults[id]
-		if found {
+		if ok && found {
 			delete(m.adminResults, id)
 		}
 		m.mu.Unlock()
@@ -813,7 +933,7 @@ func (m *TrafficManager) serveAdminAPI(conn net.Conn, request *http.Request, cli
 			_ = json.Unmarshal(result.Payload, &responsePayload)
 		}
 		writeJSONStatus(conn, "200 OK", map[string]any{
-			"ok": true,
+			"ok":      true,
 			"pending": false,
 			"success": result.Success,
 			"message": result.Message,
@@ -962,12 +1082,27 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 		return
 	}
 	defer request.Body.Close()
+	if secure, ok := conn.(*tls.Conn); ok {
+		state := secure.ConnectionState()
+		request.TLS = &state
+	}
 
+	if m.serveAccountSecurity(conn, request, clientIP) {
+		return
+	}
 	if m.serveAdminAPI(conn, request, clientIP) {
 		return
 	}
 
 	path := request.URL.Path
+	if captiveProbePath(path) {
+		m.serveCaptiveProbe(conn, request, clientIP)
+		return
+	}
+	if request.Method == http.MethodGet && !samePortalOrigin(request.Host) {
+		io.WriteString(conn, "HTTP/1.1 302 Found\r\nLocation: http://192.0.2.1/\r\nCache-Control: no-store\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+		return
+	}
 	isMediaRequest := (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
 		(path == "/media" || strings.HasPrefix(path, "/media/"))
 	isChatRequest := path == "/chat" || strings.HasPrefix(path, "/chat/")
@@ -1024,17 +1159,25 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 		m.serveClientAppDownload(conn, request)
 	case request.Method == http.MethodPost && path == "/login":
 		_ = request.ParseForm()
-		ok, message := m.submitPortalAccountLogin(
-			clientIP,
-			request.Form.Get("account"),
-			request.Form.Get("pin"),
-		)
+		ok, message := m.submitAccountProof(clientIP, request.Form.Get("account"), request.Form.Get("nonce"), request.Form.Get("proof"))
+		if request.TLS != nil && request.Form.Get("pin") != "" {
+			ok, message = m.submitPortalAccountLogin(clientIP, request.Form.Get("account"), request.Form.Get("pin"))
+		}
 		m.writePortalHTML(conn, clientIP, message, !ok)
 	case request.Method == http.MethodPost && path == "/recharge":
 		_ = request.ParseForm()
+		if !m.validAccountMutation(request, clientIP) {
+			writeJSONHTTP(conn, 403, map[string]any{"ok": false, "message": "Session expirée. Rechargez la page."})
+			return
+		}
 		ok, message := m.submitPortalRecharge(clientIP, request.Form.Get("code"))
 		m.writePortalHTML(conn, clientIP, message, !ok)
 	case request.Method == http.MethodPost && path == "/logout":
+		_ = request.ParseForm()
+		if !m.validAccountMutation(request, clientIP) {
+			writeJSONHTTP(conn, 403, map[string]any{"ok": false})
+			return
+		}
 		ok, message := m.submitPortalLogout(clientIP)
 		m.writePortalHTML(conn, clientIP, message, !ok)
 	case path == "/status.json":
@@ -1337,13 +1480,18 @@ func (m *TrafficManager) serveMediaProxy(
 		return
 	}
 
+	scope, admitted := m.captureFlowScope(clientIP, true, accountNumber)
+	if !admitted {
+		return
+	}
+
 	// Films can remain open for hours. Override the captive portal's short
 	// request deadline while this connection is carrying local media bytes.
 	deadline := time.Now().Add(6 * time.Hour)
 	_ = conn.SetDeadline(deadline)
 
 	target := mediaProxyTarget(request.URL.Path, request.URL.RawQuery)
-	local, err := net.DialTimeout("tcp", mediaBridgeAddress, 3*time.Second)
+	local, err := m.dialFlow(&net.Dialer{Timeout: 3 * time.Second}, scope, "tcp", mediaBridgeAddress)
 	if err != nil {
 		m.noteMediaDiagnostic(MediaDiagnostic{
 			ClientIP:             clientIP,
@@ -1368,6 +1516,11 @@ func (m *TrafficManager) serveMediaProxy(
 		return
 	}
 	defer local.Close()
+	release, allowed := m.trackScopedFlow(clientIP, scope, conn, local, true)
+	if !allowed {
+		return
+	}
+	defer release()
 	_ = local.SetDeadline(deadline)
 
 	if _, err := fmt.Fprintf(
@@ -1398,6 +1551,7 @@ func (m *TrafficManager) serveMediaProxy(
 
 	// Copy the raw upstream response so 206/Content-Range/Content-Length and
 	// MIME headers reach Chrome, Edge, Firefox, Safari and Android unchanged.
+
 	copied, copyErr := io.Copy(conn, local)
 	event := MediaDiagnostic{
 		ClientIP:             clientIP,
@@ -1416,7 +1570,6 @@ func (m *TrafficManager) serveMediaProxy(
 	}
 	m.noteMediaDiagnostic(event)
 }
-
 
 func chatProxyTarget(path, rawQuery string) string {
 	target := strings.TrimPrefix(path, "/chat")
@@ -1595,24 +1748,25 @@ func (m *TrafficManager) writePortalStatusJSON(conn net.Conn, ip string) {
 }
 
 type portalStatusPayload struct {
-	Authenticated   bool   `json:"authenticated"`
-	Authorized      bool   `json:"authorized"`
-	AccountNumber   string `json:"accountNumber,omitempty"`
-	AccountName     string `json:"accountName,omitempty"`
-	Plan            string `json:"plan,omitempty"`
-	RemainingBytes  int64  `json:"remainingBytes"`
-	UsedBytes       int64  `json:"usedBytes"`
-	SessionBytes    int64  `json:"sessionBytes"`
-	ExpiresAtMillis int64  `json:"expiresAtMillis"`
-	DownloadBps     int64  `json:"downloadBps"`
-	UploadBps       int64  `json:"uploadBps"`
-	Unlimited       bool   `json:"unlimited"`
-	StoredDataBytes int64  `json:"storedDataBytes"`
-	MediaActive     bool   `json:"mediaActive"`
-	MediaUntilMillis int64 `json:"mediaUntilMillis"`
-	ClaimMessage    string `json:"claimMessage,omitempty"`
-	ClaimSuccess    bool   `json:"claimSuccess,omitempty"`
-	ClaimPending    bool   `json:"claimPending,omitempty"`
+	InternetAvailable bool   `json:"internetAvailable"`
+	Authenticated     bool   `json:"authenticated"`
+	Authorized        bool   `json:"authorized"`
+	AccountNumber     string `json:"accountNumber,omitempty"`
+	AccountName       string `json:"accountName,omitempty"`
+	Plan              string `json:"plan,omitempty"`
+	RemainingBytes    int64  `json:"remainingBytes"`
+	UsedBytes         int64  `json:"usedBytes"`
+	SessionBytes      int64  `json:"sessionBytes"`
+	ExpiresAtMillis   int64  `json:"expiresAtMillis"`
+	DownloadBps       int64  `json:"downloadBps"`
+	UploadBps         int64  `json:"uploadBps"`
+	Unlimited         bool   `json:"unlimited"`
+	StoredDataBytes   int64  `json:"storedDataBytes"`
+	MediaActive       bool   `json:"mediaActive"`
+	MediaUntilMillis  int64  `json:"mediaUntilMillis"`
+	ClaimMessage      string `json:"claimMessage,omitempty"`
+	ClaimSuccess      bool   `json:"claimSuccess,omitempty"`
+	ClaimPending      bool   `json:"claimPending,omitempty"`
 }
 
 // portalStatus reports the account values for its single active device
@@ -1663,21 +1817,22 @@ func (m *TrafficManager) portalStatus(ip string) portalStatusPayload {
 	}
 
 	payload := portalStatusPayload{
-		Authenticated:   true,
-		Authorized:      m.portalAuthorizedLocked(ip, now),
-		AccountNumber:   account.Number,
-		AccountName:     account.Name,
-		Plan:            plan,
-		RemainingBytes:  remaining,
-		UsedBytes:       usedBytes,
-		SessionBytes:    authorization.UpBytes + authorization.DownBytes,
-		ExpiresAtMillis: expires,
-		DownloadBps:     account.downloadBps(now),
-		UploadBps:       account.uploadBps(now),
-		Unlimited:       unlimited,
-		StoredDataBytes: remaining,
-		MediaActive:     account.hasMedia(now),
-		MediaUntilMillis: account.MediaUntilMillis,
+		Authenticated:     true,
+		InternetAvailable: m.upstreamAvailable,
+		Authorized:        m.portalAuthorizedLocked(ip, now),
+		AccountNumber:     account.Number,
+		AccountName:       account.Name,
+		Plan:              plan,
+		RemainingBytes:    remaining,
+		UsedBytes:         usedBytes,
+		SessionBytes:      authorization.UpBytes + authorization.DownBytes,
+		ExpiresAtMillis:   expires,
+		DownloadBps:       account.downloadBps(now),
+		UploadBps:         account.uploadBps(now),
+		Unlimited:         unlimited,
+		StoredDataBytes:   remaining,
+		MediaActive:       account.hasMedia(now),
+		MediaUntilMillis:  account.MediaUntilMillis,
 	}
 	for _, claim := range m.portalRechargeClaims {
 		if claim.IP == ip {
@@ -1721,11 +1876,11 @@ func (m *TrafficManager) writePortalHTML(
 
 	content := ""
 	if !status.Authenticated {
-		content = `<form method="post" action="/login">
+		content = `<form id="shizzi-login" method="post" action="/login">
 <label>Numéro de compte</label>
 <input name="account" inputmode="numeric" autocomplete="username" required>
 <label>Mot de passe</label>
-<input name="pin" type="password" autocomplete="current-password" required>
+<input id="shizzi-pin" type="password" autocomplete="current-password" required>
 <button type="submit">Ouvrir la connexion compte</button>
 </form>`
 	} else {
@@ -1743,6 +1898,9 @@ func (m *TrafficManager) writePortalHTML(
 			html.EscapeString(formatPortalBytes(status.StoredDataBytes)),
 		)
 		access := `<div id="shizzi-access" class="alert ok">Internet actif sur cet appareil.</div>`
+		if status.Authorized && !status.InternetAvailable {
+			access = `<div id="shizzi-access" class="alert error">Compte autorisé. Internet du routeur indisponible ; le portail reste accessible.</div>`
+		}
 		if !status.Authorized {
 			access = `<div id="shizzi-access" class="alert error">Pas d'Internet : aucun forfait actif. Rechargez avec un voucher.</div>`
 		}
@@ -1788,16 +1946,16 @@ func (m *TrafficManager) writePortalHTML(
 	}
 
 	if status.Authenticated {
-	mediaAccess := `<div class="alert error">Pass Media inactif. Rechargez avec un voucher Media.</div>`
-	mediaButton := `<a class="media-button" href="/">Recharger le pass Media</a>`
-	if status.MediaActive {
-		mediaAccess = fmt.Sprintf(
-			`<div class="alert ok">Pass Media actif jusqu'au %s.</div>`,
-			html.EscapeString(formatPortalExpiry(status.MediaUntilMillis)),
-		)
-		mediaButton = `<a class="media-button" href="/media/">Ouvrir Shizzi Media</a>`
-	}
-	content += `<section class="media-link"><div class="eyebrow">MEDIA LOCAL</div>
+		mediaAccess := `<div class="alert error">Pass Media inactif. Rechargez avec un voucher Media.</div>`
+		mediaButton := `<a class="media-button" href="/">Recharger le pass Media</a>`
+		if status.MediaActive {
+			mediaAccess = fmt.Sprintf(
+				`<div class="alert ok">Pass Media actif jusqu'au %s.</div>`,
+				html.EscapeString(formatPortalExpiry(status.MediaUntilMillis)),
+			)
+			mediaButton = `<a class="media-button" href="/media/">Ouvrir Shizzi Media</a>`
+		}
+		content += `<section class="media-link"><div class="eyebrow">MEDIA LOCAL</div>
 <strong>Shizzi Media</strong>
 <p>Films, séries et musique disponibles dans le navigateur sur ce Wi-Fi, sans utiliser Internet ni le quota Data.</p>` + mediaAccess + mediaButton + `
 <div class="media-note">Voucher Media indépendant du forfait Internet · lecture locale</div></section>
@@ -1888,8 +2046,12 @@ button.secondary{background:#1e293b;color:#e2e8f0}
 		}
 	}
 
+	page = m.injectAccountSecurity(page, ip)
 	page = injectPortalAutoRefresh(page)
 	page = injectClientAppDownload(page)
+	if _, secure := conn.(*tls.Conn); secure {
+		page = strings.ReplaceAll(page, "http://192.0.2.1", "https://192.0.2.1")
+	}
 	writeHTTP(conn, "text/html; charset=utf-8", []byte(page))
 }
 
@@ -2004,9 +2166,9 @@ func injectPortalAutoRefresh(page string) string {
 
       var access=byId("shizzi-access");
       if(access){
-        access.className=s.authorized ? "alert ok" : "alert error";
+        access.className=(s.authorized && s.internetAvailable) ? "alert ok" : "alert error";
         access.textContent=s.authorized
-          ? "Internet actif sur cet appareil."
+          ? (s.internetAvailable ? "Internet actif sur cet appareil." : "Compte autorisé. Internet du routeur indisponible.")
           : "Pas d'Internet : aucun forfait actif. Rechargez avec un voucher.";
       }
 

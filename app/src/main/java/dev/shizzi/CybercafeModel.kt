@@ -2,6 +2,8 @@ package dev.shizzi
 
 import java.security.MessageDigest
 import java.security.SecureRandom
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.PBEKeySpec
 import kotlin.math.max
 
 private const val DAY_MILLIS = 86_400_000L
@@ -62,6 +64,7 @@ data class PrepaidAccount(
     val totalUpBytes: Long = 0L,
     val totalDownBytes: Long = 0L,
     val createdAtMillis: Long = 0L,
+    val pinKdfIterations: Int = 0,
 ) {
     fun hasUnlimited(nowMillis: Long): Boolean =
         enabled && unlimitedUntilMillis > nowMillis
@@ -128,7 +131,10 @@ data class RemoteAdminConfig(
     val passwordHash: String = "",
     val downloadBps: Long = 1_000_000L,
     val uploadBps: Long = 1_000_000L,
+    val passwordKdfIterations: Int = 0,
 )
+
+data class CameraProfile(val accountNumber: String, val mac: String, val enrollmentId: String)
 
 data class CybercafeState(
     val schemaVersion: Int = 5,
@@ -140,6 +146,7 @@ data class CybercafeState(
     val devices: Map<String, DeviceBinding> = emptyMap(),
     val portal: PortalCustomization = PortalCustomization(),
     val remoteAdmin: RemoteAdminConfig = RemoteAdminConfig(),
+    val cameras: Map<String, CameraProfile> = emptyMap(),
 )
 
 data class RuleOutcome(
@@ -466,8 +473,23 @@ object CybercafeSecurity {
         return bytes.joinToString("") { "%02x".format(it) }
     }
 
-    fun hashPin(salt: String, pin: String): String = hashSecret(salt, pin)
+    const val PIN_KDF_ITERATIONS = 120_000
+
+    fun stretchVerifier(salt: String, legacyHash: String): String {
+        val spec = PBEKeySpec(legacyHash.toCharArray(), salt.toByteArray(Charsets.UTF_8), PIN_KDF_ITERATIONS, 256)
+        return try { SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
+            .joinToString("") { "%02x".format(it) } } finally { spec.clearPassword() }
+    }
+
+    fun hashPin(salt: String, pin: String, iterations: Int = 0): String {
+        val legacy = hashSecret(salt, pin)
+        return when (iterations) {
+            0 -> legacy
+            PIN_KDF_ITERATIONS -> stretchVerifier(salt, legacy)
+            else -> error("Format de PIN non pris en charge.")
+        }
+    }
 
     fun verifyPin(account: PrepaidAccount, pin: String): Boolean =
-        hashPin(account.pinSalt, pin) == account.pinHash
+        account.pinKdfIterations in setOf(0, PIN_KDF_ITERATIONS) && MessageDigest.isEqual(hashPin(account.pinSalt, pin, account.pinKdfIterations).toByteArray(), account.pinHash.toByteArray())
 }

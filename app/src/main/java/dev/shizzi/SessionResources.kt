@@ -75,6 +75,14 @@ class SessionResources(
             }
     }
 
+    fun setClientPresence(raw: String) { datapathSession?.setClientPresenceJSON(raw) }
+
+    fun stopDatapathAndStats(): String {
+        val session = datapathSession ?: return "{}"
+        session.stop()
+        return session.trafficStatsJSON()
+    }
+
     fun trafficStats(): String = datapathSession?.trafficStatsJSON() ?: "{}"
 
     fun setRequireClientAttribution(required: Boolean) {
@@ -111,6 +119,8 @@ class SessionResources(
     fun setPortalConfig(required: Boolean, configJson: String) {
         datapathSession?.setPortalConfig(required, configJson)
     }
+
+    fun ackPortalClaims(idsJson: String) { datapathSession?.ackPortalClaims(idsJson) }
 
     fun clearPortalClaims() {
         datapathSession?.clearPortalClaims()

@@ -47,6 +47,12 @@ class TetherService : ITetherService.Stub {
             .getOrElse { failure -> sessionError("stop", failure) }
     }
 
+    override fun stopAndTrafficStats(): String {
+        runCatching { runner.teardown() }
+            .onFailure { failure -> Log.w(TAG, "stop: probe teardown ${failure.message}") }
+        return session.stopAndTrafficStats()
+    }
+
     override fun getStatus(): String =
         runCatching { session.status() }
             .getOrElse { failure -> sessionError("getStatus", failure) }
@@ -94,6 +100,8 @@ class TetherService : ITetherService.Stub {
         ensureClientAppDistribution()
         session.setPortalConfig(required, configJson.orEmpty())
     }
+
+    override fun ackPortalClaims(idsJson: String?) { session.ackPortalClaims(idsJson ?: "[]") }
 
     override fun clearPortalClaims() {
         session.clearPortalClaims()

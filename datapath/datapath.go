@@ -9,6 +9,7 @@ package datapath
 import (
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -29,10 +30,11 @@ const nicID tcpip.NICID = 1
 // gVisor types: gomobile carries only a narrow set across JNI, so the Kotlin
 // side sees a handle it can start and stop.
 type Session struct {
-	stack   *stack.Stack
-	binding *networkBinding
-	traffic *TrafficManager
+	stack        *stack.Stack
+	binding      *networkBinding
+	traffic      *TrafficManager
 	stopPresence chan struct{}
+	stopOnce     sync.Once
 }
 
 // Start builds a netstack over tunFD, already open, and attaches it to the TUN.
@@ -87,9 +89,9 @@ func Start(tunFD int, mtu int) (*Session, error) {
 	}, traffic)
 
 	session := &Session{
-		stack: netStack,
-		binding: binding,
-		traffic: traffic,
+		stack:        netStack,
+		binding:      binding,
+		traffic:      traffic,
 		stopPresence: make(chan struct{}),
 	}
 	go session.maintainClientPresence(session.stopPresence)
@@ -132,7 +134,6 @@ func (s *Session) SetNetwork(handle int64) {
 	}
 	s.binding.set(uint64(handle))
 }
-
 
 // SetRequireClientAttribution enables fail-closed client identification.
 // Once enabled, a shared 192.0.2.2/2001:db8::2 flow is not forwarded until
@@ -181,7 +182,6 @@ func (s *Session) SetClientPolicy(
 	})
 }
 
-
 // SetPortalConfig enables/disables account-gated captive access and supplies
 // the current account snapshot from Android. The Android store remains the
 // durable source of truth.
@@ -190,6 +190,27 @@ func (s *Session) SetPortalConfig(required bool, configJSON string) {
 		return
 	}
 	s.traffic.setPortalConfig(required, configJSON)
+}
+
+// SetClientPresenceJSON receives trusted station/lease callbacks from Android.
+func (s *Session) SetClientPresenceJSON(raw string) {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.flowAttribution.setPresenceJSON(raw)
+	presence := s.traffic.flowAttribution.presence()
+	s.traffic.mu.Lock()
+	s.traffic.pruneDepartedLocked(presence, time.Now())
+	s.traffic.reconcileCamerasLocked(presence)
+	s.traffic.mu.Unlock()
+}
+
+// AckPortalClaims removes only the exact claims committed by Android.
+func (s *Session) AckPortalClaims(idsJSON string) {
+	if s.traffic == nil {
+		return
+	}
+	s.traffic.ackPortalClaims(idsJSON)
 }
 
 // ClearPortalClaims acknowledges recharge requests already handled by Android.
@@ -225,13 +246,18 @@ func (s *Session) ResetTrafficStats() {
 
 // Stop tears the netstack down. It does not close the TUN fd.
 func (s *Session) Stop() {
-	if s.stack == nil {
-		return
-	}
-	if s.stopPresence != nil {
-		close(s.stopPresence)
-		s.stopPresence = nil
-	}
-	s.stack.Close()
-	s.stack = nil
+	s.stopOnce.Do(func() {
+		if s.traffic != nil {
+			s.traffic.freeze()
+		}
+		if s.stopPresence != nil {
+			close(s.stopPresence)
+		}
+		if s.stack != nil {
+			s.stack.Close()
+		}
+		if s.traffic != nil {
+			s.traffic.flowWG.Wait()
+		}
+	})
 }

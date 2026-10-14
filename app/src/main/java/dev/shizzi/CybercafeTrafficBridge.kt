@@ -57,6 +57,8 @@ data class PortalClaimResult(
     val code: String,
     val success: Boolean,
     val message: String,
+    val id: String = "",
+    val sessionId: String = "",
 )
 
 data class LivePortalRechargeClaim(
@@ -64,6 +66,8 @@ data class LivePortalRechargeClaim(
     val accountNumber: String,
     val code: String,
     val claimedAtMillis: Long,
+    val id: String = "",
+    val sessionId: String = "",
 )
 
 data class LiveAdminCommand(
@@ -95,8 +99,11 @@ data class LiveMediaDiagnostic(
     val error: String = "",
 )
 
+data class AssociatedWifiClient(val ip: String, val mac: String)
+
 data class LiveTrafficSnapshot(
     val epoch: Long = 0L,
+    val associatedClients: List<AssociatedWifiClient> = emptyList(),
     val accountUsage: List<LiveAccountUsage> = emptyList(),
     val clients: List<LiveClientTraffic> = emptyList(),
     val attribution: AttributionDiagnostics = AttributionDiagnostics(),
@@ -171,6 +178,8 @@ fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
                         accountNumber = account,
                         code = code,
                         claimedAtMillis = item.optLong("claimedAtMillis"),
+                        id = item.optString("id"),
+                        sessionId = item.optString("sessionId"),
                     ),
                 )
             }
@@ -239,7 +248,11 @@ fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
     }.orEmpty()
 
     val attribution = root.optJSONObject("attribution")
+    val associated = root.optJSONArray("associatedClients")?.let { array ->
+        (0 until array.length()).mapNotNull { index -> array.optJSONObject(index)?.let { AssociatedWifiClient(it.optString("ip"), it.optString("mac")) } }
+    }.orEmpty()
     return LiveTrafficSnapshot(
+        associatedClients = associated,
         epoch = root.optLong("epoch"),
         accountUsage = usage,
         clients = clients,
@@ -282,8 +295,16 @@ fun CybercafeState.toPortalConfigJson(
     mediaFolders: List<MediaFolderConfig> = emptyList(),
     mediaSummary: MediaIndexSummary? = null,
     routerBattery: RouterBatteryState = RouterBatteryState(),
+    upstreamAvailable: Boolean = true,
+    tlsIdentity: JSONObject? = null,
 ): String =
     JSONObject().apply {
+        put("cameras", JSONArray().apply { cameras.values.forEach { camera ->
+            put(JSONObject().put("accountNumber", camera.accountNumber).put("mac", camera.mac).put("enrollmentId", camera.enrollmentId))
+        } })
+        put("upstreamAvailable", upstreamAvailable)
+        put("requireSecureAdmin", true)
+        if (tlsIdentity != null) put("tls", tlsIdentity)
         put("clientApp", JSONObject().apply {
             put("available", clientApp?.available == true)
             put("version", clientApp?.version.orEmpty())
@@ -296,12 +317,14 @@ fun CybercafeState.toPortalConfigJson(
             put("username", remoteAdmin.username)
             put("passwordSalt", remoteAdmin.passwordSalt)
             put("passwordHash", remoteAdmin.passwordHash)
+            put("passwordKdfIterations", remoteAdmin.passwordKdfIterations)
             put("downloadBps", remoteAdmin.downloadBps.coerceAtLeast(1_000_000L))
             put("uploadBps", remoteAdmin.uploadBps.coerceAtLeast(1_000_000L))
         })
         put("adminState", JSONObject().apply {
             put("schemaVersion", schemaVersion)
             put("routerName", portal.title)
+            put("tlsFingerprint", tlsIdentity?.optString("fingerprint").orEmpty())
             put("remoteAdmin", JSONObject().apply {
                 put("username", remoteAdmin.username)
                 put("downloadBps", remoteAdmin.downloadBps.coerceAtLeast(1_000_000L))
@@ -321,6 +344,7 @@ fun CybercafeState.toPortalConfigJson(
                 accounts.values.sortedBy(PrepaidAccount::number).forEach { account ->
                     put(JSONObject().apply {
                         put("number", account.number)
+                        put("cameraMac", cameras[account.number]?.mac.orEmpty())
                         put("name", account.name)
                         put("enabled", account.enabled)
                         put("dataBalanceBytes", account.dataBalanceBytes)
@@ -436,6 +460,7 @@ fun CybercafeState.toPortalConfigJson(
                             put("name", account.name)
                             put("pinSalt", account.pinSalt)
                             put("pinHash", account.pinHash)
+                            put("pinKdfIterations", account.pinKdfIterations)
                             put("enabled", account.enabled)
                             put("dataBalanceBytes", account.dataBalanceBytes)
                             put("dataValidUntilMillis", account.dataValidUntilMillis)
@@ -462,6 +487,8 @@ fun CybercafeState.toPortalConfigJson(
                 claimResults.forEach { result ->
                     put(
                         JSONObject().apply {
+                            put("id", result.id)
+                            put("sessionId", result.sessionId)
                             put("ip", result.ip)
                             put("code", result.code)
                             put("success", result.success)
@@ -513,8 +540,10 @@ suspend fun TetherClient.applyCybercafePolicies(
     mediaFolders: List<MediaFolderConfig> = emptyList(),
     mediaSummary: MediaIndexSummary? = null,
     routerBattery: RouterBatteryState = RouterBatteryState(),
+    upstreamAvailable: Boolean = true,
+    tlsIdentity: JSONObject? = null,
 ) {
-    val portalRequired = state.accounts.isNotEmpty() || state.remoteAdmin.enabled
+    val portalRequired = true
 
     setGlobalTrafficPolicy(0L, 0L, 0L)
     setDefaultClientTrafficPolicy(0L, 0L, 0L, false)
@@ -532,6 +561,8 @@ suspend fun TetherClient.applyCybercafePolicies(
             mediaFolders,
             mediaSummary,
             routerBattery,
+            upstreamAvailable,
+            tlsIdentity,
         ),
     )
     if (!portalRequired) setRequireClientAttribution(false)

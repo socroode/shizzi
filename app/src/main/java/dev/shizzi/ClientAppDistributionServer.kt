@@ -233,11 +233,11 @@ class ClientAppDistributionServer(
     companion object {
         const val LOOPBACK_HOST = "127.0.0.1"
         const val PORT = 8091
-        const val CLIENT_VERSION = "0.2.10-test"
-        const val CLIENT_FILE_NAME = "Shizzi-Plus-0.2.10-test.apk"
+        const val CLIENT_VERSION = "0.2.11-candidate"
+        const val CLIENT_FILE_NAME = "Shizzi-Plus-0.2.11-candidate.apk"
         const val ASSET_PATH = "shizzi/Shizzi-Plus.apk"
-        const val ADMIN_VERSION = "0.2.9-test"
-        const val ADMIN_FILE_NAME = "Shizzi-Admin-0.2.9-test.apk"
+        const val ADMIN_VERSION = "0.2.11-candidate"
+        const val ADMIN_FILE_NAME = "Shizzi-Admin-0.2.11-candidate.apk"
         const val ADMIN_ASSET_PATH = "shizzi/Shizzi-Admin.apk"
     }
 }

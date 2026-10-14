@@ -9,6 +9,7 @@ fun processRemoteAdminCommand(
     store: CybercafeStore,
     nowMillis: Long,
     context: Context,
+    associatedClients: List<AssociatedWifiClient> = emptyList(),
 ): AdminCommandResult {
     val params = runCatching { JSONObject(command.paramsJson) }.getOrElse { JSONObject() }
 
@@ -17,6 +18,12 @@ fun processRemoteAdminCommand(
 
     return runCatching {
         when (command.action) {
+            "camera.enroll" -> {
+                val client = associatedClients.singleOrNull { it.ip == params.optString("ip") && it.mac == params.optString("mac") }
+                if (client == null) AdminCommandResult(command.id, false, "Caméra absente ou identité modifiée. Actualisez puis réessayez.")
+                else outcome(store.enrollCamera(params.optString("number"), params.optString("pin"), client.mac))
+            }
+            "camera.remove" -> outcome(store.removeCamera(params.optString("number")))
             "account.create" -> outcome(
                 store.createAccount(
                     params.optString("number"),

@@ -217,6 +217,8 @@ class TetherClient {
         runCatching { boundService?.setLogging(enabled) }
     }
 
+    suspend fun stopAndTrafficStats(): String = withContext(Dispatchers.IO) { service().stopAndTrafficStats() }
+
     suspend fun stop(): String = withContext(Dispatchers.IO) {
         service().stop()
     }
@@ -304,6 +306,10 @@ class TetherClient {
             verifyContract(bound)
             bound.setPortalConfig(required, configJson)
         }
+
+    suspend fun ackPortalClaims(idsJson: String) = withContext(Dispatchers.IO) {
+        val bound = service(); verifyContract(bound); bound.ackPortalClaims(idsJson)
+    }
 
     suspend fun clearPortalClaims() = withContext(Dispatchers.IO) {
         val bound = service()

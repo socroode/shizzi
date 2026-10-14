@@ -13,6 +13,8 @@ interface ITetherService {
 
     String stop();
 
+    String stopAndTrafficStats();
+
     String getStatus();
 
     String getTrafficStats();
@@ -41,6 +43,8 @@ interface ITetherService {
     void setPortalConfig(boolean required, String configJson);
 
     void clearPortalClaims();
+
+    void ackPortalClaims(String idsJson);
 
     void revokePortalClient(String ip);
 

@@ -1,6 +1,7 @@
 package dev.shizzi
 
 import android.content.Context
+import android.content.SharedPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,10 +18,9 @@ internal fun generateVoucherCode(random: SecureRandom): String =
         }
     }
 
-class CybercafeStore(context: Context) {
+class CybercafeStore internal constructor(private val preferences: SharedPreferences) {
 
-    private val preferences =
-        context.getSharedPreferences("shizzi_cybercafe_v1", Context.MODE_PRIVATE)
+    constructor(context: Context) : this(context.getSharedPreferences("shizzi_cybercafe_v1", Context.MODE_PRIVATE))
 
     private val mutableState = MutableStateFlow(
         decodeCybercafeState(preferences.getString(KEY_STATE, null)),
@@ -38,8 +38,31 @@ class CybercafeStore(context: Context) {
      */
     val policyRevision: StateFlow<Long> = mutablePolicyRevision.asStateFlow()
 
+    private var usageCheckpoint = preferences.getString("usage_checkpoint", "{}").orEmpty()
     private var usageDirty = false
     private var lastUsageFlushMillis = 0L
+
+    init {
+        val current = mutableState.value
+        val upgraded = current.accounts.mapValues { (_, account) ->
+            if (account.pinKdfIterations == 0 && account.pinHash.matches(Regex("[0-9a-fA-F]{64}"))) {
+                account.copy(pinHash = CybercafeSecurity.stretchVerifier(account.pinSalt, account.pinHash),
+                    pinKdfIterations = CybercafeSecurity.PIN_KDF_ITERATIONS)
+            } else account
+        }
+        val admin = current.remoteAdmin
+        val upgradedAdmin = if (admin.passwordKdfIterations == 0 && admin.passwordHash.matches(Regex("[0-9a-fA-F]{64}"))) {
+            admin.copy(passwordHash = CybercafeSecurity.stretchVerifier(admin.passwordSalt, admin.passwordHash),
+                passwordKdfIterations = CybercafeSecurity.PIN_KDF_ITERATIONS)
+        } else admin
+        if (upgraded != current.accounts || upgradedAdmin != admin) {
+            val next = current.copy(accounts = upgraded, remoteAdmin = upgradedAdmin)
+            check(preferences.edit().putString(KEY_STATE, encodeCybercafeState(next)).commit()) {
+                "Migration des comptes impossible."
+            }
+            mutableState.value = next
+        }
+    }
 
     @Synchronized
     fun createAccount(numberRaw: String, pin: String, name: String, nowMillis: Long): RuleOutcome {
@@ -55,7 +78,8 @@ class CybercafeStore(context: Context) {
             number = number,
             name = name.trim(),
             pinSalt = salt,
-            pinHash = CybercafeSecurity.hashPin(salt, pin),
+            pinHash = CybercafeSecurity.hashPin(salt, pin, CybercafeSecurity.PIN_KDF_ITERATIONS),
+            pinKdfIterations = CybercafeSecurity.PIN_KDF_ITERATIONS,
             createdAtMillis = nowMillis,
         )
         return commit(
@@ -79,15 +103,41 @@ class CybercafeStore(context: Context) {
         val salt = CybercafeSecurity.newSalt()
         val updated = account.copy(
             pinSalt = salt,
-            pinHash = CybercafeSecurity.hashPin(salt, newPin),
+            pinHash = CybercafeSecurity.hashPin(salt, newPin, CybercafeSecurity.PIN_KDF_ITERATIONS),
+            pinKdfIterations = CybercafeSecurity.PIN_KDF_ITERATIONS,
         )
         return commit(
             RuleOutcome(
-                state = state.value.copy(accounts = state.value.accounts + (number to updated)),
+                state = state.value.copy(accounts = state.value.accounts + (number to updated), cameras = state.value.cameras - number),
                 success = true,
-                message = "Code du compte modifié.",
+                message = "Code du compte modifié. Réassociez sa caméra si nécessaire.",
             ),
         )
+    }
+
+    @Synchronized
+    fun enrollCamera(numberRaw: String, pin: String, macRaw: String): RuleOutcome {
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        val account = state.value.accounts[number]
+        val mac = macRaw.lowercase()
+        if (account == null || !account.enabled || !CybercafeSecurity.verifyPin(account, pin)) {
+            return RuleOutcome(state.value, false, "Compte ou PIN incorrect.")
+        }
+        if (!mac.matches(Regex("[0-9a-f]{2}(:[0-9a-f]{2}){5}")) || mac == "00:00:00:00:00:00") {
+            return RuleOutcome(state.value, false, "Caméra non identifiée.")
+        }
+        if (state.value.cameras.values.any { it.mac == mac && it.accountNumber != number }) {
+            return RuleOutcome(state.value, false, "Cette caméra possède déjà un compte.")
+        }
+        val profile = CameraProfile(number, mac, java.util.UUID.randomUUID().toString())
+        return commit(RuleOutcome(state.value.copy(cameras = state.value.cameras + (number to profile)),
+            true, "Caméra associée au compte. Son IP peut changer."))
+    }
+
+    @Synchronized
+    fun removeCamera(numberRaw: String): RuleOutcome {
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        return commit(RuleOutcome(state.value.copy(cameras = state.value.cameras - number), true, "Association de la caméra supprimée."))
     }
 
     @Synchronized
@@ -117,6 +167,7 @@ class CybercafeStore(context: Context) {
             RuleOutcome(
                 state = state.value.copy(
                     accounts = state.value.accounts - number,
+                    cameras = state.value.cameras - number,
                     devices = remainingDevices,
                 ),
                 success = true,
@@ -189,6 +240,32 @@ class CybercafeStore(context: Context) {
     ): RuleOutcome {
         val number = CybercafeRules.normalizeAccountNumber(numberRaw)
         return commit(CybercafeRules.redeemAnyVoucher(state.value, number, codeRaw, nowMillis))
+    }
+
+    @Synchronized
+    fun redeemVoucherClaim(id: String, number: String, code: String, nowMillis: Long): RuleOutcome {
+        if (id.isBlank()) return RuleOutcome(state.value, false, "Demande de recharge sans identité.")
+        val receipts = runCatching { JSONArray(preferences.getString("claim_receipts", "[]")) }.getOrElse { JSONArray() }
+        for (i in 0 until receipts.length()) {
+            val old = receipts.optJSONObject(i) ?: continue
+            if (old.optString("id") == id) {
+                if (old.optString("account") != number || old.optString("code") != code) {
+                    return RuleOutcome(state.value, false, "Identité de recharge incohérente.")
+                }
+                return RuleOutcome(state.value, old.optBoolean("success"), old.optString("message"))
+            }
+        }
+        val result = CybercafeRules.redeemAnyVoucher(state.value, number, code, nowMillis)
+        val next = JSONArray()
+        for (i in maxOf(0, receipts.length() - 1023) until receipts.length()) next.put(receipts.get(i))
+        next.put(JSONObject().put("id", id).put("account", number).put("code", code)
+            .put("success", result.success).put("message", result.message))
+        check(preferences.edit().putString(KEY_STATE, encodeCybercafeState(result.state))
+            .putString("claim_receipts", next.toString()).putString("usage_checkpoint", usageCheckpoint).commit()) { "Sauvegarde de la recharge impossible." }
+        mutableState.value = result.state
+        if (result.success) mutablePolicyRevision.value += 1
+        usageDirty = false
+        return result
     }
 
     @Synchronized
@@ -457,7 +534,8 @@ class CybercafeStore(context: Context) {
                 enabled = enabled,
                 username = username,
                 passwordSalt = salt,
-                passwordHash = CybercafeSecurity.hashSecret(salt, passwordRaw),
+                passwordHash = CybercafeSecurity.hashPin(salt, passwordRaw, CybercafeSecurity.PIN_KDF_ITERATIONS),
+                passwordKdfIterations = CybercafeSecurity.PIN_KDF_ITERATIONS,
                 downloadBps = 1_000_000L,
                 uploadBps = 1_000_000L,
             )
@@ -503,6 +581,28 @@ class CybercafeStore(context: Context) {
      * writing the whole state to SharedPreferences every second is wasteful.
      */
     @Synchronized
+    fun newUsageLedger(): UsageLedger {
+        val saved = JSONObject(usageCheckpoint)
+        val counters = mutableListOf<LiveAccountUsage>()
+        saved.optJSONArray("usage")?.forEachObject { item ->
+            counters += LiveAccountUsage(item.getString("account"), item.getLong("up"), item.getLong("down"), item.getLong("data"))
+        }
+        return UsageLedger().apply { restore(saved.optLong("epoch"), counters) }
+    }
+
+    @Synchronized
+    fun absorbUsage(ledger: UsageLedger, epoch: Long, usage: List<LiveAccountUsage>): Boolean {
+        val (restarted, deltas) = ledger.absorb(epoch, usage)
+        deltas.forEach(::recordAccountUsage)
+        usageCheckpoint = JSONObject().put("epoch", ledger.epoch).put("usage", JSONArray().apply {
+            ledger.checkpoint().forEach { item -> put(JSONObject().put("account", item.accountNumber)
+                .put("up", item.upBytes).put("down", item.downBytes).put("data", item.dataBytes)) }
+        }).toString()
+        if (restarted) usageDirty = true
+        return restarted
+    }
+
+    @Synchronized
     fun recordAccountUsage(delta: UsageDelta) {
         val number = CybercafeRules.normalizeAccountNumber(delta.accountNumber)
         val account = state.value.accounts[number] ?: return
@@ -532,13 +632,13 @@ class CybercafeStore(context: Context) {
     }
 
     private fun persist(value: CybercafeState) {
+        writeToDisk(value)
         mutableState.value = value
         mutablePolicyRevision.value = mutablePolicyRevision.value + 1
-        writeToDisk(value)
     }
 
     private fun writeToDisk(value: CybercafeState) {
-        preferences.edit().putString(KEY_STATE, encodeCybercafeState(value)).apply()
+        check(preferences.edit().putString(KEY_STATE, encodeCybercafeState(value)).putString("usage_checkpoint", usageCheckpoint).commit()) { "Sauvegarde des comptes impossible." }
         usageDirty = false
     }
 
@@ -555,6 +655,9 @@ class CybercafeStore(context: Context) {
 internal fun encodeCybercafeState(state: CybercafeState): String =
     JSONObject().apply {
         put("schemaVersion", state.schemaVersion)
+        put("cameras", JSONArray().apply { state.cameras.values.forEach { camera ->
+            put(JSONObject().put("accountNumber", camera.accountNumber).put("mac", camera.mac).put("enrollmentId", camera.enrollmentId))
+        } })
         put("portal", JSONObject().apply {
             put("title", state.portal.title)
             put("message", state.portal.message)
@@ -565,6 +668,7 @@ internal fun encodeCybercafeState(state: CybercafeState): String =
             put("username", state.remoteAdmin.username)
             put("passwordSalt", state.remoteAdmin.passwordSalt)
             put("passwordHash", state.remoteAdmin.passwordHash)
+            put("passwordKdfIterations", state.remoteAdmin.passwordKdfIterations)
             put("downloadBps", state.remoteAdmin.downloadBps)
             put("uploadBps", state.remoteAdmin.uploadBps)
         })
@@ -589,6 +693,7 @@ internal fun encodeCybercafeState(state: CybercafeState): String =
                     put("name", account.name)
                     put("pinSalt", account.pinSalt)
                     put("pinHash", account.pinHash)
+                    put("pinKdfIterations", account.pinKdfIterations)
                     put("enabled", account.enabled)
                     put("dataBalanceBytes", account.dataBalanceBytes)
                     put("dataValidUntilMillis", account.dataValidUntilMillis)
@@ -695,6 +800,7 @@ internal fun decodeCybercafeState(raw: String?): CybercafeState {
             name = item.optString("name"),
             pinSalt = item.optString("pinSalt"),
             pinHash = item.optString("pinHash"),
+            pinKdfIterations = item.optInt("pinKdfIterations", 0),
             enabled = item.optBoolean("enabled", true),
             dataBalanceBytes = item.optLong("dataBalanceBytes"),
             dataValidUntilMillis = item.optLong("dataValidUntilMillis"),
@@ -792,6 +898,7 @@ internal fun decodeCybercafeState(raw: String?): CybercafeState {
             username = remoteAdminObject.optString("username", "admin").trim().ifBlank { "admin" }.take(64),
             passwordSalt = remoteAdminObject.optString("passwordSalt"),
             passwordHash = remoteAdminObject.optString("passwordHash"),
+            passwordKdfIterations = remoteAdminObject.optInt("passwordKdfIterations", 0),
             downloadBps = remoteAdminObject.optLong("downloadBps", 1_000_000L).coerceAtLeast(1_000_000L),
             uploadBps = remoteAdminObject.optLong("uploadBps", 1_000_000L).coerceAtLeast(1_000_000L),
         )
@@ -810,7 +917,15 @@ internal fun decodeCybercafeState(raw: String?): CybercafeState {
         )
     }
 
+    val cameras = linkedMapOf<String, CameraProfile>()
+    root.optJSONArray("cameras")?.forEachObject { item ->
+        val number = CybercafeRules.normalizeAccountNumber(item.optString("accountNumber"))
+        val profile = CameraProfile(number, item.optString("mac").lowercase(), item.optString("enrollmentId"))
+        if (number in accounts && profile.enrollmentId.isNotBlank()) cameras[number] = profile
+    }
+
     return CybercafeState(
+        cameras = cameras,
         schemaVersion = 5,
         offers = if (offers.isEmpty()) defaultOffers() else offers,
         accounts = accounts,

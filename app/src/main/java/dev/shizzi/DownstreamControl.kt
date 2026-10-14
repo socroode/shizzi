@@ -55,6 +55,8 @@ class DownstreamControl(private val context: Context) {
     }.isSuccess
 
     fun startWifiTethering(): Pair<Boolean, String> {
+        val open = ensureOpenHotspot()
+        if (!open.first) return open
         val viaTethering = startViaTetheringManager()
         if (viaTethering.first) return viaTethering
 
@@ -63,6 +65,25 @@ class DownstreamControl(private val context: Context) {
             viaWifiManager.first -> viaWifiManager
             else -> false to "tethering[${viaTethering.second}]; wifiManager[${viaWifiManager.second}]"
         }
+    }
+
+    private fun ensureOpenHotspot(): Pair<Boolean, String> = runCatching {
+        val wifi = context.getSystemService(Context.WIFI_SERVICE) ?: error("wifi unavailable")
+        val type = Class.forName("android.net.wifi.SoftApConfiguration")
+        val current = wifi.javaClass.getMethod("getSoftApConfiguration").invoke(wifi)
+            ?: error("configuration hotspot unavailable")
+        val security = type.getMethod("getSecurityType").invoke(current) as Int
+        if (security == 0) return true to "Wi-Fi public ouvert confirmé"
+        val builderType = Class.forName("android.net.wifi.SoftApConfiguration\$Builder")
+        val builder = builderType.getConstructor(type).newInstance(current)
+        builderType.getMethod("setPassphrase", String::class.java, Int::class.javaPrimitiveType).invoke(builder, null, 0)
+        val opened = builderType.getMethod("build").invoke(builder)
+        check(wifi.javaClass.getMethod("setSoftApConfiguration", type).invoke(wifi, opened) == true)
+        val applied = wifi.javaClass.getMethod("getSoftApConfiguration").invoke(wifi)
+        check(type.getMethod("getSecurityType").invoke(applied) == 0)
+        true to "Wi-Fi public ouvert configuré"
+    }.getOrElse {
+        false to "Configurez le point d'accès Android sans mot de passe : ${it.cause?.message ?: it.message}"
     }
 
     private fun startViaWifiManager(): Pair<Boolean, String> = runCatching {

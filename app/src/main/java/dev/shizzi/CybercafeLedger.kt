@@ -69,6 +69,14 @@ class UsageLedger {
         return restarted to deltas
     }
 
+    fun restore(epoch: Long, usage: List<LiveAccountUsage>) {
+        this.epoch = epoch
+        applied.clear()
+        usage.forEach { applied[it.accountNumber] = it }
+    }
+
+    fun checkpoint(): List<LiveAccountUsage> = applied.values.toList()
+
     fun markers(): Map<String, AccountMarker> =
         applied.mapValues { (_, usage) ->
             AccountMarker(

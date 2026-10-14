@@ -1,6 +1,6 @@
 module dev.shizzi/datapath
 
-go 1.26.3
+go 1.26.9
 
 require gvisor.dev/gvisor v0.0.0-20260804180831-0f34e3556d62
 

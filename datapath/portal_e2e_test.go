@@ -111,8 +111,8 @@ IPv4 Downstream:
 	if err != nil && len(response) == 0 {
 		t.Fatalf("read: %v", err)
 	}
-	if !strings.Contains(string(response), "Numéro de compte") {
-		t.Fatalf("portal not served: %q", string(response))
+	if !strings.Contains(string(response), "302 Found") || !strings.Contains(string(response), "Location: http://192.0.2.1/") {
+		t.Fatalf("captive portal redirect missing: %q", string(response))
 	}
 }
 
@@ -381,7 +381,11 @@ func TestSixClientsLoginThroughSharedTUNPortal(t *testing.T) {
 			dump = strings.Replace(dump, "IPv4 Downstream:", rule+"IPv4 Downstream:", 1)
 			mu.Unlock()
 			conn.SetDeadline(time.Now().Add(8 * time.Second))
-			body := fmt.Sprintf("account=%s&pin=pass", accounts[i].Number)
+			ip := fmt.Sprintf("192.168.7.%d", 60+i)
+			c := traffic.accountChallenge(ip, accounts[i].Number)
+			nonce, _ := c["nonce"].(string)
+			proof := accountProof(accounts[i].PinHash, nonce, accounts[i].Number)
+			body := fmt.Sprintf("account=%s&nonce=%s&proof=%s", accounts[i].Number, nonce, proof)
 			fmt.Fprintf(conn, "POST /login HTTP/1.1\r\nHost: 192.0.2.1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
 			response, err := io.ReadAll(conn)
 			if err != nil {

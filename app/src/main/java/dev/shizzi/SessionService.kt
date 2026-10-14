@@ -60,6 +60,7 @@ class SessionService : Service() {
     private var generation = 0
 
     private val sessionLock = Mutex()
+    private var usageLedger: UsageLedger? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -124,8 +125,7 @@ class SessionService : Service() {
                 // portal sessions are keyed by the client's IPv4 identity, and a
                 // client with routed IPv6 would log in on one family and be
                 // refused on the other.
-                val cybercafe = (application as App).cybercafeStore.state.value
-                val ipv4Only = cybercafe.accounts.isNotEmpty() || cybercafe.remoteAdmin.enabled
+                val ipv4Only = true
                 if (ipv4Only) SessionLog.info("cybercafe mode: hotspot IPv4-only")
                 runCatching { controller.start(settings.isLogging, settings.vpnMode, ipv4Only) }
             }
@@ -164,18 +164,19 @@ class SessionService : Service() {
         cybercafeJob?.cancel()
         cybercafeJob = scope.launch {
             val store = (application as App).cybercafeStore
-            val ledger = UsageLedger()
+            val ledger = store.newUsageLedger().also { usageLedger = it }
             val rates = SessionRateMeter()
             var pushedRevision = Long.MIN_VALUE
             var pushedEpoch = Long.MIN_VALUE
             var lastPushMillis = 0L
             var pendingResults = emptyList<PortalClaimResult>()
             var pendingAdminResults = emptyList<AdminCommandResult>()
-            val handledAdminCommandIds = mutableSetOf<String>()
+            val handledAdminCommandIds = linkedSetOf<String>()
             var nextMediaHealthCheckMillis = 0L
             var nextBatteryPollMillis = 0L
             var latestBattery = RouterBatteryState()
             var pushedBattery: RouterBatteryState? = null
+            var pushedInternet: Boolean? = null
 
             while (internalState.value.status == UiStatus.CONNECTED) {
                 val now = System.currentTimeMillis()
@@ -205,13 +206,13 @@ class SessionService : Service() {
                 }
 
                 if (snapshot != null && snapshot.epoch != 0L) {
-                    val (restarted, deltas) = ledger.absorb(snapshot.epoch, snapshot.accountUsage)
+                    val restarted = store.absorbUsage(ledger, snapshot.epoch, snapshot.accountUsage)
                     if (restarted) SessionLog.info("cybercafe: datapath epoch ${snapshot.epoch}")
-                    deltas.forEach(store::recordAccountUsage)
 
                     if (snapshot.portalRechargeClaims.isNotEmpty()) {
                         pendingResults = pendingResults + snapshot.portalRechargeClaims.map { claim ->
-                            val outcome = store.redeemVoucherForAccount(
+                            val outcome = store.redeemVoucherClaim(
+                                claim.id,
                                 claim.accountNumber,
                                 claim.code,
                                 now,
@@ -227,12 +228,11 @@ class SessionService : Service() {
                                 code = claim.code,
                                 success = outcome.success,
                                 message = outcome.message,
+                                id = claim.id, sessionId = claim.sessionId,
                             )
                         }
-                        runCatching { controller.clearPortalClaims() }
-                            .onFailure {
-                                SessionLog.warn("could not clear portal claims: ${it.message}")
-                            }
+                        pendingResults = pendingResults.distinctBy { it.id + "|" + it.sessionId }
+
                     }
 
                     val freshAdminCommands = snapshot.adminCommands.filter {
@@ -245,10 +245,12 @@ class SessionService : Service() {
                                 store,
                                 now,
                                 this@SessionService,
+                                snapshot.associatedClients,
                             )
                         }
                     }
 
+                    while (handledAdminCommandIds.size > 512) handledAdminCommandIds.remove(handledAdminCommandIds.first())
                     publishLiveSessions(snapshot, store.state.value, rates, now)
                 }
 
@@ -258,6 +260,7 @@ class SessionService : Service() {
                     pendingResults.isNotEmpty() ||
                     pendingAdminResults.isNotEmpty() ||
                     latestBattery != pushedBattery ||
+                    upstreamAvailable() != pushedInternet ||
                     now - lastPushMillis >= CYBERCAFE_RESYNC_MS
                 var pushFailed = false
                 if (due) {
@@ -281,11 +284,18 @@ class SessionService : Service() {
                             mediaFolders,
                             MediaIndex.summary(applicationContext),
                             latestBattery,
+                            upstreamAvailable(),
+                            (application as App).portalTlsStore.identity(),
                         )
                         pushedRevision = revision
                         pushedEpoch = ledger.epoch
                         pushedBattery = latestBattery
+                        pushedInternet = upstreamAvailable()
                         lastPushMillis = now
+                        if (pendingResults.isNotEmpty()) {
+                            runCatching { controller.ackPortalClaims(org.json.JSONArray(pendingResults.map { it.id }).toString()) }
+                                .onFailure { SessionLog.warn("could not acknowledge portal claims: ${it.message}") }
+                        }
                         pendingResults = emptyList()
                         pendingAdminResults = emptyList()
                     } catch (cancelled: CancellationException) {
@@ -348,6 +358,13 @@ class SessionService : Service() {
         mutableMediaDiagnostics.value = snapshot.mediaDiagnostics
     }
 
+    private fun upstreamAvailable(): Boolean = runCatching {
+        val manager = getSystemService(android.net.ConnectivityManager::class.java)
+        val network = manager.activeNetwork ?: return false
+        val caps = manager.getNetworkCapabilities(network) ?: return false
+        caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }.getOrDefault(false)
+
     private fun followStatus() = statusPoller.follow(
         isConnected = { internalState.value.status == UiStatus.CONNECTED },
         onStatus = { outcome ->
@@ -366,7 +383,8 @@ class SessionService : Service() {
         startJob = null
 
         statusPoller.stop()
-        cybercafeJob?.cancel()
+        val abandonedSync = cybercafeJob
+        abandonedSync?.cancel()
         cybercafeJob = null
         clearLiveSessions()
 
@@ -379,9 +397,15 @@ class SessionService : Service() {
         scope.launch {
 
             abandoned?.cancelAndJoin()
+            abandonedSync?.cancelAndJoin()
 
             sessionLock.withLock {
-                runCatching { controller.stop() }
+                runCatching {
+                    val store = (application as App).cybercafeStore
+                    val snapshot = parseLiveTrafficSnapshot(controller.stopAndTrafficStats())
+                    usageLedger?.let { store.absorbUsage(it, snapshot.epoch, snapshot.accountUsage) }
+                    store.flushUsage(System.currentTimeMillis(), force = true)
+                }
                     .onFailure { SessionLog.error("teardown failed: ${it.message}") }
 
                 controller.unbindAndStopDaemon()

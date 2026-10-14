@@ -13,6 +13,7 @@ class TetherSession(private val context: Context) {
     private val inspector = UpstreamInspector()
 
     private var resources: SessionResources? = null
+    private var presenceMonitor: ClientPresenceMonitor? = null
     private var state = SessionState.IDLE
     private var detail = "not started"
     private var interfaceName: String? = null
@@ -29,6 +30,7 @@ class TetherSession(private val context: Context) {
 
     fun start(mode: VpnMode = VpnMode.AUTO, ipv4Only: Boolean = false): String {
         if (isActive) return status()
+        finalTrafficStats = "{}"
 
         vpnMode = mode
         this.ipv4Only = ipv4Only
@@ -77,6 +79,7 @@ class TetherSession(private val context: Context) {
         )
 
         group.startDatapath(TUN_MTU)
+        presenceMonitor = ClientPresenceMonitor(context) { raw -> resources?.setClientPresence(raw) }.also { it.start() }
         SessionLog.info("datapath attached to $name")
         followVpn(group)
 
@@ -161,7 +164,7 @@ class TetherSession(private val context: Context) {
         val downstream = DownstreamInspector()
 
         while (System.currentTimeMillis() < deadline) {
-            if (downstream.findTetheredDownstream() != null) {
+            if (runCatching { downstream.findTetheredDownstream() }.getOrNull() != null) {
                 SessionLog.info("downstream tethered")
                 return true
             }
@@ -186,7 +189,15 @@ class TetherSession(private val context: Context) {
     private fun liveUpstreams(owned: String): List<String> =
         inspector.observe().liveInterfaceNames(owned)
 
+    private var finalTrafficStats = "{}"
+
+    fun stopAndTrafficStats(): String {
+        stop()
+        return finalTrafficStats
+    }
+
     fun stop(): String {
+        presenceMonitor?.stop(); presenceMonitor = null
         watchdog?.stop()
         watchdog = null
         vpn.stop()
@@ -198,6 +209,11 @@ class TetherSession(private val context: Context) {
 
         teardown.releaseUpstreamSelection(interfaceName)
 
+        resources?.let { group ->
+            runCatching { group.stopDatapathAndStats() }
+                .onSuccess { finalTrafficStats = it }
+                .onFailure { SessionLog.error("final traffic snapshot failed: ${it.message}") }
+        }
         val releaseProblems = resources?.release().orEmpty()
         resources = null
 
@@ -277,6 +293,8 @@ class TetherSession(private val context: Context) {
     fun setPortalConfig(required: Boolean, configJson: String) {
         resources?.setPortalConfig(required, configJson)
     }
+
+    fun ackPortalClaims(idsJson: String) { resources?.ackPortalClaims(idsJson) }
 
     fun clearPortalClaims() {
         resources?.clearPortalClaims()

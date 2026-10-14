@@ -348,9 +348,8 @@ IPv4 Downstream:
 	}
 }
 
-// With one phone on Android's client list the only rule-less flow is its own;
-// but the fallback must never rely on the IPs found in NAT rules.
-func TestSingleClientFallbackNeedsAndroidClientList(t *testing.T) {
+// Neither NAT-rule addresses nor a sole DHCP lease prove Wi-Fi identity.
+func TestSingleClientFallbackRejectsDHCPOnlyEvidence(t *testing.T) {
 	resolver := newFlowAttributionResolver()
 	resolver.dumpFn = func() (string, error) {
 		return `IPv4 Upstream:
@@ -365,8 +364,8 @@ IPv4 Downstream:`, nil
 	resolver.dumpFn = func() (string, error) {
 		return "IPv4 Upstream:\nIPv4 Downstream:\n{/192.168.7.77=downstream: 41}", nil
 	}
-	if got := resolver.resolve(flowAttributionKey{"tcp", "192.0.2.2", 50001, "1.1.1.1", 443}, true); got != phoneB {
-		t.Fatalf("single listed client not resolved: %q", got)
+	if got := resolver.resolve(flowAttributionKey{"tcp", "192.0.2.2", 50001, "1.1.1.1", 443}, true); got != "" {
+		t.Fatalf("a lone DHCP entry must not establish identity: %q", got)
 	}
 }
 

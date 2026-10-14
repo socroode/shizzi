@@ -132,6 +132,8 @@ private fun RemoteAdminEditor(
     var password by remember { mutableStateOf("") }
 
     SectionTitle("Shizzi Admin à distance")
+    val fingerprint = remember { runCatching { App.instance.portalTlsStore.fingerprint().chunked(8).joinToString(" ") }.getOrDefault("Identité indisponible") }
+    Text("Code de sécurité du routeur : $fingerprint", color = ShizziTheme.colors.onSurfaceMuted)
     Text(
         "Permet d'administrer ce routeur depuis n'importe quel téléphone connecté au Wi-Fi. " +
             "Le démarrage et l'arrêt de Shizzi restent uniquement disponibles sur le téléphone routeur.",

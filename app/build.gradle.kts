@@ -8,12 +8,10 @@ plugins {
 }
 
 fun sourceFingerprint(projectDir: File): Int {
-    val sources = File(projectDir, "src/main/java")
-    if (!sources.isDirectory) return 0
-
-    return sources.walkTopDown()
-        .filter { it.isFile && it.extension == "kt" }
-        .sortedBy { it.path }
+    val roots = listOf(File(projectDir, "src/main"), File(projectDir.parentFile, "datapath"))
+    return roots.flatMap { root -> root.walkTopDown().filter { it.isFile &&
+        it.extension in setOf("kt", "go", "aidl", "xml", "mod", "sum", "js", "txt") }.toList() }
+        .sortedBy { it.relativeTo(projectDir.parentFile).path }
         .fold(7) { hash, file -> hash * 31 + file.readText().hashCode() }
 }
 
@@ -24,7 +22,7 @@ val gomobileBind by tasks.registering(Exec::class) {
     inputs.dir(goModule).withPropertyName("goSources")
     outputs.file(outputAar).withPropertyName("aar")
 
-    val goBin = File(System.getProperty("user.home"), "go/bin")
+    val goBin = System.getenv("SHIZZI_GOMOBILE_HOME")?.let(::File) ?: File(System.getProperty("user.home"), "go/bin")
     val ndk = android.ndkDirectory
 
     workingDir = goModule.asFile
@@ -102,8 +100,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 31
-        versionName = "0.4.3.5.3"
+        versionCode = 32
+        versionName = "0.4.3.5.4"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 

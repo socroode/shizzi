@@ -1,6 +1,7 @@
 package datapath
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"net"
 	"sort"
@@ -132,7 +133,18 @@ type accountUsage struct {
 }
 
 type TrafficManager struct {
-	mu sync.Mutex
+	cameraProfiles     map[string]CameraProfile
+	cameraSuppressed   map[string]bool
+	accountChallenges  map[string]accountChallenge
+	tlsCertificate     *tls.Certificate
+	requireSecureAdmin bool
+	closed             bool
+	stopData           chan struct{}
+	flowWG             sync.WaitGroup
+	globalPending      int64
+	accountPending     map[string]int64
+	clientPending      map[string]int64
+	mu                 sync.Mutex
 
 	epoch int64
 
@@ -157,6 +169,10 @@ type TrafficManager struct {
 	clients             map[string]*clientTraffic
 
 	portalRequired       bool
+	upstreamAvailable    bool
+	dnsWindow            time.Time
+	dnsCount             int
+	loginAttempts        map[string]*loginThrottle
 	portalTitle          string
 	portalMessage        string
 	portalHTML           string
@@ -182,6 +198,7 @@ func newTrafficManager() *TrafficManager {
 		// client must never get free Internet in the gap between datapath
 		// start and the first configuration.
 		portalRequired:           true,
+		stopData:                 make(chan struct{}),
 		requireClientAttribution: true,
 		epoch:                    time.Now().UnixNano(),
 		flowAttribution:          newFlowAttributionResolver(),
@@ -339,6 +356,10 @@ func (m *TrafficManager) flowAllowed(ip string) bool {
 }
 
 func (m *TrafficManager) allowedLocked(ip string, nowMillis int64) bool {
+	if m.closed {
+		return false
+	}
+	m.checkIdentityLocked(ip)
 	if m.portalRequired &&
 		!m.portalAuthorizedLocked(ip, nowMillis) &&
 		!m.adminAuthorizedLocked(ip) {
@@ -519,6 +540,7 @@ type accountUsageSnapshot struct {
 }
 
 type trafficStatsSnapshot struct {
+	AssociatedClients        []AssociatedClient          `json:"associatedClients"`
 	Epoch                    int64                       `json:"epoch"`
 	GlobalDownloadBps        int64                       `json:"globalDownloadBps"`
 	GlobalUploadBps          int64                       `json:"globalUploadBps"`
@@ -554,16 +576,13 @@ func (m *TrafficManager) refreshClientPresence() {
 	presence := m.flowAttribution.presence()
 	m.mu.Lock()
 	m.pruneDepartedLocked(presence, time.Now())
+	m.reconcileCamerasLocked(presence)
 	m.mu.Unlock()
 }
 
 func (m *TrafficManager) statsJSON() string {
-	// A NAT/tethering client-list snapshot is not reliable evidence that
-	// an authenticated phone disconnected. Never revoke account sessions
-	// merely because dumpsys temporarily omitted a client. Explicit login
-	// takeover, logout and administrator revocation control account ownership.
-	// Read cached MAC metadata without treating a transient client-list gap
-	// as proof of disconnection. Do not refresh tethering or revoke sessions.
+	// Statistics never block on dumpsys. A cached change of MAC revokes the
+	// old device; departure requires the presence worker's confirmed grace.
 	presence := m.flowAttribution.presence()
 	m.mu.Lock()
 
@@ -587,12 +606,25 @@ func (m *TrafficManager) statsJSON() string {
 		MediaDiagnostics:         append([]MediaDiagnostic(nil), m.mediaDiagnostics...),
 	}
 
+	if presence.authoritative && presence.eventBased {
+		for ip, mac := range presence.macs {
+			snapshot.AssociatedClients = append(snapshot.AssociatedClients, AssociatedClient{ip, mac})
+		}
+	}
+	sort.Slice(snapshot.AssociatedClients, func(i, j int) bool { return snapshot.AssociatedClients[i].IP < snapshot.AssociatedClients[j].IP })
 	nowMillis := time.Now().UnixMilli()
 	for ip, authorization := range m.portalAuthorized {
 		account := m.portalAccounts[authorization.AccountNumber]
 		presenceStatus := "unknown"
 		if presence.authoritative {
 			presenceStatus = "missing"
+			if mac := presence.macs[ip]; mac != "" && authorization.MAC != "" && mac != authorization.MAC {
+				m.revokeAuthorizationLocked(ip)
+				continue
+			}
+			if authorization.MAC == "" {
+				authorization.MAC = presence.macs[ip]
+			}
 			if _, present := presence.clients[ip]; present {
 				presenceStatus = "online"
 			}
@@ -675,6 +707,14 @@ func (m *TrafficManager) pruneDepartedLocked(presence clientPresence, now time.T
 		return
 	}
 	for ip, authorization := range m.portalAuthorized {
+		mac := presence.macs[ip]
+		if mac != "" && authorization.MAC != "" && authorization.MAC != mac {
+			m.revokeAuthorizationLocked(ip)
+			continue
+		}
+		if authorization.MAC == "" {
+			authorization.MAC = mac
+		}
 		if _, present := presence.clients[ip]; present {
 			authorization.missingSince = time.Time{}
 			continue
@@ -684,12 +724,20 @@ func (m *TrafficManager) pruneDepartedLocked(presence clientPresence, now time.T
 			continue
 		}
 		if now.Sub(authorization.missingSince) >= departedClientGrace {
-			delete(m.portalAuthorized, ip)
+			m.revokeAuthorizationLocked(ip)
 			delete(m.portalClaimResults, ip)
 			m.removePendingClaimsForIPLocked(ip)
 		}
 	}
 	for token, session := range m.adminSessions {
+		mac := presence.macs[session.IP]
+		if mac != "" && session.MAC != "" && session.MAC != mac {
+			m.revokeAdminLocked(token)
+			continue
+		}
+		if session.MAC == "" {
+			session.MAC = mac
+		}
 		if _, present := presence.clients[session.IP]; present {
 			session.missingSince = time.Time{}
 			continue
@@ -699,7 +747,7 @@ func (m *TrafficManager) pruneDepartedLocked(presence clientPresence, now time.T
 			continue
 		}
 		if now.Sub(session.missingSince) >= departedClientGrace {
-			delete(m.adminSessions, token)
+			m.revokeAdminLocked(token)
 		}
 	}
 }

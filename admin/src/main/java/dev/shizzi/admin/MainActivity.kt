@@ -24,7 +24,6 @@ import android.widget.TextView
 import android.widget.Toast
 import java.io.BufferedReader
 import java.io.InputStreamReader
-import java.net.HttpURLConnection
 import java.net.Inet4Address
 import java.net.URL
 import java.net.URLEncoder
@@ -53,6 +52,7 @@ class MainActivity : Activity() {
     private var pendingUploadFolderName: String? = null
     private val recentUploads = ArrayDeque<String>()
     @Volatile private var refreshInFlight = false
+    @Volatile private var routerPin = ""
     @Volatile private var uploadCancelled = false
     private val refreshHandler = Handler(Looper.getMainLooper())
     private val autoRefreshRunnable = object : Runnable {
@@ -189,6 +189,7 @@ class MainActivity : Activity() {
     private fun login(username: String, password: String) {
         runNetwork {
             if (!bindToWifi()) error("Aucun Wi-Fi connecté.")
+            routerPin = RouterTls.pair(this)
             val challenge = get(
                 "/challenge?username=" + URLEncoder.encode(username, "UTF-8"),
                 authenticated = false,
@@ -199,7 +200,16 @@ class MainActivity : Activity() {
 
             val salt = challenge.getString("salt")
             val nonce = challenge.getString("nonce")
-            val passwordHash = sha256Hex("$salt:$password")
+            val baseHash = sha256Hex("$salt:$password")
+            val passwordHash = when (challenge.optInt("iterations", 0)) {
+                0 -> baseHash
+                120_000 -> {
+                    val spec = javax.crypto.spec.PBEKeySpec(baseHash.toCharArray(), salt.toByteArray(StandardCharsets.UTF_8), 120_000, 256)
+                    try { javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded.joinToString("") { "%02x".format(it) } }
+                    finally { spec.clearPassword() }
+                }
+                else -> error("Format de mot de passe non pris en charge.")
+            }
             val proof = hmacHex(passwordHash, nonce)
             val form =
                 "username=" + URLEncoder.encode(username, "UTF-8") +
@@ -237,7 +247,7 @@ class MainActivity : Activity() {
                 val snapshot = response.toString()
                 runOnUiThread {
                     val shouldRender = snapshot != lastRenderedStateJson &&
-                        (manual || hasWindowFocus())
+                        (manual || (hasWindowFocus() && !hasPendingInput(root)))
                     if (shouldRender) {
                         val oldScrollY = scroll.scrollY
                         showDashboard(response)
@@ -255,6 +265,13 @@ class MainActivity : Activity() {
                 refreshInFlight = false
             }
         }
+    }
+
+    private fun hasPendingInput(view: View): Boolean = when (view) {
+        is EditText -> view.text.toString() != (view.tag as? String).orEmpty() ||
+            (view.hasFocus() && view.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime()) == true)
+        is android.view.ViewGroup -> (0 until view.childCount).any { hasPendingInput(view.getChildAt(it)) }
+        else -> false
     }
 
     private fun scheduleAutoRefresh(immediate: Boolean = false) {
@@ -301,7 +318,7 @@ class MainActivity : Activity() {
             ),
         )
 
-        renderAccounts(state.optJSONArray("accounts") ?: JSONArray())
+        renderAccounts(state.optJSONArray("accounts") ?: JSONArray(), traffic.optJSONArray("associatedClients") ?: JSONArray())
         renderOffersAndVouchers(
             state.optJSONArray("offers") ?: JSONArray(),
             state.optJSONArray("vouchers") ?: JSONArray(),
@@ -321,7 +338,7 @@ class MainActivity : Activity() {
         renderMediaDiagnostics(traffic.optJSONArray("mediaDiagnostics") ?: JSONArray())
     }
 
-    private fun renderAccounts(accounts: JSONArray) {
+    private fun renderAccounts(accounts: JSONArray, associated: JSONArray) {
         section("Comptes")
         val number = field("N° de compte")
         val name = field("Nom")
@@ -399,6 +416,24 @@ class MainActivity : Activity() {
                 weighted(),
             )
             root.addView(row2)
+            val cameraMac = account.optString("cameraMac")
+            if (cameraMac.isNotBlank()) {
+                info("Caméra associée : $cameraMac. Aucune IP fixe requise.")
+                button("Retirer la caméra") { command("camera.remove", JSONObject().put("number", n)) }
+            } else {
+                button("Associer une caméra") {
+                    val candidates = (0 until associated.length()).mapNotNull { associated.optJSONObject(it) }
+                    if (candidates.isEmpty()) toast("Aucun appareil Wi-Fi identifié. Connectez la caméra puis actualisez.")
+                    else AlertDialog.Builder(this).setTitle("Sélectionner la caméra connectée")
+                        .setItems(candidates.map { it.optString("ip") + " · " + it.optString("mac") }.toTypedArray()) { _, index ->
+                            val selected = candidates[index]
+                            prompt("PIN du compte $n", "", password = true) { pin ->
+                                command("camera.enroll", JSONObject().put("number", n).put("pin", pin)
+                                    .put("ip", selected.optString("ip")).put("mac", selected.optString("mac")))
+                            }
+                        }.show()
+                }
+            }
             divider()
         }
     }
@@ -635,7 +670,7 @@ class MainActivity : Activity() {
             val ip = item.optString("ip")
             val presence = when (item.optString("presence")) {
                 "online" -> "Wi-Fi confirmé"
-                "missing" -> "Appareil absent (vérification 45 s)"
+                "missing" -> "Appareil absent (vérification 20 s)"
                 else -> "Wi-Fi non vérifiable (session conservée)"
             }
             info(
@@ -1451,7 +1486,7 @@ class MainActivity : Activity() {
         authenticated: Boolean = true,
         readTimeoutMillis: Int = 8_000,
     ): JSONObject {
-        val connection = URL(BASE_URL + path).openConnection() as HttpURLConnection
+        val connection = RouterTls.connection(BASE_URL + path, routerPin)
         connection.requestMethod = method
         connection.connectTimeout = 5_000
         connection.readTimeout = readTimeoutMillis
@@ -1483,7 +1518,7 @@ class MainActivity : Activity() {
         body: ByteArray,
         contentType: String,
     ): JSONObject {
-        val connection = URL(BASE_URL + path).openConnection() as HttpURLConnection
+        val connection = RouterTls.connection(BASE_URL + path, routerPin)
         connection.requestMethod = method
         connection.connectTimeout = 8_000
         connection.readTimeout = 90_000
@@ -1566,6 +1601,7 @@ class MainActivity : Activity() {
         val edit = EditText(this).apply {
             this.hint = hint
             setText(initial)
+            tag = initial
             if (password) {
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             } else if (multiline) {
@@ -1665,7 +1701,7 @@ class MainActivity : Activity() {
     }
 
     private companion object {
-        const val BASE_URL = "http://192.0.2.1/api/v1/admin"
+        const val BASE_URL = "https://192.0.2.1/api/v1/admin"
         const val REQUEST_PICK_UPLOAD_FILE = 4408
         const val UPLOAD_RETRY_COUNT = 60
     }
