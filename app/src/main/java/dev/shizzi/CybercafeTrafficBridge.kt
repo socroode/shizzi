@@ -15,6 +15,16 @@ data class LiveClientTraffic(
 )
 
 data class AttributionDiagnostics(
+    val bpfDiscardedAbsentOwners: Int = 0,
+    val callbackPresenceKnown: Boolean = false,
+    val callbackStationCount: Int = 0,
+    val callbackLeaseCount: Int = 0,
+    val callbackMappingComplete: Boolean = false,
+    val lastUnresolvedReason: String = "",
+    val lastSessionEndReason: String = "",
+    val lastSessionEndMessage: String = "",
+    val lastSessionEndMillis: Long = 0L,
+    val lastSessionEndAccount: String = "",
     val resolvedFlows: Long = 0L,
     val fallbackResolvedFlows: Long = 0L,
     val unresolvedFlows: Long = 0L,
@@ -269,6 +279,16 @@ fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
         accountUsage = usage,
         clients = clients,
         attribution = AttributionDiagnostics(
+            bpfDiscardedAbsentOwners = attribution?.optInt("bpfDiscardedAbsentOwners") ?: 0,
+            callbackPresenceKnown = attribution?.optBoolean("callbackPresenceKnown") ?: false,
+            callbackStationCount = attribution?.optInt("callbackStationCount") ?: 0,
+            callbackLeaseCount = attribution?.optInt("callbackLeaseCount") ?: 0,
+            callbackMappingComplete = attribution?.optBoolean("callbackMappingComplete") ?: false,
+            lastUnresolvedReason = attribution?.optString("lastUnresolvedReason").orEmpty(),
+            lastSessionEndReason = root.optJSONObject("lastSessionEnd")?.optString("reason").orEmpty(),
+            lastSessionEndMessage = root.optJSONObject("lastSessionEnd")?.optString("message").orEmpty(),
+            lastSessionEndMillis = root.optJSONObject("lastSessionEnd")?.optLong("atMillis") ?: 0L,
+            lastSessionEndAccount = root.optJSONObject("lastSessionEnd")?.optString("accountNumber").orEmpty(),
             resolvedFlows = attribution?.optLong("resolvedFlows") ?: 0L,
             fallbackResolvedFlows = attribution?.optLong("fallbackResolvedFlows") ?: 0L,
             unresolvedFlows = attribution?.optLong("unresolvedFlows") ?: 0L,

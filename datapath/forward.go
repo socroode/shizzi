@@ -253,6 +253,13 @@ func handleUDP(
 func relay(client, upstream net.Conn, clientIP string, traffic *TrafficManager, bypassPortal bool, scopes ...*flowScope) {
 	defer client.Close()
 	defer upstream.Close()
+	if traffic != nil && !bypassPortal && firstFlowScope(scopes) == nil {
+		scope, ok := traffic.captureFlowScope(clientIP, false, "")
+		if !ok {
+			return
+		}
+		scopes = []*flowScope{scope}
+	}
 
 	done := make(chan struct{}, 2)
 	go func() {
@@ -264,6 +271,7 @@ func relay(client, upstream net.Conn, clientIP string, traffic *TrafficManager, 
 		done <- struct{}{}
 	}()
 	<-done
+	firstFlowScope(scopes).stopTransfers()
 	client.Close()
 	upstream.Close()
 	<-done
@@ -285,7 +293,7 @@ func copyStreamManaged(
 			reservation := (*transferReservation)(nil)
 			amount := read
 			if traffic != nil && !bypassPortal {
-				reservation = traffic.reserveTransferScoped(clientIP, dir, read, false, firstFlowScope(scopes))
+				reservation = traffic.reserveTransferForFlow(clientIP, dir, read, false, firstFlowScope(scopes))
 				if reservation == nil {
 					return
 				}
@@ -324,17 +332,26 @@ func relayDatagrams(
 ) {
 	defer client.Close()
 	defer upstream.Close()
+	if traffic != nil && !bypassPortal && firstFlowScope(scopes) == nil {
+		scope, ok := traffic.captureFlowScope(clientIP, false, "")
+		if !ok {
+			return
+		}
+		scopes = []*flowScope{scope}
+	}
+	activity := newUDPFlowActivity(udpFlowTimeout)
 
 	done := make(chan struct{}, 2)
 	go func() {
-		copyDatagramsManaged(upstream, client, clientIP, directionUpload, traffic, bypassPortal, scopes...)
+		copyDatagramsWithActivity(upstream, client, clientIP, directionUpload, traffic, bypassPortal, activity, scopes...)
 		done <- struct{}{}
 	}()
 	go func() {
-		copyDatagramsManaged(client, upstream, clientIP, directionDownload, traffic, bypassPortal, scopes...)
+		copyDatagramsWithActivity(client, upstream, clientIP, directionDownload, traffic, bypassPortal, activity, scopes...)
 		done <- struct{}{}
 	}()
 	<-done
+	firstFlowScope(scopes).stopTransfers()
 	client.Close()
 	upstream.Close()
 	<-done
@@ -348,18 +365,23 @@ func copyDatagramsManaged(
 	bypassPortal bool,
 	scopes ...*flowScope,
 ) {
+	copyDatagramsWithActivity(dst, src, clientIP, dir, traffic, bypassPortal, newUDPFlowActivity(udpFlowTimeout), scopes...)
+}
+
+func copyDatagramsWithActivity(dst, src net.Conn, clientIP string, dir direction, traffic *TrafficManager, bypassPortal bool, activity *udpFlowActivity, scopes ...*flowScope) {
 	buffer := make([]byte, maxDatagramSize)
 
 	for {
-		if err := src.SetReadDeadline(time.Now().Add(udpFlowTimeout)); err != nil {
+		if err := src.SetReadDeadline(activity.deadline()); err != nil {
 			return
 		}
 
 		read, err := src.Read(buffer)
 		if read > 0 {
+			activity.touch()
 			reservation := (*transferReservation)(nil)
 			if traffic != nil && !bypassPortal {
-				reservation = traffic.reserveTransferScoped(clientIP, dir, read, true, firstFlowScope(scopes))
+				reservation = traffic.reserveTransferForFlow(clientIP, dir, read, true, firstFlowScope(scopes))
 				if reservation == nil {
 					return
 				}
@@ -369,6 +391,9 @@ func copyDatagramsManaged(
 				}
 			}
 			written, writeErr := dst.Write(buffer[:read])
+			if written > 0 {
+				activity.touch()
+			}
 			if reservation != nil {
 				reservation.settle(written)
 			} else if written > 0 && traffic != nil {
@@ -380,6 +405,9 @@ func copyDatagramsManaged(
 			}
 		}
 		if err != nil {
+			if timeout, ok := err.(net.Error); ok && timeout.Timeout() && !activity.idle() {
+				continue
+			}
 			return
 		}
 	}

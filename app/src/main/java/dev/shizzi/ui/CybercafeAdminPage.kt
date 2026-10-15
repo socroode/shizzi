@@ -978,6 +978,19 @@ private fun ConnectedDevices(
     }
 
     SectionTitle("Identification des appareils")
+    if (diagnostics.callbackPresenceKnown) {
+        Text("Association Android confirmée : " + diagnostics.callbackStationCount +
+            " appareil(s), " + diagnostics.callbackLeaseCount + " adresse(s) IPv4" +
+            (if (diagnostics.callbackMappingComplete) "" else " · baux incomplets"))
+    }
+    if (diagnostics.bpfDiscardedAbsentOwners > 0) {
+        Text("Traces d'anciens appareils écartées : " + diagnostics.bpfDiscardedAbsentOwners)
+    }
+    if (diagnostics.lastUnresolvedReason.isNotBlank()) Text("Motif du dernier flux non identifié : " + diagnostics.lastUnresolvedReason)
+    if (diagnostics.lastSessionEndReason.isNotBlank()) {
+        Text("Dernière fin de session : " + diagnostics.lastSessionEndMessage.ifBlank { "Session fermée" } +
+            " · compte " + diagnostics.lastSessionEndAccount + " · " + formatDate(diagnostics.lastSessionEndMillis))
+    }
     Text(
         "Fuseau des journaux Android : " +
             (if (diagnostics.androidTimezoneKnown) diagnostics.androidTimezone +

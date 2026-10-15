@@ -187,11 +187,12 @@ type PortalClaimResult struct {
 // have only one active device session at a time, but remains portable after
 // logout, admin disconnect, or departed-client cleanup.
 type PortalAuthorization struct {
-	Camera          bool
-	AccountNumber   string
-	StartedAtMillis int64
-	UpBytes         int64
-	DownBytes       int64
+	RevocationReason string
+	Camera           bool
+	AccountNumber    string
+	StartedAtMillis  int64
+	UpBytes          int64
+	DownBytes        int64
 
 	missingSince time.Time
 	MAC          string
@@ -248,6 +249,7 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	defer m.notifyQuotaLocked()
 
 	for index, account := range accounts {
 		if account.MarkerEpoch != m.epoch {
@@ -322,7 +324,7 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 		newAccount, stillExists := accounts[authorization.AccountNumber]
 		if !existed || !stillExists || oldAccount.PinSalt != newAccount.PinSalt ||
 			oldAccount.PinHash != newAccount.PinHash {
-			m.revokeAuthorizationLocked(ip)
+			m.revokeAuthorizationWithReasonLocked(ip, "account-or-credentials-changed")
 			delete(m.portalClaimResults, ip)
 			m.removePendingClaimsForIPLocked(ip)
 		}
@@ -355,7 +357,7 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 	for ip, authorization := range m.portalAuthorized {
 		account, ok := accounts[authorization.AccountNumber]
 		if !ok || !account.Enabled {
-			m.revokeAuthorizationLocked(ip)
+			m.revokeAuthorizationWithReasonLocked(ip, "account-disabled-or-deleted")
 			delete(m.portalClaimResults, ip)
 			m.removePendingClaimsForIPLocked(ip)
 		}
@@ -514,20 +516,37 @@ func (m *TrafficManager) authorizeAccountLocked(ip, number string, now int64) (b
 	// Remove old authorizations only AFTER verifying the new credentials.
 	for otherIP, authorization := range m.portalAuthorized {
 		if otherIP != ip && authorization != nil && authorization.AccountNumber == number {
-			m.revokeAuthorizationLocked(otherIP)
+			m.revokeAuthorizationWithReasonLocked(otherIP, "account-moved-to-another-device")
 			delete(m.portalClaimResults, otherIP)
 			m.removePendingClaimsForIPLocked(otherIP)
 		}
 	}
 	// A different account on this address must not inherit a queued voucher.
+	presence := m.flowAttribution.presence()
+	mac := presence.confirmedMAC(ip)
+	if previous := m.portalAuthorized[ip]; previous != nil && previous.AccountNumber == number &&
+		previous.MAC != "" && mac == previous.MAC {
+		// Credentials were verified by the caller. Refreshing this same live
+		// association does not revoke its streams, CSRF identity or vouchers.
+		previous.missingSince = time.Time{}
+		previous.Camera = false
+		if !m.accountHasInternetLocked(account, now) {
+			return true, "Compte connecté. Aucun forfait actif : entrez un voucher."
+		}
+		return true, "Connexion autorisée."
+	}
 	if previous := m.portalAuthorized[ip]; previous != nil && previous.AccountNumber != number {
 		m.removePendingClaimsForIPLocked(ip)
 	}
-	m.revokeAuthorizationLocked(ip)
+	m.revokeAuthorizationWithReasonLocked(ip, "account-or-association-changed")
+	bindingMAC := mac
+	if bindingMAC == "" {
+		bindingMAC = presence.macs[ip]
+	}
 	m.portalAuthorized[ip] = &PortalAuthorization{
 		AccountNumber:   number,
 		StartedAtMillis: now,
-		MAC:             m.flowAttribution.presence().macs[ip],
+		MAC:             bindingMAC,
 		ID:              randomHex(16),
 		done:            make(chan struct{}),
 	}
@@ -545,7 +564,7 @@ func (m *TrafficManager) submitPortalLogout(ip string) (bool, string) {
 	if _, ok := m.portalAuthorized[ip]; !ok {
 		return false, "Aucune session ouverte sur cet appareil."
 	}
-	m.revokeAuthorizationLocked(ip)
+	m.revokeAuthorizationWithReasonLocked(ip, "user-logout")
 	delete(m.portalClaimResults, ip)
 	// A pending voucher claim belongs to the authenticated session that
 	// submitted it, not to the next phone assigned the same IP.
@@ -601,7 +620,7 @@ func (m *TrafficManager) revokePortalClient(ip string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.suppressCameraLocked(ip)
-	m.revokeAuthorizationLocked(ip)
+	m.revokeAuthorizationWithReasonLocked(ip, "admin-disconnect")
 	delete(m.portalClaimResults, ip)
 	m.removePendingClaimsForIPLocked(ip)
 }

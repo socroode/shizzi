@@ -1361,6 +1361,21 @@ class MainActivity : Activity() {
     private fun renderDiagnostics(traffic: JSONObject) {
         section("Diagnostic")
         val attribution = traffic.optJSONObject("attribution") ?: JSONObject()
+        if (attribution.optBoolean("callbackPresenceKnown")) {
+            info("Association Android confirmée : " + attribution.optInt("callbackStationCount") +
+                " appareil(s), " + attribution.optInt("callbackLeaseCount") + " adresse(s) IPv4" +
+                (if (attribution.optBoolean("callbackMappingComplete")) "" else " · baux incomplets"))
+        }
+        if (attribution.optInt("bpfDiscardedAbsentOwners") > 0) {
+            info("Traces d'anciens appareils écartées : " + attribution.optInt("bpfDiscardedAbsentOwners"))
+        }
+        if (attribution.optString("lastUnresolvedReason").isNotBlank()) info("Motif réseau : " + attribution.optString("lastUnresolvedReason"))
+        val ended = traffic.optJSONObject("lastSessionEnd")
+        if (ended?.optString("reason").orEmpty().isNotBlank()) {
+            info("Dernière fin de session : " + ended?.optString("message").orEmpty().ifBlank { "Session fermée" } +
+                "\nCompte : " + ended?.optString("accountNumber").orEmpty() +
+                "\nDate : " + java.util.Date(ended?.optLong("atMillis") ?: 0L))
+        }
         info(
             "Clients Android : " + attribution.optInt("mappedClients") +
                 "\nFuseau Android : " + (if (attribution.optBoolean("androidTimezoneKnown"))

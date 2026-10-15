@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -18,6 +19,15 @@ type loginThrottle struct {
 }
 
 func (m *TrafficManager) revokeAuthorizationLocked(ip string) {
+	m.revokeAuthorizationWithReasonLocked(ip, "session-revoked")
+}
+
+func (m *TrafficManager) revokeAuthorizationWithReasonLocked(ip, reason string) {
+	if a := m.portalAuthorized[ip]; a != nil {
+		a.RevocationReason = reason
+		m.sessionEnds++
+		m.lastSessionEnd = sessionEndEvent{AtMillis: time.Now().UnixMilli(), IP: ip, AccountNumber: a.AccountNumber, Reason: reason, Message: sessionEndMessage(reason)}
+	}
 	if a := m.portalAuthorized[ip]; a != nil && a.done != nil {
 		close(a.done)
 	}
@@ -35,12 +45,12 @@ func (m *TrafficManager) revokeAdminLocked(token string) {
 
 func (m *TrafficManager) checkIdentityLocked(ip string) {
 	presence := m.flowAttribution.presence()
-	mac := presence.macs[ip]
+	mac := presence.confirmedMAC(ip)
 	if mac == "" {
 		return
 	}
 	if a := m.portalAuthorized[ip]; a != nil && a.MAC != "" && a.MAC != mac {
-		m.revokeAuthorizationLocked(ip)
+		m.revokeAuthorizationWithReasonLocked(ip, "confirmed-identity-replacement")
 	}
 	for token, a := range m.adminSessions {
 		if a.IP == ip && a.MAC != "" && a.MAC != mac {
@@ -55,6 +65,26 @@ type flowScope struct {
 	authorization *PortalAuthorization
 	admin         *adminSession
 	open          bool
+	flowDone      chan struct{}
+	stopOnce      sync.Once
+}
+
+func (scope *flowScope) transferDone() <-chan struct{} {
+	if scope == nil {
+		return nil
+	}
+	return scope.flowDone
+}
+
+func (scope *flowScope) stopTransfers() {
+	if scope == nil {
+		return
+	}
+	scope.stopOnce.Do(func() {
+		if scope.flowDone != nil {
+			close(scope.flowDone)
+		}
+	})
 }
 
 func (m *TrafficManager) captureFlowScope(ip string, media bool, account string) (*flowScope, bool) {
@@ -73,20 +103,20 @@ func (m *TrafficManager) captureFlowScopeLocked(ip string, media bool, account s
 		if auth == nil || auth.AccountNumber != account || !m.portalAccounts[account].hasMedia(now) {
 			return nil, false
 		}
-		return &flowScope{authorization: auth}, true
+		return &flowScope{authorization: auth, flowDone: make(chan struct{})}, true
 	}
 	if !m.allowedLocked(ip, now) {
 		return nil, false
 	}
 	if !m.portalRequired {
-		return &flowScope{open: true}, true
+		return &flowScope{open: true, flowDone: make(chan struct{})}, true
 	}
 	if auth != nil && m.portalAuthorizedLocked(ip, now) {
-		return &flowScope{authorization: auth}, true
+		return &flowScope{authorization: auth, flowDone: make(chan struct{})}, true
 	}
 	for token, session := range m.adminSessions {
 		if session.IP == ip && m.adminSessionValidLocked(token, time.Now()) {
-			return &flowScope{admin: session}, true
+			return &flowScope{admin: session, flowDone: make(chan struct{})}, true
 		}
 	}
 	return nil, false
@@ -103,6 +133,11 @@ func (scope *flowScope) revoked() <-chan struct{} {
 func (scope *flowScope) validLocked(m *TrafficManager, ip string, media bool) bool {
 	if scope == nil || m.closed {
 		return false
+	}
+	select {
+	case <-scope.transferDone():
+		return false
+	default:
 	}
 	m.checkIdentityLocked(ip)
 	if scope.open {
@@ -171,7 +206,7 @@ func (m *TrafficManager) trackScopedFlow(ip string, scope *flowScope, client, up
 	go func() {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
-		closeConnections := func() { client.Close(); upstream.Close() }
+		closeConnections := func() { scope.stopTransfers(); client.Close(); upstream.Close() }
 		for {
 			select {
 			case <-done:
@@ -180,6 +215,9 @@ func (m *TrafficManager) trackScopedFlow(ip string, scope *flowScope, client, up
 				closeConnections()
 				return
 			case <-m.stopData:
+				closeConnections()
+				return
+			case <-scope.transferDone():
 				closeConnections()
 				return
 			case <-ticker.C:

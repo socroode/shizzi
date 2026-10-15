@@ -133,6 +133,8 @@ type accountUsage struct {
 }
 
 type TrafficManager struct {
+	sessionEnds        int64
+	lastSessionEnd     sessionEndEvent
 	cameraProfiles     map[string]CameraProfile
 	cameraSuppressed   map[string]bool
 	accountChallenges  map[string]accountChallenge
@@ -144,6 +146,7 @@ type TrafficManager struct {
 	globalPending      int64
 	accountPending     map[string]int64
 	clientPending      map[string]int64
+	quotaChanged       chan struct{}
 	mu                 sync.Mutex
 
 	epoch int64
@@ -228,6 +231,7 @@ func (m *TrafficManager) setGlobalPolicy(downloadBps, uploadBps, quotaBytes int6
 	m.globalDownloadBps = downloadBps
 	m.globalUploadBps = uploadBps
 	m.globalQuotaBytes = quotaBytes
+	m.notifyQuotaLocked()
 	m.mu.Unlock()
 	m.globalDownloadLimiter.setRate(downloadBps)
 	m.globalUploadLimiter.setRate(uploadBps)
@@ -262,6 +266,7 @@ func (m *TrafficManager) setClientPolicy(ip string, policy ClientPolicy) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.clientLocked(ip).applyPolicy(policy)
+	m.notifyQuotaLocked()
 }
 
 // resolveFlowClient maps a flow seen on the shared TUN back to the physical
@@ -510,6 +515,7 @@ func (m *TrafficManager) usageLocked(accountNumber string) *accountUsage {
 func (m *TrafficManager) resetStats() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	defer m.notifyQuotaLocked()
 
 	m.totalUpBytes = 0
 	m.totalDownBytes = 0
@@ -540,6 +546,8 @@ type accountUsageSnapshot struct {
 }
 
 type trafficStatsSnapshot struct {
+	SessionEnds              int64                       `json:"sessionEnds"`
+	LastSessionEnd           sessionEndEvent             `json:"lastSessionEnd"`
 	AssociatedClients        []AssociatedClient          `json:"associatedClients"`
 	Epoch                    int64                       `json:"epoch"`
 	GlobalDownloadBps        int64                       `json:"globalDownloadBps"`
@@ -587,6 +595,8 @@ func (m *TrafficManager) statsJSON() string {
 	m.mu.Lock()
 
 	snapshot := trafficStatsSnapshot{
+		SessionEnds:              m.sessionEnds,
+		LastSessionEnd:           m.lastSessionEnd,
 		Epoch:                    m.epoch,
 		GlobalDownloadBps:        m.globalDownloadBps,
 		GlobalUploadBps:          m.globalUploadBps,
@@ -616,16 +626,17 @@ func (m *TrafficManager) statsJSON() string {
 	for ip, authorization := range m.portalAuthorized {
 		account := m.portalAccounts[authorization.AccountNumber]
 		presenceStatus := "unknown"
-		if presence.authoritative {
+		state, mac := presence.identity(ip, authorization.MAC)
+		if state != presenceUnknown {
 			presenceStatus = "missing"
-			if mac := presence.macs[ip]; mac != "" && authorization.MAC != "" && mac != authorization.MAC {
-				m.revokeAuthorizationLocked(ip)
+			if state == presenceReplaced {
+				m.revokeAuthorizationWithReasonLocked(ip, "confirmed-identity-replacement")
 				continue
 			}
 			if authorization.MAC == "" {
-				authorization.MAC = presence.macs[ip]
+				authorization.MAC = mac
 			}
-			if _, present := presence.clients[ip]; present {
+			if state == presencePresent {
 				presenceStatus = "online"
 			}
 		}
@@ -633,7 +644,7 @@ func (m *TrafficManager) statsJSON() string {
 			snapshot.PortalAuthorizations,
 			PortalAuthorizationStatus{
 				IP:                   ip,
-				MAC:                  presence.macs[ip],
+				MAC:                  sessionDisplayMAC(authorization.MAC, presence.macs[ip]),
 				Presence:             presenceStatus,
 				AccountNumber:        authorization.AccountNumber,
 				StartedAtMillis:      authorization.StartedAtMillis,
@@ -677,6 +688,8 @@ func (m *TrafficManager) statsJSON() string {
 			QuotaReached:          client.Policy.QuotaBytes > 0 && used >= client.Policy.QuotaBytes,
 		})
 	}
+	snapshot.SessionEnds = m.sessionEnds
+	snapshot.LastSessionEnd = m.lastSessionEnd
 	m.mu.Unlock()
 
 	sort.Slice(snapshot.Clients, func(i, j int) bool {
@@ -697,25 +710,16 @@ func (m *TrafficManager) statsJSON() string {
 // authoritative client list, and only after a grace period so a transient
 // dumpsys hiccup does not log everyone out.
 func (m *TrafficManager) pruneDepartedLocked(presence clientPresence, now time.Time) {
-	if !presence.authoritative {
-		for _, authorization := range m.portalAuthorized {
-			authorization.missingSince = time.Time{}
-		}
-		for _, session := range m.adminSessions {
-			session.missingSince = time.Time{}
-		}
-		return
-	}
 	for ip, authorization := range m.portalAuthorized {
-		mac := presence.macs[ip]
-		if mac != "" && authorization.MAC != "" && authorization.MAC != mac {
-			m.revokeAuthorizationLocked(ip)
+		state, mac := presence.identity(ip, authorization.MAC)
+		if state == presenceReplaced {
+			m.revokeAuthorizationWithReasonLocked(ip, "confirmed-identity-replacement")
 			continue
 		}
 		if authorization.MAC == "" {
 			authorization.MAC = mac
 		}
-		if _, present := presence.clients[ip]; present {
+		if state == presencePresent || state == presenceUnknown {
 			authorization.missingSince = time.Time{}
 			continue
 		}
@@ -724,21 +728,21 @@ func (m *TrafficManager) pruneDepartedLocked(presence clientPresence, now time.T
 			continue
 		}
 		if now.Sub(authorization.missingSince) >= departedClientGrace {
-			m.revokeAuthorizationLocked(ip)
+			m.revokeAuthorizationWithReasonLocked(ip, "confirmed-departure")
 			delete(m.portalClaimResults, ip)
 			m.removePendingClaimsForIPLocked(ip)
 		}
 	}
 	for token, session := range m.adminSessions {
-		mac := presence.macs[session.IP]
-		if mac != "" && session.MAC != "" && session.MAC != mac {
+		state, mac := presence.identity(session.IP, session.MAC)
+		if state == presenceReplaced {
 			m.revokeAdminLocked(token)
 			continue
 		}
 		if session.MAC == "" {
 			session.MAC = mac
 		}
-		if _, present := presence.clients[session.IP]; present {
+		if state == presencePresent || state == presenceUnknown {
 			session.missingSince = time.Time{}
 			continue
 		}

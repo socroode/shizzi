@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"os/exec"
 	"regexp"
@@ -27,45 +28,55 @@ type flowAttributionKey struct {
 }
 
 type flowAttributionSnapshot struct {
-	ResolvedFlows         int64  `json:"resolvedFlows"`
-	FallbackResolvedFlows int64  `json:"fallbackResolvedFlows"`
-	UnresolvedFlows       int64  `json:"unresolvedFlows"`
-	UnresolvedTCPFlows    int64  `json:"unresolvedTcpFlows"`
-	UnresolvedUDPFlows    int64  `json:"unresolvedUdpFlows"`
-	LooseCandidateFlows   int64  `json:"looseCandidateFlows"`
-	ClientCount           int    `json:"mappedClients"`
-	ClientListKnown       bool   `json:"clientListKnown"`
-	RecentBPFFailures     int    `json:"recentBpfFailures"`
-	WifiAssociatedClients int    `json:"wifiAssociatedClients"`
-	WifiCountKnown        bool   `json:"wifiCountKnown"`
-	SlowestResolveMillis  int64  `json:"slowestResolveMillis"`
-	DumpCount             int64  `json:"dumpCount"`
-	LastDumpMillis        int64  `json:"lastDumpMillis"`
-	SlowestDumpMillis     int64  `json:"slowestDumpMillis"`
-	LastError             string `json:"lastError,omitempty"`
-	LastMiss              string `json:"lastMiss,omitempty"`
-	AndroidTimezone       string `json:"androidTimezone,omitempty"`
-	AndroidTimezoneKnown  bool   `json:"androidTimezoneKnown"`
-	AndroidTimezoneSource string `json:"androidTimezoneSource,omitempty"`
-	TimezoneError         string `json:"timezoneError,omitempty"`
-	BPFObservedFailures   int    `json:"bpfObservedFailures"`
-	BPFRejectedTimestamps int    `json:"bpfRejectedTimestamps"`
-	BPFClockSkipped       int    `json:"bpfClockSkipped"`
-	DumpFailures          int64  `json:"dumpFailures"`
-	LastDumpError         string `json:"lastDumpError,omitempty"`
-	LastDumpErrorMillis   int64  `json:"lastDumpErrorMillis,omitempty"`
-	LastUnresolvedFlow    string `json:"lastUnresolvedFlow,omitempty"`
-	LastUnresolvedMillis  int64  `json:"lastUnresolvedMillis,omitempty"`
+	BPFDiscardedAbsentOwners int    `json:"bpfDiscardedAbsentOwners"`
+	CallbackPresenceKnown    bool   `json:"callbackPresenceKnown"`
+	CallbackStationCount     int    `json:"callbackStationCount"`
+	CallbackLeaseCount       int    `json:"callbackLeaseCount"`
+	CallbackMappingComplete  bool   `json:"callbackMappingComplete"`
+	LastUnresolvedReason     string `json:"lastUnresolvedReason,omitempty"`
+	ResolvedFlows            int64  `json:"resolvedFlows"`
+	FallbackResolvedFlows    int64  `json:"fallbackResolvedFlows"`
+	UnresolvedFlows          int64  `json:"unresolvedFlows"`
+	UnresolvedTCPFlows       int64  `json:"unresolvedTcpFlows"`
+	UnresolvedUDPFlows       int64  `json:"unresolvedUdpFlows"`
+	LooseCandidateFlows      int64  `json:"looseCandidateFlows"`
+	ClientCount              int    `json:"mappedClients"`
+	ClientListKnown          bool   `json:"clientListKnown"`
+	RecentBPFFailures        int    `json:"recentBpfFailures"`
+	WifiAssociatedClients    int    `json:"wifiAssociatedClients"`
+	WifiCountKnown           bool   `json:"wifiCountKnown"`
+	SlowestResolveMillis     int64  `json:"slowestResolveMillis"`
+	DumpCount                int64  `json:"dumpCount"`
+	LastDumpMillis           int64  `json:"lastDumpMillis"`
+	SlowestDumpMillis        int64  `json:"slowestDumpMillis"`
+	LastError                string `json:"lastError,omitempty"`
+	LastMiss                 string `json:"lastMiss,omitempty"`
+	AndroidTimezone          string `json:"androidTimezone,omitempty"`
+	AndroidTimezoneKnown     bool   `json:"androidTimezoneKnown"`
+	AndroidTimezoneSource    string `json:"androidTimezoneSource,omitempty"`
+	TimezoneError            string `json:"timezoneError,omitempty"`
+	BPFObservedFailures      int    `json:"bpfObservedFailures"`
+	BPFRejectedTimestamps    int    `json:"bpfRejectedTimestamps"`
+	BPFClockSkipped          int    `json:"bpfClockSkipped"`
+	DumpFailures             int64  `json:"dumpFailures"`
+	LastDumpError            string `json:"lastDumpError,omitempty"`
+	LastDumpErrorMillis      int64  `json:"lastDumpErrorMillis,omitempty"`
+	LastUnresolvedFlow       string `json:"lastUnresolvedFlow,omitempty"`
+	LastUnresolvedMillis     int64  `json:"lastUnresolvedMillis,omitempty"`
 }
 
 // clientPresence is Android's own list of connected hotspot clients.
 type clientPresence struct {
-	eventBased     bool
-	clients        map[string]struct{}
-	macs           map[string]string
-	authoritative  bool
-	wifiCount      int
-	wifiCountKnown bool
+	eventBased           bool
+	clients              map[string]struct{}
+	macs                 map[string]string
+	currentMACs          map[string]string
+	authoritative        bool
+	wifiCount            int
+	wifiCountKnown       bool
+	associatedMACs       map[string]struct{}
+	leasesKnown          bool
+	leaseMappingComplete bool
 }
 
 type flowAttributionResolver struct {
@@ -91,8 +102,11 @@ type flowAttributionResolver struct {
 	logClockGeneration uint64
 	connectedClients   map[string]struct{}
 	clientMACs         map[string]string
+	currentClientMACs  map[string]string
 	clientListKnown    bool
 	eventPresence      *clientPresence
+	presenceGeneration uint64
+	refreshDone        chan struct{}
 	wifiClientCount    int
 	wifiCountKnown     bool
 	lastWifiRefresh    time.Time
@@ -120,6 +134,7 @@ type flowAttributionResolver struct {
 	lastDumpErrorMillis   int64
 	lastUnresolvedFlow    string
 	lastUnresolvedMillis  int64
+	lastUnresolvedReason  string
 }
 
 const (
@@ -173,13 +188,14 @@ var ipv4DownstreamClientMACPattern = regexp.MustCompile(
 
 func newFlowAttributionResolver() *flowAttributionResolver {
 	return &flowAttributionResolver{
-		dumpFn:           dumpTetheringState,
-		wifiDumpFn:       dumpWifiState,
-		flows:            make(map[flowAttributionKey]string),
-		bpfFailedFlows:   make(map[flowAttributionKey]string),
-		connectedClients: make(map[string]struct{}),
-		clientMACs:       make(map[string]string),
-		recentMisses:     make(map[flowAttributionKey]time.Time),
+		dumpFn:            dumpTetheringState,
+		wifiDumpFn:        dumpWifiState,
+		flows:             make(map[flowAttributionKey]string),
+		bpfFailedFlows:    make(map[flowAttributionKey]string),
+		connectedClients:  make(map[string]struct{}),
+		clientMACs:        make(map[string]string),
+		currentClientMACs: make(map[string]string),
+		recentMisses:      make(map[flowAttributionKey]time.Time),
 		// Go's Android time.Local defaults to UTC. Android must provide its
 		// own clock zone before local, offset-less log timestamps are trusted.
 		logClockRequired: runtime.GOOS == "android",
@@ -361,9 +377,14 @@ type bpfFailureDiagnostics struct {
 	observed           int
 	rejectedTimestamps int
 	clockSkipped       int
+	absentOwners       int
 }
 
 func parseBPFFailureAttributions(raw string, now time.Time, clockKnown bool) (map[flowAttributionKey]string, int, bpfFailureDiagnostics) {
+	return parseBPFFailuresForPresence(raw, now, clockKnown, nil)
+}
+
+func parseBPFFailuresForPresence(raw string, now time.Time, clockKnown bool, presence *clientPresence) (map[flowAttributionKey]string, int, bpfFailureDiagnostics) {
 	result := make(map[flowAttributionKey]string)
 	ambiguous := make(map[flowAttributionKey]bool)
 	failures := 0
@@ -417,6 +438,10 @@ func parseBPFFailureAttributions(raw string, now time.Time, clockKnown bool) (ma
 		key := flowAttributionKey{
 			Protocol: proto, PublicIP: translatedIP, PublicPort: translatedPort,
 			DstIP: destinationIP, DstPort: destinationPort,
+		}
+		if presence != nil && presence.flowOwnerAbsent(originalIP) {
+			diagnostics.absentOwners++
+			continue
 		}
 		failures++
 		if oldIP, exists := result[key]; exists && oldIP != originalIP {
@@ -489,6 +514,9 @@ func (r *flowAttributionResolver) resolve(key flowAttributionKey, waitForRule bo
 	if waitForRule {
 		deadline = deadline.Add(attributionWait)
 		r.mu.Lock()
+		if len(r.connectedClients) > 1 || (r.eventPresence != nil && r.eventPresence.wifiCount > 1) {
+			deadline = startedAt.Add(attributionMultiClientWait)
+		}
 		missedAt, recentlyMissed := r.recentMisses[key]
 		r.mu.Unlock()
 		if recentlyMissed && time.Since(missedAt) < attributionMissMemory {
@@ -510,7 +538,11 @@ func (r *flowAttributionResolver) resolve(key flowAttributionKey, waitForRule bo
 		if attempt > 0 && !time.Now().Before(deadline) {
 			break
 		}
-		r.refreshIfOlderThan(attributionRefreshInterval)
+		if waitForRule {
+			r.refreshBefore(attributionRefreshInterval, deadline)
+		} else {
+			r.refreshIfOlderThan(attributionRefreshInterval)
+		}
 
 		r.mu.Lock()
 		client, fallback = r.lookupLocked(key)
@@ -529,7 +561,9 @@ func (r *flowAttributionResolver) resolve(key flowAttributionKey, waitForRule bo
 		if !time.Now().Before(deadline) {
 			break
 		}
-		time.Sleep(attributionRetryDelay)
+		if remaining := time.Until(deadline); remaining > 0 {
+			time.Sleep(min(attributionRetryDelay, remaining))
+		}
 	}
 
 	r.mu.Lock()
@@ -563,7 +597,9 @@ func (r *flowAttributionResolver) resolve(key flowAttributionKey, waitForRule bo
 	}
 	r.lastMiss = formatFlowAttributionKey(key)
 	r.lastUnresolvedFlow = r.lastMiss
+	r.lastUnresolvedReason = r.unresolvedReasonLocked(key)
 	r.lastUnresolvedMillis = time.Now().UnixMilli()
+	r.noteLatencyLocked(startedAt)
 	if waitForRule {
 		r.recentMisses[key] = time.Now()
 		for missed, at := range r.recentMisses {
@@ -610,14 +646,20 @@ func (r *flowAttributionResolver) lookupLocked(
 	key flowAttributionKey,
 ) (clientIP string, fallback bool) {
 	if client := r.flows[key]; client != "" {
+		if r.ownerAbsentLocked(client) {
+			return "", false
+		}
 		// A freshly failed BPF insertion naming a different phone proves
 		// that cached translated tuple attribution cannot be trusted.
-		if owner, logged := r.bpfFailedFlows[key]; logged && owner != client {
+		if owner, logged := r.bpfFailedFlows[key]; logged && owner != client && !r.ownerAbsentLocked(owner) {
 			return "", false
 		}
 		return client, false
 	}
 	if client := r.bpfFailedFlows[key]; client != "" {
+		if r.ownerAbsentLocked(client) {
+			return "", false
+		}
 		return client, true
 	}
 	if _, ambiguous := r.bpfFailedFlows[key]; ambiguous {
@@ -695,6 +737,12 @@ func (r *flowAttributionResolver) refreshIfOlderThan(maxAge time.Duration) {
 	}
 	clockKnown := !r.logClockRequired || r.logTimezoneKnown
 	clockGeneration := r.logClockGeneration
+	presenceGeneration := r.presenceGeneration
+	var eventPresence *clientPresence
+	if r.eventPresence != nil {
+		p := clonePresence(*r.eventPresence)
+		eventPresence = &p
+	}
 	r.mu.Unlock()
 
 	var (
@@ -707,7 +755,7 @@ func (r *flowAttributionResolver) refreshIfOlderThan(maxAge time.Duration) {
 	)
 	if err == nil {
 		flows = parseIPv4UpstreamAttributions(raw)
-		bpfFlows, bpfFailures, bpfDiagnostics = parseBPFFailureAttributions(raw, logNow, clockKnown)
+		bpfFlows, bpfFailures, bpfDiagnostics = parseBPFFailuresForPresence(raw, logNow, clockKnown, eventPresence)
 		clients = parseTetheringConnectedClients(raw)
 		macs = parseIPv4DownstreamClientMACs(raw)
 	}
@@ -727,11 +775,12 @@ func (r *flowAttributionResolver) refreshIfOlderThan(maxAge time.Duration) {
 		r.lastDumpErrorMillis = finished.UnixMilli()
 		r.flows = make(map[flowAttributionKey]string)
 		r.bpfFailedFlows = make(map[flowAttributionKey]string)
+		r.currentClientMACs = make(map[string]string)
 		r.recentBPFFailures = 0
 		r.bpfDiagnostics = bpfFailureDiagnostics{}
 		return
 	}
-	if clockGeneration != r.logClockGeneration {
+	if clockGeneration != r.logClockGeneration || presenceGeneration != r.presenceGeneration {
 		// A clock change raced parsing. NAT rules are independent of the
 		// log zone, but no identity parsed with the old zone may be installed.
 		bpfFlows = make(map[flowAttributionKey]string)
@@ -744,6 +793,7 @@ func (r *flowAttributionResolver) refreshIfOlderThan(maxAge time.Duration) {
 	r.recentBPFFailures = bpfFailures
 	r.bpfDiagnostics = bpfDiagnostics
 	r.connectedClients = clients
+	r.currentClientMACs = macs
 	// An explicitly emitted Client Information section can establish that
 	// Android currently lists zero clients. Without it, an empty NAT dump
 	// cannot prove that a sleeping client has left the hotspot.
@@ -799,13 +849,14 @@ func (r *flowAttributionResolver) presence() clientPresence {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.eventPresence != nil && r.eventPresence.authoritative {
+	if r.eventPresence != nil && r.eventPresence.wifiCountKnown {
 		return clonePresence(*r.eventPresence)
 	}
 
 	result := clientPresence{
-		clients: make(map[string]struct{}, len(r.connectedClients)),
-		macs:    make(map[string]string, len(r.clientMACs)),
+		clients:     make(map[string]struct{}, len(r.connectedClients)),
+		macs:        make(map[string]string, len(r.clientMACs)),
+		currentMACs: maps.Clone(r.currentClientMACs),
 		authoritative: r.lastError == "" && r.clientListKnown &&
 			time.Since(r.lastSuccess) < presenceMaxAge,
 		wifiCount:      r.wifiClientCount,
@@ -842,15 +893,17 @@ func (r *flowAttributionResolver) snapshot() flowAttributionSnapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	return flowAttributionSnapshot{
-		ResolvedFlows:         r.resolvedFlows,
-		FallbackResolvedFlows: r.fallbackResolvedFlows,
-		UnresolvedFlows:       r.unresolvedFlows,
-		UnresolvedTCPFlows:    r.unresolvedTCPFlows,
-		UnresolvedUDPFlows:    r.unresolvedUDPFlows,
-		LooseCandidateFlows:   r.looseCandidateFlows,
-		ClientCount:           len(r.connectedClients),
-		RecentBPFFailures:     r.recentBPFFailures,
+	snapshot := flowAttributionSnapshot{
+		BPFDiscardedAbsentOwners: r.bpfDiagnostics.absentOwners,
+		LastUnresolvedReason:     r.lastUnresolvedReason,
+		ResolvedFlows:            r.resolvedFlows,
+		FallbackResolvedFlows:    r.fallbackResolvedFlows,
+		UnresolvedFlows:          r.unresolvedFlows,
+		UnresolvedTCPFlows:       r.unresolvedTCPFlows,
+		UnresolvedUDPFlows:       r.unresolvedUDPFlows,
+		LooseCandidateFlows:      r.looseCandidateFlows,
+		ClientCount:              len(r.connectedClients),
+		RecentBPFFailures:        r.recentBPFFailures,
 		ClientListKnown: r.lastError == "" && r.clientListKnown &&
 			time.Since(r.lastSuccess) < presenceMaxAge,
 		WifiAssociatedClients: r.wifiClientCount,
@@ -874,6 +927,13 @@ func (r *flowAttributionResolver) snapshot() flowAttributionSnapshot {
 		LastUnresolvedFlow:    r.lastUnresolvedFlow,
 		LastUnresolvedMillis:  r.lastUnresolvedMillis,
 	}
+	if r.eventPresence != nil {
+		snapshot.CallbackPresenceKnown = r.eventPresence.wifiCountKnown
+		snapshot.CallbackStationCount = r.eventPresence.wifiCount
+		snapshot.CallbackLeaseCount = len(r.eventPresence.clients)
+		snapshot.CallbackMappingComplete = r.eventPresence.leaseMappingComplete
+	}
+	return snapshot
 }
 
 func isSharedTunnelAddress(ip string) bool {
@@ -910,32 +970,61 @@ func (r *flowAttributionResolver) setPresenceJSON(raw string) {
 		r.setAndroidLogTimezone(zone, event.AndroidUTCOffsetSeconds)
 	}
 	p := clientPresence{eventBased: true, clients: make(map[string]struct{}), macs: make(map[string]string),
-		wifiCount: len(event.AssociatedMACs), wifiCountKnown: event.WifiKnown}
+		wifiCountKnown: event.WifiKnown, leasesKnown: event.LeasesKnown, associatedMACs: make(map[string]struct{})}
 	associated := make(map[string]bool)
 	for _, mac := range event.AssociatedMACs {
-		associated[strings.ToLower(mac)] = true
+		mac = strings.ToLower(mac)
+		if validClientMAC(mac) {
+			associated[mac] = true
+			p.associatedMACs[mac] = struct{}{}
+		} else {
+			p.wifiCountKnown = false
+		}
 	}
+	p.wifiCount = len(p.associatedMACs)
+	ambiguous := make(map[string]bool)
 	for _, lease := range event.Leases {
 		mac := strings.ToLower(lease.MAC)
-		if validPhysicalIPv4(lease.IP) && mac != "" && (!event.WifiKnown || associated[mac]) {
+		if validPhysicalIPv4(lease.IP) && validClientMAC(mac) && (!event.WifiKnown || associated[mac]) {
+			if previous := p.macs[lease.IP]; previous != "" && previous != mac {
+				ambiguous[lease.IP] = true
+			}
 			p.clients[lease.IP] = struct{}{}
 			p.macs[lease.IP] = mac
 		}
 	}
-	p.authoritative = event.WifiKnown && (p.wifiCount == 0 || event.LeasesKnown)
+	for ip := range ambiguous {
+		delete(p.clients, ip)
+		delete(p.macs, ip)
+	}
+	covered := make(map[string]bool)
+	for _, mac := range p.macs {
+		covered[mac] = true
+	}
+	p.leaseMappingComplete = p.wifiCountKnown && (p.wifiCount == 0 || (event.LeasesKnown && len(covered) == p.wifiCount && len(ambiguous) == 0))
+	p.authoritative = p.leaseMappingComplete
 	r.mu.Lock()
+	if r.eventPresence == nil || !samePresence(*r.eventPresence, p) {
+		r.presenceGeneration++
+		r.lastRefresh = time.Time{}
+	}
 	r.eventPresence = &p
 	r.mu.Unlock()
 }
 func clonePresence(p clientPresence) clientPresence {
 	result := p
+	result.currentMACs = maps.Clone(p.currentMACs)
 	result.clients = make(map[string]struct{})
 	result.macs = make(map[string]string)
+	result.associatedMACs = make(map[string]struct{})
 	for ip := range p.clients {
 		result.clients[ip] = struct{}{}
 	}
 	for ip, mac := range p.macs {
 		result.macs[ip] = mac
+	}
+	for mac := range p.associatedMACs {
+		result.associatedMACs[mac] = struct{}{}
 	}
 	return result
 }
