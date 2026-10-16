@@ -589,7 +589,9 @@ suspend fun TetherClient.applyCybercafePolicies(
 ) {
     val portalRequired = true
 
-    setGlobalTrafficPolicy(0L, 0L, 0L)
+    // One shared Internet budget per router, across every account and flow.
+    // Account-specific offer limits are applied in addition to this ceiling.
+    setGlobalTrafficPolicy(40_000_000L, 4_000_000L, 0L)
     setDefaultClientTrafficPolicy(0L, 0L, 0L, false)
     // Fail closed on identity before the portal switches on, never after.
     if (portalRequired) setRequireClientAttribution(true)
