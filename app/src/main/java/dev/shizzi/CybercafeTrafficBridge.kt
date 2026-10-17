@@ -15,6 +15,13 @@ data class LiveClientTraffic(
 )
 
 data class AttributionDiagnostics(
+    val pacingWaits: Long = 0L,
+    val pacingMaxWaitMillis: Long = 0L,
+    val pacingCancelled: Long = 0L,
+    val lastFlowEndReason: String = "",
+    val lastFlowEndProtocol: String = "",
+    val lastFlowEndDirection: String = "",
+    val lastFlowEndMillis: Long = 0L,
     val bpfDiscardedAbsentOwners: Int = 0,
     val callbackPresenceKnown: Boolean = false,
     val callbackStationCount: Int = 0,
@@ -269,6 +276,9 @@ fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
         }
     }.orEmpty()
 
+    val continuity = root.optJSONObject("continuity")
+    val recentFlows = continuity?.optJSONArray("recent")
+    val lastFlow = recentFlows?.let { if (it.length() > 0) it.optJSONObject(it.length() - 1) else null }
     val attribution = root.optJSONObject("attribution")
     val associated = root.optJSONArray("associatedClients")?.let { array ->
         (0 until array.length()).mapNotNull { index -> array.optJSONObject(index)?.let { AssociatedWifiClient(it.optString("ip"), it.optString("mac")) } }
@@ -279,6 +289,13 @@ fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
         accountUsage = usage,
         clients = clients,
         attribution = AttributionDiagnostics(
+            pacingWaits = continuity?.optLong("pacingWaits") ?: 0L,
+            pacingMaxWaitMillis = continuity?.optLong("pacingMaxWaitMillis") ?: 0L,
+            pacingCancelled = continuity?.optLong("pacingCancelled") ?: 0L,
+            lastFlowEndReason = lastFlow?.optString("reason").orEmpty(),
+            lastFlowEndProtocol = lastFlow?.optString("protocol").orEmpty(),
+            lastFlowEndDirection = lastFlow?.optString("direction").orEmpty(),
+            lastFlowEndMillis = lastFlow?.optLong("atMillis") ?: 0L,
             bpfDiscardedAbsentOwners = attribution?.optInt("bpfDiscardedAbsentOwners") ?: 0,
             callbackPresenceKnown = attribution?.optBoolean("callbackPresenceKnown") ?: false,
             callbackStationCount = attribution?.optInt("callbackStationCount") ?: 0,

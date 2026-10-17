@@ -125,9 +125,10 @@ func (m *TrafficManager) tryReserveTransferScoped(ip string, dir direction, requ
 }
 
 func (r *transferReservation) pace() bool {
-	revoked := r.scope.revoked()
-	if !r.globalLimiter.waitCancelledUntil(r.count, revoked, r.manager.stopData, r.scope.transferDone()) ||
-		!r.clientLimiter.waitCancelledUntil(r.count, revoked, r.manager.stopData, r.scope.transferDone()) {
+	began := time.Now()
+	allowed := waitBandwidthUntil(r.count, r.globalLimiter, r.clientLimiter, r.scope.revoked(), r.manager.stopData, r.scope.transferDone())
+	r.manager.notePacing(time.Since(began), !allowed)
+	if !allowed {
 		return false
 	}
 	m := r.manager
@@ -181,44 +182,6 @@ func (m *TrafficManager) notifyQuotaLocked() {
 		close(m.quotaChanged)
 	}
 	m.quotaChanged = nil
-}
-
-func (l *bandwidthLimiter) waitCancelled(byteCount int, revoked, stopped <-chan struct{}) bool {
-	return l.waitCancelledUntil(byteCount, revoked, stopped, nil)
-}
-
-func (l *bandwidthLimiter) waitCancelledUntil(byteCount int, revoked, stopped, flowDone <-chan struct{}) bool {
-	if l == nil || byteCount <= 0 {
-		return true
-	}
-	l.mu.Lock()
-	if l.bytesPerSec <= 0 {
-		l.mu.Unlock()
-		return true
-	}
-	now := time.Now()
-	floor := now.Add(-l.burstDuration)
-	if l.next.IsZero() || l.next.Before(floor) {
-		l.next = floor
-	}
-	l.next = l.next.Add(time.Duration(float64(byteCount) / l.bytesPerSec * float64(time.Second)))
-	delay := time.Until(l.next)
-	l.mu.Unlock()
-	if delay <= 0 {
-		return true
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return true
-	case <-revoked:
-		return false
-	case <-stopped:
-		return false
-	case <-flowDone:
-		return false
-	}
 }
 
 func (m *TrafficManager) freeze() {

@@ -24,6 +24,8 @@ type bandwidthLimiter struct {
 	bytesPerSec   float64
 	next          time.Time
 	burstDuration time.Duration
+	waiters []*pacingTicket
+	changed chan struct{}
 }
 
 func newBandwidthLimiter(bitsPerSecond int64) *bandwidthLimiter {
@@ -47,6 +49,7 @@ func (l *bandwidthLimiter) setRate(bitsPerSecond int64) {
 	}
 	l.bitsPerSecond = bitsPerSecond
 	l.next = time.Time{}
+	l.notifyPacingLocked()
 	if bitsPerSecond == 0 {
 		l.bytesPerSec = 0
 		return
@@ -55,30 +58,7 @@ func (l *bandwidthLimiter) setRate(bitsPerSecond int64) {
 }
 
 func (l *bandwidthLimiter) wait(byteCount int) {
-	if l == nil || byteCount <= 0 {
-		return
-	}
-
-	l.mu.Lock()
-	if l.bytesPerSec <= 0 {
-		l.mu.Unlock()
-		return
-	}
-
-	now := time.Now()
-	floor := now.Add(-l.burstDuration)
-	if l.next.IsZero() || l.next.Before(floor) {
-		l.next = floor
-	}
-
-	transfer := time.Duration(float64(byteCount) / l.bytesPerSec * float64(time.Second))
-	l.next = l.next.Add(transfer)
-	target := l.next
-	l.mu.Unlock()
-
-	if delay := time.Until(target); delay > 0 {
-		time.Sleep(delay)
-	}
+	waitBandwidthUntil(byteCount, nil, l, nil, nil, nil)
 }
 
 type ClientPolicy struct {
@@ -133,6 +113,7 @@ type accountUsage struct {
 }
 
 type TrafficManager struct {
+	continuity         flowContinuitySnapshot
 	sessionEnds        int64
 	lastSessionEnd     sessionEndEvent
 	cameraProfiles     map[string]CameraProfile
@@ -444,8 +425,7 @@ func (m *TrafficManager) waitAllowedWithPortalBypass(
 	}
 	m.mu.Unlock()
 
-	globalLimiter.wait(byteCount)
-	clientLimiter.wait(byteCount)
+	waitBandwidthUntil(byteCount, globalLimiter, clientLimiter, nil, m.stopData, nil)
 	// A login, takeover or revocation can occur during bandwidth pacing.
 	// Never release queued bytes under a different account session.
 	m.mu.Lock()
@@ -546,6 +526,7 @@ type accountUsageSnapshot struct {
 }
 
 type trafficStatsSnapshot struct {
+	Continuity flowContinuitySnapshot `json:"continuity"`
 	SessionEnds              int64                       `json:"sessionEnds"`
 	LastSessionEnd           sessionEndEvent             `json:"lastSessionEnd"`
 	AssociatedClients        []AssociatedClient          `json:"associatedClients"`
@@ -595,6 +576,7 @@ func (m *TrafficManager) statsJSON() string {
 	m.mu.Lock()
 
 	snapshot := trafficStatsSnapshot{
+		Continuity: m.continuitySnapshotLocked(),
 		SessionEnds:              m.sessionEnds,
 		LastSessionEnd:           m.lastSessionEnd,
 		Epoch:                    m.epoch,

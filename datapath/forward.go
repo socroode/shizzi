@@ -1,6 +1,7 @@
 package datapath
 
 import (
+	"io"
 	"net"
 	"strconv"
 	"time"
@@ -261,20 +262,28 @@ func relay(client, upstream net.Conn, clientIP string, traffic *TrafficManager, 
 		scopes = []*flowScope{scope}
 	}
 
-	done := make(chan struct{}, 2)
-	go func() {
-		copyStreamManaged(upstream, client, clientIP, directionUpload, traffic, bypassPortal, scopes...)
-		done <- struct{}{}
-	}()
-	go func() {
-		copyStreamManaged(client, upstream, clientIP, directionDownload, traffic, bypassPortal, scopes...)
-		done <- struct{}{}
-	}()
+	done := make(chan bool, 2)
+	copyDirection := func(dst, src net.Conn, dir direction) {
+		result := copyStreamManaged(dst, src, clientIP, dir, traffic, bypassPortal, scopes...)
+		graceful := false
+		if result.reason == "read-eof" {
+			if writer, ok := dst.(interface { CloseWrite() error }); ok {
+				if err := writer.CloseWrite(); err == nil { graceful = true } else { result.reason = "half-close-error" }
+			} else { result.reason = "half-close-unavailable" }
+		}
+		if traffic != nil { traffic.noteFlowEnd("tcp", clientIP, dir, result, firstFlowScope(scopes)) }
+		done <- graceful
+	}
+	go copyDirection(upstream, client, directionUpload)
+	go copyDirection(client, upstream, directionDownload)
+	if graceful := <-done; !graceful {
+		firstFlowScope(scopes).stopTransfers()
+		client.Close()
+		upstream.Close()
+	}
+	// Propagate an orderly FIN without interrupting the opposite response.
 	<-done
 	firstFlowScope(scopes).stopTransfers()
-	client.Close()
-	upstream.Close()
-	<-done
 }
 
 func copyStreamManaged(
@@ -284,9 +293,8 @@ func copyStreamManaged(
 	traffic *TrafficManager,
 	bypassPortal bool,
 	scopes ...*flowScope,
-) {
+) (result flowCopyResult) {
 	buffer := make([]byte, tcpCopyBufferSize)
-
 	for {
 		read, err := src.Read(buffer)
 		if read > 0 {
@@ -294,30 +302,24 @@ func copyStreamManaged(
 			amount := read
 			if traffic != nil && !bypassPortal {
 				reservation = traffic.reserveTransferForFlow(clientIP, dir, read, false, firstFlowScope(scopes))
-				if reservation == nil {
-					return
-				}
+				if reservation == nil { result.reason = "transfer-not-authorized-or-quota"; return }
 				if !reservation.pace() {
 					reservation.settle(0)
+					result.reason = "pacing-cancelled"
 					return
 				}
 				amount = reservation.count
 			}
 			written, writeErr := dst.Write(buffer[:amount])
-			if reservation != nil {
-				reservation.settle(written)
-			} else if written > 0 && traffic != nil {
-				traffic.account(clientIP, dir, written)
-			}
-			if written != amount || amount != read {
-				return
-			}
-
-			if writeErr != nil {
-				return
-			}
+			result.bytes += int64(written)
+			if reservation != nil { reservation.settle(written) } else if written > 0 && traffic != nil { traffic.account(clientIP, dir, written) }
+			if writeErr != nil { result.reason = "write-error"; return }
+			if written != amount { result.reason = "short-write"; return }
+			if amount != read { result.reason = "quota-exhausted"; return }
 		}
 		if err != nil {
+			result.reason = "read-error"
+			if err == io.EOF { result.reason = "read-eof" }
 			return
 		}
 	}
@@ -342,14 +344,13 @@ func relayDatagrams(
 	activity := newUDPFlowActivity(udpFlowTimeout)
 
 	done := make(chan struct{}, 2)
-	go func() {
-		copyDatagramsWithActivity(upstream, client, clientIP, directionUpload, traffic, bypassPortal, activity, scopes...)
+	copyDirection := func(dst, src net.Conn, dir direction) {
+		result := copyDatagramsWithActivity(dst, src, clientIP, dir, traffic, bypassPortal, activity, scopes...)
+		if traffic != nil { traffic.noteFlowEnd("udp", clientIP, dir, result, firstFlowScope(scopes)) }
 		done <- struct{}{}
-	}()
-	go func() {
-		copyDatagramsWithActivity(client, upstream, clientIP, directionDownload, traffic, bypassPortal, activity, scopes...)
-		done <- struct{}{}
-	}()
+	}
+	go copyDirection(upstream, client, directionUpload)
+	go copyDirection(client, upstream, directionDownload)
 	<-done
 	firstFlowScope(scopes).stopTransfers()
 	client.Close()
@@ -368,46 +369,31 @@ func copyDatagramsManaged(
 	copyDatagramsWithActivity(dst, src, clientIP, dir, traffic, bypassPortal, newUDPFlowActivity(udpFlowTimeout), scopes...)
 }
 
-func copyDatagramsWithActivity(dst, src net.Conn, clientIP string, dir direction, traffic *TrafficManager, bypassPortal bool, activity *udpFlowActivity, scopes ...*flowScope) {
+func copyDatagramsWithActivity(dst, src net.Conn, clientIP string, dir direction, traffic *TrafficManager, bypassPortal bool, activity *udpFlowActivity, scopes ...*flowScope) (result flowCopyResult) {
 	buffer := make([]byte, maxDatagramSize)
-
 	for {
-		if err := src.SetReadDeadline(activity.deadline()); err != nil {
-			return
-		}
-
+		if err := src.SetReadDeadline(activity.deadline()); err != nil { result.reason = "deadline-error"; return }
 		read, err := src.Read(buffer)
 		if read > 0 {
 			activity.touch()
 			reservation := (*transferReservation)(nil)
 			if traffic != nil && !bypassPortal {
 				reservation = traffic.reserveTransferForFlow(clientIP, dir, read, true, firstFlowScope(scopes))
-				if reservation == nil {
-					return
-				}
-				if !reservation.pace() {
-					reservation.settle(0)
-					return
-				}
+				if reservation == nil { result.reason = "transfer-not-authorized-or-quota"; return }
+				if !reservation.pace() { reservation.settle(0); result.reason = "pacing-cancelled"; return }
 			}
 			written, writeErr := dst.Write(buffer[:read])
-			if written > 0 {
-				activity.touch()
-			}
-			if reservation != nil {
-				reservation.settle(written)
-			} else if written > 0 && traffic != nil {
-				traffic.account(clientIP, dir, written)
-			}
-
-			if writeErr != nil {
-				return
-			}
+			result.bytes += int64(written)
+			if written > 0 { activity.touch() }
+			if reservation != nil { reservation.settle(written) } else if written > 0 && traffic != nil { traffic.account(clientIP, dir, written) }
+			if writeErr != nil { result.reason = "write-error"; return }
+			if written != read { result.reason = "short-write"; return }
 		}
 		if err != nil {
-			if timeout, ok := err.(net.Error); ok && timeout.Timeout() && !activity.idle() {
-				continue
-			}
+			if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+				if !activity.idle() { continue }
+				result.reason = "udp-idle"
+			} else { result.reason = "read-error" }
 			return
 		}
 	}

@@ -25,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import dev.shizzi.flowEndReasonLabel
 import dev.shizzi.App
 import dev.shizzi.CybercafeState
 import dev.shizzi.Offer
@@ -990,6 +991,14 @@ private fun ConnectedDevices(
     if (diagnostics.lastSessionEndReason.isNotBlank()) {
         Text("Dernière fin de session : " + diagnostics.lastSessionEndMessage.ifBlank { "Session fermée" } +
             " · compte " + diagnostics.lastSessionEndAccount + " · " + formatDate(diagnostics.lastSessionEndMillis))
+    }
+    Text("Attentes de débit : " + diagnostics.pacingWaits +
+        " · maximum " + diagnostics.pacingMaxWaitMillis + " ms" +
+        " · attentes annulées " + diagnostics.pacingCancelled)
+    if (diagnostics.lastFlowEndReason.isNotBlank()) {
+        Text("Dernière fin de transfert : " + diagnostics.lastFlowEndProtocol.uppercase() +
+            " · " + flowEndReasonLabel(diagnostics.lastFlowEndReason) +
+            " · " + formatDate(diagnostics.lastFlowEndMillis))
     }
     Text(
         "Fuseau des journaux Android : " +

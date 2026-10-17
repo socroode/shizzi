@@ -35,11 +35,11 @@ func TestPacedTrafficIsRejectedWhenSessionChanges(t *testing.T) {
 			limiter.mu.Unlock()
 			result := make(chan bool, 1)
 			go func() { result <- m.waitAllowed(phoneA, directionDownload, 1) }()
-			// Wait for the actual limiter reservation, not an assumed scheduler delay.
+			// Wait until the packet is queued, without charging future bandwidth.
 			deadline := time.Now().Add(2 * time.Second)
 			for {
 				limiter.mu.Lock()
-				reserved := limiter.next.After(start)
+				reserved := len(limiter.waiters) > 0
 				limiter.mu.Unlock()
 				if reserved {
 					break
