@@ -63,7 +63,8 @@ jobs:
           assert "name='dev.shizzi.admin'" in package
           assert "versionName='0.3.0-universal'" in package
           assert "versionCode='15'" in package
-          assert "sdkVersion:'30'" in package
+          sdk = re.search(r"^sdkVersion:\s*'?(\d+)'?", package, re.MULTILINE)
+          assert sdk and int(sdk.group(1)) == 30, package
           PY
       - name: Prepare APK and validation record
         run: |
@@ -115,4 +116,6 @@ jobs:
           path: |
             admin/build/test-results/
             admin/build/reports/
+            admin-certificate.txt
+            admin-package.txt
           if-no-files-found: warn
