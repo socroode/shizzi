@@ -124,6 +124,7 @@ type TrafficManager struct {
 	closed             bool
 	stopData           chan struct{}
 	flowWG             sync.WaitGroup
+	pendingAttribution chan struct{}
 	globalPending      int64
 	accountPending     map[string]int64
 	clientPending      map[string]int64
@@ -183,6 +184,7 @@ func newTrafficManager() *TrafficManager {
 		// start and the first configuration.
 		portalRequired:           true,
 		stopData:                 make(chan struct{}),
+		pendingAttribution:       make(chan struct{}, 128),
 		requireClientAttribution: true,
 		epoch:                    time.Now().UnixNano(),
 		flowAttribution:          newFlowAttributionResolver(),

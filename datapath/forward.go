@@ -86,7 +86,7 @@ func handleTCP(
 		return
 
 	} else if traffic != nil {
-		clientIP = traffic.resolveFlowClient(
+		clientIP = traffic.resolveForwardingClient(
 			"tcp",
 			clientIP,
 			uint16(id.RemotePort),
@@ -102,7 +102,7 @@ func handleTCP(
 			if (destinationPort == 80 && traffic.portalRecoveryNeeded(destinationIP)) || (destinationPort == 443 && destinationIP == portalIP) {
 				for retry := 0; retry < 3 && clientIP == ""; retry++ {
 					time.Sleep(350 * time.Millisecond)
-					clientIP = traffic.resolveFlowClient(
+					clientIP = traffic.resolveForwardingClient(
 						"tcp",
 						sourceOf(id),
 						uint16(id.RemotePort),
@@ -207,7 +207,7 @@ func handleUDP(
 		return
 
 	} else if traffic != nil {
-		clientIP = traffic.resolveFlowClient(
+		clientIP = traffic.resolveForwardingClient(
 			"udp",
 			clientIP,
 			uint16(id.RemotePort),

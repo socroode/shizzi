@@ -505,6 +505,12 @@ func parseIPv4DownstreamClientMACs(raw string) map[string]string {
 // cannot be done without guessing. waitForRule bounds a wait for Android to
 // publish the NAT rule of a brand-new flow.
 func (r *flowAttributionResolver) resolve(key flowAttributionKey, waitForRule bool) string {
+	return r.resolveWithin(key, waitForRule, 0, nil)
+}
+
+// resolveWithin keeps the accepted endpoint alive while Android publishes the
+// exact NAT tuple. A positive budget is for forwarding, not account login.
+func (r *flowAttributionResolver) resolveWithin(key flowAttributionKey, waitForRule bool, budget time.Duration, stopped <-chan struct{}) string {
 	if r == nil {
 		return ""
 	}
@@ -519,14 +525,21 @@ func (r *flowAttributionResolver) resolve(key flowAttributionKey, waitForRule bo
 		}
 		missedAt, recentlyMissed := r.recentMisses[key]
 		r.mu.Unlock()
-		if recentlyMissed && time.Since(missedAt) < attributionMissMemory {
+		if budget == 0 && recentlyMissed && time.Since(missedAt) < attributionMissMemory {
 			// Same unresolved tuple retried (typically UDP): answer at once
 			// instead of stacking another multi-second wait.
 			deadline = startedAt
 		}
 	}
 
+	if waitForRule && budget > 0 {
+		deadline = startedAt.Add(budget)
+	}
+
 	for attempt := 0; ; attempt++ {
+		if pacingStopped(stopped) {
+			return ""
+		}
 		r.mu.Lock()
 		client, fallback := r.lookupLocked(key)
 		fresh := r.lastError == "" && time.Since(r.lastSuccess) < attributionCacheTTL
@@ -539,7 +552,7 @@ func (r *flowAttributionResolver) resolve(key flowAttributionKey, waitForRule bo
 			break
 		}
 		if waitForRule {
-			r.refreshBefore(attributionRefreshInterval, deadline)
+			r.refreshBefore(attributionRefreshInterval, deadline, stopped)
 		} else {
 			r.refreshIfOlderThan(attributionRefreshInterval)
 		}
@@ -550,7 +563,7 @@ func (r *flowAttributionResolver) resolve(key flowAttributionKey, waitForRule bo
 			r.mu.Unlock()
 			return r.recordResolved(client, fallback, startedAt)
 		}
-		if waitForRule && r.lastError == "" && len(r.connectedClients) > 1 {
+		if waitForRule && budget == 0 && r.lastError == "" && len(r.connectedClients) > 1 {
 			extended := startedAt.Add(attributionMultiClientWait)
 			if deadline.Before(extended) && deadline.After(startedAt) {
 				deadline = extended
@@ -562,10 +575,19 @@ func (r *flowAttributionResolver) resolve(key flowAttributionKey, waitForRule bo
 			break
 		}
 		if remaining := time.Until(deadline); remaining > 0 {
-			time.Sleep(min(attributionRetryDelay, remaining))
+			timer := time.NewTimer(min(attributionRetryDelay, remaining))
+			select {
+			case <-stopped:
+				timer.Stop()
+				return ""
+			case <-timer.C:
+			}
 		}
 	}
 
+	if pacingStopped(stopped) {
+		return ""
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

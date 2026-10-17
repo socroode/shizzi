@@ -6,11 +6,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 class SessionWatchdog(
     private val expectedInterface: String,
     private val onDrift: (String) -> Unit,
+    private val onReselect: () -> Unit = {},
 ) {
 
     private val inspector = UpstreamInspector()
     private val isRunning = AtomicBoolean(false)
     private var thread: Thread? = null
+
+    private val recovery = UpstreamRecovery()
 
     private val tolerance = UpstreamTolerance(expectedInterface) { strike ->
         Log.i(TAG, strike)
@@ -54,6 +57,10 @@ class SessionWatchdog(
         val names = observation.liveInterfaceNames(expectedInterface)
         val reading = classifyUpstream(names, expectedInterface, observation.didTimeout)
 
+        if (recovery.shouldReselect(reading)) {
+            runCatching { onReselect() }
+                .onFailure { SessionLog.warn("upstream reselection failed: ${it.message}") }
+        }
         return tolerance.judge(reading, names)
     }
 

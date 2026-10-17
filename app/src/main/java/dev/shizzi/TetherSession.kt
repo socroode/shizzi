@@ -68,6 +68,11 @@ class TetherSession(private val context: Context) {
         } else {
             TEST_NETWORK_DNS_SERVERS
         }
+        // Use the same selection order as the on-device probe: make tethering
+        // listen for test networks before publishing this session's TUN.
+        preferTestNetworks()
+        restartDownstream()
+
         val name = group.acquire(tunAddresses(), dnsServers, AVAILABILITY_TIMEOUT_MS)
         interfaceName = name
         SessionLog.info(
@@ -82,9 +87,6 @@ class TetherSession(private val context: Context) {
         presenceMonitor = ClientPresenceMonitor(context) { raw -> resources?.setClientPresence(raw) }.also { it.start() }
         SessionLog.info("datapath attached to $name")
         followVpn(group)
-
-        preferTestNetworks()
-        restartDownstream()
 
         verifyUpstream(name)
         SessionLog.info("upstream verified: $name is sole upstream")
@@ -111,10 +113,18 @@ class TetherSession(private val context: Context) {
     }
 
     private fun startWatchdog(name: String) {
-        val guard = SessionWatchdog(name) { problem ->
-            SessionLog.warn("upstream drift: $problem")
-            tearDownAfter(problem)
-        }
+        val guard = SessionWatchdog(
+            name,
+            onDrift = { problem ->
+                SessionLog.warn("upstream drift: $problem")
+                tearDownAfter(problem)
+            },
+            onReselect = {
+                // Re-select the owned TUN without dropping Wi-Fi or accounts.
+                TetheringPreferenceApi(context).setPreferTestNetworks(true)
+                SessionLog.info("upstream selection requested again for $name")
+            },
+        )
         watchdog = guard
         guard.start()
     }
