@@ -1,0 +1,118 @@
+name: Shizzi Admin universal APK
+
+on:
+  push:
+    branches: [build/admin-universal-0.3.0]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: admin-universal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Restore permanent signing identity
+        env:
+          KEYSTORE_B64: ${{ secrets.SHIZZI_KEYSTORE_B64 || secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.SHIZZI_STORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SHIZZI_KEY_ALIAS || secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SHIZZI_KEY_PASSWORD || secrets.KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_B64"
+          test -n "$STORE_PASSWORD"
+          test -n "$KEY_ALIAS"
+          test -n "$KEY_PASSWORD"
+          printf '%s' "$KEYSTORE_B64" | base64 -d > shizzi-release.jks
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          def escape(value):
+              return value.replace('\\', '\\\\').replace('\n', '\\n').replace('\r', '\\r').replace('=', '\\=').replace(':', '\\:').replace(' ', '\\ ')
+          props = {'storeFile': 'shizzi-release.jks', 'storePassword': os.environ['STORE_PASSWORD'], 'keyAlias': os.environ['KEY_ALIAS'], 'keyPassword': os.environ['KEY_PASSWORD']}
+          Path('keystore.properties').write_text(''.join(k + '=' + escape(v) + '\n' for k, v in props.items()))
+          PY
+      - name: Test compatibility, lint and build Admin only
+        run: ./gradlew -PshizziAdminOnly=true :admin:testDebugUnitTest :admin:lintRelease :admin:assembleRelease --no-daemon
+      - name: Verify APK and permanent signature
+        run: |
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          test -x "$BUILD_TOOLS/apksigner"
+          APK=admin/build/outputs/apk/release/admin-release.apk
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" > admin-certificate.txt
+          "$BUILD_TOOLS/aapt2" dump badging "$APK" > admin-package.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          cert = Path('admin-certificate.txt').read_text()
+          actual = re.search(r'certificate SHA-256 digest: ([a-fA-F0-9]+)', cert).group(1).upper()
+          assert actual == 'FADFC5E87FA60351F7DCB75D34F1AB91110824333CD1097A38B3C703F7AF3DB7', actual
+          package = Path('admin-package.txt').read_text()
+          assert "name='dev.shizzi.admin'" in package
+          assert "versionName='0.3.0-universal'" in package
+          assert "versionCode='15'" in package
+          assert "sdkVersion:'30'" in package
+          PY
+      - name: Prepare APK and validation record
+        run: |
+          mkdir -p admin-output
+          cp admin/build/outputs/apk/release/admin-release.apk admin-output/Shizzi-Admin-Universel-0.3.0.apk
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, os, xml.etree.ElementTree as ET
+          totals = dict(tests=0, failures=0, errors=0, skipped=0)
+          for p in Path('admin/build/test-results/testDebugUnitTest').glob('TEST-*.xml'):
+              root = ET.parse(p).getroot()
+              for key in totals:
+                  totals[key] += int(root.attrib.get(key, 0))
+          assert totals['tests'] >= 25 and totals['failures'] == totals['errors'] == totals['skipped'] == 0, totals
+          apk = Path('admin-output/Shizzi-Admin-Universel-0.3.0.apk')
+          text = [
+              '# Validation Shizzi Admin Universel 0.3.0', '',
+              'Commit : ' + os.environ['GITHUB_SHA'],
+              'CI : https://github.com/' + os.environ['GITHUB_REPOSITORY'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID'], '',
+              '- Paquet dev.shizzi.admin ; code 15 ; Android 11 minimum.',
+              '- Signature permanente verifiee : FADFC5E87FA60351F7DCB75D34F1AB91110824333CD1097A38B3C703F7AF3DB7.',
+              '- Tests unitaires et HTTP locaux : ' + str(totals),
+              '- Analyse Android lint Release et compilation : reussies.',
+              '- Connexion HTTP historique et HTTPS avec verification du certificat du routeur.',
+              '- Authentification SHA-256/HMAC historique et PBKDF2/HMAC recente.',
+              '- Aucun repli HTTP apres refus de certificat, annulation ou echec de connexion HTTPS authentifiee.',
+              '- Fonctions affichees selon les champs exposes par le routeur, dont modules Gateway.',
+              '- Aucun changement du moteur reseau des routeurs ; aucune release publiee.', '',
+              '## Portee des verifications', '',
+              'Interfaces examinees : 0.4.2, generations media 0.4.3 et 0.4.3.9, Gateway 0.0.0.1, 0.4.4.1.1, 0.4.3.5.3, 0.4.3.5.8 et V2 alpha.',
+              'Les tests utilisent un serveur HTTP simule et six clients Admin concurrents. Ils ne constituent pas des essais sur six telephones Android, un test radio, ni une validation materielle de toutes les versions APK historiques.',
+              'Un essai sur les routeurs reels reste necessaire, notamment pour la detection du port TLS sur les anciens Android.', '',
+              'SHA-256 APK : ' + hashlib.sha256(apk.read_bytes()).hexdigest(),
+          ]
+          Path('admin-output/Validation-Shizzi-Admin-Universel-0.3.0.md').write_text('\n'.join(text) + '\n')
+          PY
+      - uses: actions/upload-artifact@v5
+        with:
+          name: Shizzi-Admin-Universel-0.3.0
+          path: admin-output/
+          if-no-files-found: error
+      - name: Clean signing material
+        if: always()
+        run: rm -f shizzi-release.jks keystore.properties
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: Shizzi-Admin-Universel-test-reports
+          path: |
+            admin/build/test-results/
+            admin/build/reports/
+          if-no-files-found: warn

@@ -2,6 +2,7 @@ package dev.shizzi.admin
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.net.Network
 import java.net.URL
 import java.security.MessageDigest
 import java.security.cert.CertificateException
@@ -34,19 +35,20 @@ internal object RouterTls {
         return SSLContext.getInstance("TLS").apply { init(null, arrayOf(trust), null) }
     }
 
-    fun connection(url: String, pin: String): HttpsURLConnection {
+    fun connection(url: String, pin: String, network: Network? = null): HttpsURLConnection {
         val target = URL(url)
         check(target.protocol == "https" && target.host == "192.0.2.1")
         check(pin.matches(Regex("[0-9a-f]{64}"))) { "Routeur non associé." }
-        return (target.openConnection() as HttpsURLConnection).apply {
+        return ((network?.openConnection(target) ?: target.openConnection()) as HttpsURLConnection).apply {
             sslSocketFactory = context(pin).socketFactory
             instanceFollowRedirects = false
         }
     }
 
     /** The untrusted probe sends no credentials, cookies, tokens or form data. */
-    fun pair(activity: Activity): String {
-        val probe = URL("https://192.0.2.1/status.json").openConnection() as HttpsURLConnection
+    fun pair(activity: Activity, network: Network? = null): String {
+        val target = URL("https://192.0.2.1/status.json")
+        val probe = (network?.openConnection(target) ?: target.openConnection()) as HttpsURLConnection
         val pin = try {
             probe.sslSocketFactory = context(null).socketFactory
             probe.instanceFollowRedirects = false

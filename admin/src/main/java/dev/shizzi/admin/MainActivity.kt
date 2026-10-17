@@ -22,16 +22,13 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.net.Inet4Address
+import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.ArrayDeque
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
 import kotlin.concurrent.thread
 import org.json.JSONArray
 import org.json.JSONObject
@@ -43,7 +40,10 @@ class MainActivity : Activity() {
     private lateinit var scroll: ScrollView
 
     private var boundWifi: Network? = null
-    private var token: String = ""
+    @Volatile private var api: AdminApi? = null
+    private val token: String get() = api?.token.orEmpty()
+    private var capabilities = AdminCapabilities(JSONObject())
+    private val unavailableActions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private var routerName: String = "Shizzi"
     private var lastState: JSONObject? = null
     private var lastRenderedStateJson: String = ""
@@ -52,7 +52,7 @@ class MainActivity : Activity() {
     private var pendingUploadFolderName: String? = null
     private val recentUploads = ArrayDeque<String>()
     @Volatile private var refreshInFlight = false
-    @Volatile private var routerPin = ""
+    @Volatile private var loginInFlight = false
     @Volatile private var uploadCancelled = false
     private val refreshHandler = Handler(Looper.getMainLooper())
     private val autoRefreshRunnable = object : Runnable {
@@ -145,30 +145,47 @@ class MainActivity : Activity() {
         if (active != null) {
             val caps = connectivity.getNetworkCapabilities(active)
             if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
-                connectivity.bindProcessToNetwork(active)
-                boundWifi = active
+                selectWifi(active)
                 return true
             }
         }
         for (network in connectivity.allNetworks) {
             val caps = connectivity.getNetworkCapabilities(network)
             if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
-                connectivity.bindProcessToNetwork(network)
-                boundWifi = network
+                selectWifi(network)
                 return true
             }
         }
+        if (boundWifi != null) {
+            invalidateSession()
+            boundWifi = null
+            connectivity.bindProcessToNetwork(null)
+        }
         return false
+    }
+
+    private fun selectWifi(network: Network) {
+        if (boundWifi != null && boundWifi != network) invalidateSession()
+        connectivity.bindProcessToNetwork(network)
+        boundWifi = network
+    }
+
+    private fun invalidateSession() {
+        api?.clearSession()
+        api = null
+        lastState = null
+        runOnUiThread { showLogin("Le Wi-Fi a changé. Connectez-vous au routeur choisi.") }
     }
 
     private fun showLogin(message: String = "") {
         stopAutoRefresh()
         lastRenderedStateJson = ""
         root.removeAllViews()
-        title("Shizzi Admin")
+        title("Shizzi Admin Universel")
         info(
             "Administration distante Shizzi. " +
-                "Connectez ce téléphone au Wi-Fi Shizzi à administrer.",
+                "Connectez ce téléphone au Wi-Fi Shizzi à administrer. " +
+                "Détection automatique des anciennes et nouvelles versions.",
         )
         if (message.isNotBlank()) info(message)
 
@@ -187,65 +204,55 @@ class MainActivity : Activity() {
     }
 
     private fun login(username: String, password: String) {
+        if (loginInFlight) return
+        loginInFlight = true
+        api?.clearSession()
+        api = null
+        unavailableActions.clear()
         runNetwork {
+            try {
             if (!bindToWifi()) error("Aucun Wi-Fi connecté.")
-            routerPin = RouterTls.pair(this)
-            val challenge = get(
-                "/challenge?username=" + URLEncoder.encode(username, "UTF-8"),
-                authenticated = false,
+            val wifi = boundWifi ?: error("Aucun Wi-Fi connecté.")
+            val (connected, result) = AdminConnector.connect(
+                username, password,
+                secureFactory = {
+                    val pin = RouterTls.pair(this, wifi)
+                    AdminApi(AdminConnector.HTTPS, secure = true) { url ->
+                        RouterTls.connection(url.toString(), pin, wifi)
+                    }
+                },
+                legacyFactory = {
+                    AdminApi(AdminConnector.HTTP, secure = false) { url ->
+                        wifi.openConnection(url) as HttpURLConnection
+                    }
+                },
             )
-            if (!challenge.optBoolean("ok")) {
-                error(challenge.optString("message", "Administration indisponible."))
-            }
-
-            val salt = challenge.getString("salt")
-            val nonce = challenge.getString("nonce")
-            val baseHash = sha256Hex("$salt:$password")
-            val passwordHash = when (challenge.optInt("iterations", 0)) {
-                0 -> baseHash
-                120_000 -> {
-                    val spec = javax.crypto.spec.PBEKeySpec(baseHash.toCharArray(), salt.toByteArray(StandardCharsets.UTF_8), 120_000, 256)
-                    try { javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded.joinToString("") { "%02x".format(it) } }
-                    finally { spec.clearPassword() }
-                }
-                else -> error("Format de mot de passe non pris en charge.")
-            }
-            val proof = hmacHex(passwordHash, nonce)
-            val form =
-                "username=" + URLEncoder.encode(username, "UTF-8") +
-                    "&nonce=" + URLEncoder.encode(nonce, "UTF-8") +
-                    "&proof=" + URLEncoder.encode(proof, "UTF-8")
-            val result = request(
-                method = "POST",
-                path = "/login",
-                body = form,
-                contentType = "application/x-www-form-urlencoded",
-                authenticated = false,
-            )
-            if (!result.optBoolean("ok")) {
-                error(result.optString("message", "Connexion refusée."))
-            }
-            token = result.getString("token")
+            check(boundWifi == wifi) { "Le Wi-Fi a changé. Reconnectez-vous au routeur." }
+            api = connected
             routerName = result.optString("routerName", "Shizzi")
             refresh()
             runOnUiThread { scheduleAutoRefresh() }
+            } finally { loginInFlight = false }
         }
     }
 
     private fun refresh(manual: Boolean = true) {
         if (refreshInFlight) return
+        val session = api ?: return
         refreshInFlight = true
         thread {
             try {
-                val response = get("/state")
+                val response = session.request("GET", "/state")
+                if (api !== session) return@thread
                 if (!response.optBoolean("ok")) {
-                    token = ""
+                    api?.clearSession()
                     runOnUiThread { showLogin("Session Admin expirée.") }
                     return@thread
                 }
                 lastState = response
                 val snapshot = response.toString()
                 runOnUiThread {
+                    if (api !== session) return@runOnUiThread
                     val shouldRender = snapshot != lastRenderedStateJson &&
                         (manual || (hasWindowFocus() && !hasPendingInput(root)))
                     if (shouldRender) {
@@ -256,7 +263,10 @@ class MainActivity : Activity() {
                     }
                 }
             } catch (failure: Throwable) {
-                if (manual) {
+                if (api !== session) return@thread
+                if (failure is AdminApiException && failure.status == 401) {
+                    runOnUiThread { if (api === session) showLogin("Session Admin expirée.") }
+                } else if (manual) {
                     runOnUiThread {
                         toast(failure.message ?: failure.javaClass.simpleName)
                     }
@@ -300,42 +310,42 @@ class MainActivity : Activity() {
         header.addView(makeButton("Déconnexion") { logout() }, weighted())
         root.addView(header)
 
-        info(
-            "Administration distante active. Internet Admin : 1 Mbps ↓ / 1 Mbps ↑. " +
-                "ON/OFF Shizzi reste volontairement absent.",
-        )
-
         val state = response.optJSONObject("state") ?: JSONObject()
         val traffic = response.optJSONObject("traffic") ?: JSONObject()
+        capabilities = AdminCapabilities(response)
+        info(if (api?.secure == true) "Connexion HTTPS · routeur vérifié" else "Connexion compatible · ancien Shizzi (HTTP)")
+        if (state.length() == 0) info("État du routeur en attente. Appuyez sur Actualiser.")
 
-        val battery = state.optJSONObject("battery") ?: JSONObject()
         section("État du routeur")
-        info(
-            AdminBatteryLabel.format(
-                available = battery.optBoolean("available", false),
-                percent = battery.optInt("percent", -1),
-                charging = battery.optBoolean("charging", false),
-            ),
-        )
+        if (capabilities.battery) {
+            val battery = state.optJSONObject("battery") ?: JSONObject()
+            info(AdminBatteryLabel.format(battery.optBoolean("available"), battery.optInt("percent", -1), battery.optBoolean("charging")))
+        } else info("Batterie : information indisponible sur cette version de Shizzi.")
 
-        renderAccounts(state.optJSONArray("accounts") ?: JSONArray(), traffic.optJSONArray("associatedClients") ?: JSONArray())
-        renderOffersAndVouchers(
-            state.optJSONArray("offers") ?: JSONArray(),
-            state.optJSONArray("vouchers") ?: JSONArray(),
-        )
-        renderMediaOffersAndVouchers(
-            state.optJSONArray("mediaOffers") ?: JSONArray(),
-            state.optJSONArray("mediaVouchers") ?: JSONArray(),
-        )
-        renderDevices(traffic.optJSONArray("portalAuthorizations") ?: JSONArray())
-        renderMediaManagement(
-            state.optJSONObject("media") ?: JSONObject(),
-            state.optJSONArray("accounts") ?: JSONArray(),
-        )
-        renderPortal(state.optJSONObject("portal") ?: JSONObject())
-        renderAdminCredentials(state.optJSONObject("remoteAdmin") ?: JSONObject())
-        renderDiagnostics(traffic)
-        renderMediaDiagnostics(traffic.optJSONArray("mediaDiagnostics") ?: JSONArray())
+        if (capabilities.accounts) renderAccounts(state.getJSONArray("accounts"), traffic.optJSONArray("associatedClients") ?: JSONArray())
+        if (capabilities.offers) renderOffersAndVouchers(state.getJSONArray("offers"), state.getJSONArray("vouchers"))
+        if (capabilities.mediaOffers) renderMediaOffersAndVouchers(state.getJSONArray("mediaOffers"), state.getJSONArray("mediaVouchers"))
+        if (capabilities.devices) renderDevices(traffic.getJSONArray("portalAuthorizations"))
+        if (capabilities.modules) renderModules(state.getJSONObject("modules"))
+        if (capabilities.media) renderMediaManagement(state.getJSONObject("media"), state.optJSONArray("accounts") ?: JSONArray())
+        if (capabilities.portal) renderPortal(state.getJSONObject("portal"))
+        if (capabilities.credentials) renderAdminCredentials(state.getJSONObject("remoteAdmin"))
+        if (capabilities.diagnostics) renderDiagnostics(traffic)
+        if (capabilities.mediaDiagnostics) renderMediaDiagnostics(traffic.getJSONArray("mediaDiagnostics"))
+    }
+
+    private fun renderModules(modules: JSONObject) {
+        section("Modules Shizzi")
+        for ((key, label, action) in listOf(
+            Triple("messengerEnabled", "Messenger", "module.messenger.set"),
+            Triple("mediaEnabled", "Media", "module.media.set"),
+        )) {
+            if (!modules.has(key)) continue
+            val enabled = modules.optBoolean(key)
+            button((if (enabled) "Désactiver " else "Activer ") + label) {
+                command(action, JSONObject().put("enabled", !enabled))
+            }
+        }
     }
 
     private fun renderAccounts(accounts: JSONArray, associated: JSONArray) {
@@ -370,7 +380,7 @@ class MainActivity : Activity() {
                     " · restant " + formatBytes(account.optLong("dataBalanceBytes")) +
                     " · utilisé " + formatBytes(
                     account.optLong("totalUpBytes") + account.optLong("totalDownBytes"),
-                ) + "\n" + mediaStatus,
+                ) + if (account.has("mediaUntilMillis")) "\n" + mediaStatus else "",
             )
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             row.addView(
@@ -416,6 +426,7 @@ class MainActivity : Activity() {
                 weighted(),
             )
             root.addView(row2)
+            if (capabilities.cameras) {
             val cameraMac = account.optString("cameraMac")
             if (cameraMac.isNotBlank()) {
                 info("Caméra associée : $cameraMac. Aucune IP fixe requise.")
@@ -433,6 +444,7 @@ class MainActivity : Activity() {
                             }
                         }.show()
                 }
+            }
             }
             divider()
         }
@@ -718,9 +730,9 @@ class MainActivity : Activity() {
         )
         root.addView(serverRow)
 
-        button("Envoyer un fichier au routeur") {
-            chooseUploadDestination(folders)
-        }
+        if (capabilities.fileUpload) {
+            button("Envoyer un fichier au routeur") { chooseUploadDestination(folders) }
+        } else info("Envoi de fichiers : indisponible sur cette version ou aucun dossier configuré.")
         if (recentUploads.isNotEmpty()) {
             info(
                 "Transferts récents :\n" +
@@ -1463,18 +1475,27 @@ class MainActivity : Activity() {
         refreshOnSuccess: Boolean,
         onSuccess: ((JSONObject) -> Unit)? = null,
     ) {
+        if (!capabilities.supports(action) || action in unavailableActions) {
+            toast("Cette fonction n'est pas disponible sur ce Shizzi.")
+            return
+        }
+        val session = api ?: return
         runNetwork {
-            val start = request(
+            val start = try { session.request(
                 "POST",
                 "/command",
                 JSONObject().put("action", action).put("params", params).toString(),
-            )
+            ) } catch (failure: AdminApiException) {
+                if (failure.status == 403) unavailableActions.add(action)
+                throw failure
+            }
             if (!start.optBoolean("ok")) error(start.optString("message", "Commande refusée."))
             val id = start.getString("id")
             var result: JSONObject? = null
             for (attempt in 0 until 30) {
                 Thread.sleep(300)
-                val candidate = get("/result?id=" + URLEncoder.encode(id, "UTF-8"))
+                if (api !== session) return@runNetwork
+                val candidate = session.request("GET", "/result?id=" + URLEncoder.encode(id, "UTF-8"))
                 if (!candidate.optBoolean("pending", true)) {
                     result = candidate
                     break
@@ -1484,10 +1505,11 @@ class MainActivity : Activity() {
             val success = finished.optBoolean("success")
             val message = finished.optString("message")
             runOnUiThread {
+                if (api !== session) return@runOnUiThread
                 toast(message.ifBlank { if (success) "OK" else "Échec" })
                 if (success) onSuccess?.invoke(finished)
             }
-            if (success && refreshOnSuccess) {
+            if (success && refreshOnSuccess && api === session) {
                 Thread.sleep(250)
                 refresh()
             }
@@ -1501,7 +1523,7 @@ class MainActivity : Activity() {
         }
         runNetwork {
             runCatching { request("POST", "/logout", "") }
-            token = ""
+            api?.clearSession()
             runOnUiThread {
                 stopAutoRefresh()
                 showLogin("Session Admin fermée.")
@@ -1519,74 +1541,16 @@ class MainActivity : Activity() {
         contentType: String = "application/json",
         authenticated: Boolean = true,
         readTimeoutMillis: Int = 8_000,
-    ): JSONObject {
-        val connection = RouterTls.connection(BASE_URL + path, routerPin)
-        connection.requestMethod = method
-        connection.connectTimeout = 5_000
-        connection.readTimeout = readTimeoutMillis
-        connection.useCaches = false
-        connection.setRequestProperty("Accept", "application/json")
-        if (authenticated && token.isNotBlank()) {
-            connection.setRequestProperty("X-Shizzi-Admin-Token", token)
-        }
-        if (body != null) {
-            connection.doOutput = true
-            connection.setRequestProperty("Content-Type", contentType)
-            connection.outputStream.use {
-                it.write(body.toByteArray(StandardCharsets.UTF_8))
-            }
-        }
-        val stream = if (connection.responseCode in 200..299) {
-            connection.inputStream
-        } else {
-            connection.errorStream ?: connection.inputStream
-        }
-        val text = BufferedReader(InputStreamReader(stream)).use { it.readText() }
-        connection.disconnect()
-        return JSONObject(text.ifBlank { "{}" })
-    }
+    ): JSONObject = (api ?: error("Connectez-vous au compte Admin.")).request(
+        method, path, body, contentType, authenticated, readTimeoutMillis,
+    )
 
     private fun requestBytes(
         method: String,
         path: String,
         body: ByteArray,
         contentType: String,
-    ): JSONObject {
-        val connection = RouterTls.connection(BASE_URL + path, routerPin)
-        connection.requestMethod = method
-        connection.connectTimeout = 8_000
-        connection.readTimeout = 90_000
-        connection.useCaches = false
-        connection.setRequestProperty("Accept", "application/json")
-        if (token.isNotBlank()) {
-            connection.setRequestProperty("X-Shizzi-Admin-Token", token)
-        }
-        connection.doOutput = true
-        connection.setRequestProperty("Content-Type", contentType)
-        connection.setFixedLengthStreamingMode(body.size)
-        connection.outputStream.use { it.write(body) }
-
-        val stream = if (connection.responseCode in 200..299) {
-            connection.inputStream
-        } else {
-            connection.errorStream ?: connection.inputStream
-        }
-        val text = BufferedReader(InputStreamReader(stream)).use { it.readText() }
-        connection.disconnect()
-        return JSONObject(text.ifBlank { "{}" })
-    }
-
-    private fun sha256Hex(value: String): String =
-        MessageDigest.getInstance("SHA-256")
-            .digest(value.toByteArray(StandardCharsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
-
-    private fun hmacHex(key: String, value: String): String {
-        val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(key.toByteArray(StandardCharsets.UTF_8), "HmacSHA256"))
-        return mac.doFinal(value.toByteArray(StandardCharsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
-    }
+    ): JSONObject = (api ?: error("Connectez-vous au compte Admin.")).requestBytes(method, path, body, contentType)
 
     private fun runNetwork(block: () -> Unit) {
         thread {
@@ -1735,7 +1699,6 @@ class MainActivity : Activity() {
     }
 
     private companion object {
-        const val BASE_URL = "https://192.0.2.1/api/v1/admin"
         const val REQUEST_PICK_UPLOAD_FILE = 4408
         const val UPLOAD_RETRY_COUNT = 60
     }
