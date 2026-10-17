@@ -68,10 +68,9 @@ class TetherSession(private val context: Context) {
         } else {
             TEST_NETWORK_DNS_SERVERS
         }
-        // Use the same selection order as the on-device probe: make tethering
-        // listen for test networks before publishing this session's TUN.
+        // Arm test-network selection before publishing the TUN. Start/restart
+        // the hotspot only after the datapath is attached and ready.
         preferTestNetworks()
-        restartDownstream()
 
         val name = group.acquire(tunAddresses(), dnsServers, AVAILABILITY_TIMEOUT_MS)
         interfaceName = name
@@ -87,6 +86,7 @@ class TetherSession(private val context: Context) {
         presenceMonitor = ClientPresenceMonitor(context) { raw -> resources?.setClientPresence(raw) }.also { it.start() }
         SessionLog.info("datapath attached to $name")
         followVpn(group)
+        restartDownstream()
 
         verifyUpstream(name)
         SessionLog.info("upstream verified: $name is sole upstream")

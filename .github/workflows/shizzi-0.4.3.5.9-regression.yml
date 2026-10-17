@@ -22,15 +22,9 @@ jobs:
         with:
           go-version-file: datapath/go.mod
           cache-dependency-path: datapath/go.sum
-      - name: Format changed Go sources and export review copies
+      - name: Check Go source formatting
         run: |
-          gofmt -w datapath/traffic.go datapath/quota_reservation.go datapath/session_transition_test.go datapath/bandwidth_pacing.go datapath/flow_continuity.go datapath/forward.go datapath/stream_stability_test.go
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          for name in ["datapath/traffic.go","datapath/quota_reservation.go","datapath/session_transition_test.go","datapath/bandwidth_pacing.go","datapath/flow_continuity.go","datapath/forward.go","datapath/stream_stability_test.go"]:
-              print("SHIZZI_FORMATTED_SOURCE=" + json.dumps({"path": name, "content": Path(name).read_text()}))
-          PY
+          test -z "$(gofmt -l datapath/attribution.go datapath/attribution_wait.go datapath/forwarding_attribution.go datapath/forwarding_attribution_test.go datapath/forward.go datapath/traffic.go)"
       - name: Verify browser authentication proof vector
         run: node scripts/test-portal-proof.cjs
       - name: Test portal, attribution, routing and account regressions
