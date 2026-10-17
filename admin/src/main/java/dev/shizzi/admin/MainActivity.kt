@@ -94,9 +94,8 @@ class MainActivity : Activity() {
 
         val uri = data?.data ?: return
         runCatching {
-            val flags = data.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION
-            if (flags != 0) {
-                contentResolver.takePersistableUriPermission(uri, flags)
+            if (data.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0) {
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
         }
 

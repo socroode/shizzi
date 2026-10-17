@@ -256,7 +256,7 @@ class AdminCompatibilityTest {
                         }
                     }
                     else -> {
-                        if (exchange.requestHeaders.getFirst("X-Shizzi-Admin-Token") !in sessions) {
+                        if (exchange.requestHeaders.getFirst("X-Shizzi-Admin-Token").orEmpty() !in sessions) {
                             status = 401; JSONObject().put("ok", false)
                         } else when (path) {
                             "/state" -> { stateCount.incrementAndGet(); JSONObject().put("ok", true).put("state", JSONObject()) }
