@@ -24,8 +24,8 @@ type bandwidthLimiter struct {
 	bytesPerSec   float64
 	next          time.Time
 	burstDuration time.Duration
-	waiters []*pacingTicket
-	changed chan struct{}
+	waiters       []*pacingTicket
+	changed       chan struct{}
 }
 
 func newBandwidthLimiter(bitsPerSecond int64) *bandwidthLimiter {
@@ -526,7 +526,7 @@ type accountUsageSnapshot struct {
 }
 
 type trafficStatsSnapshot struct {
-	Continuity flowContinuitySnapshot `json:"continuity"`
+	Continuity               flowContinuitySnapshot      `json:"continuity"`
 	SessionEnds              int64                       `json:"sessionEnds"`
 	LastSessionEnd           sessionEndEvent             `json:"lastSessionEnd"`
 	AssociatedClients        []AssociatedClient          `json:"associatedClients"`
@@ -576,7 +576,7 @@ func (m *TrafficManager) statsJSON() string {
 	m.mu.Lock()
 
 	snapshot := trafficStatsSnapshot{
-		Continuity: m.continuitySnapshotLocked(),
+		Continuity:               m.continuitySnapshotLocked(),
 		SessionEnds:              m.sessionEnds,
 		LastSessionEnd:           m.lastSessionEnd,
 		Epoch:                    m.epoch,

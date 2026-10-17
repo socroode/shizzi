@@ -161,6 +161,55 @@ jobs:
           cd release-output
           sha256sum *.apk > SHA256SUMS.txt
 
+      - name: Write candidate validation report
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, os, xml.etree.ElementTree as ET
+          counts = {}
+          for module in ("app", "conso", "admin"):
+              totals = dict(tests=0, failures=0, errors=0, skipped=0)
+              for path in Path(module, "build/test-results/testDebugUnitTest").glob("TEST-*.xml"):
+                  root = ET.parse(path).getroot()
+                  for key in totals:
+                      totals[key] += int(root.attrib.get(key, 0))
+              assert totals["tests"] > 0 and totals["failures"] == totals["errors"] == totals["skipped"] == 0, (module, totals)
+              counts[module] = totals
+          lines = [
+              "# Validation Shizzi 0.4.3.5.8",
+              "",
+              "Commit : " + os.environ["GITHUB_SHA"],
+              "CI : https://github.com/" + os.environ["GITHUB_REPOSITORY"] + "/actions/runs/" + os.environ["GITHUB_RUN_ID"],
+              "",
+              "Correctif : files d'attente de debit annulables, admission conjointe compte/routeur, fermeture TCP partielle avec reception preservee, diagnostics des fins de flux.",
+              "Plafonds conserves : routeur 40/4 Mbit/s ; Illimite Confort 4/2 Mbit/s. Ce sont des maximums, pas des debits garantis.",
+              "Portail, comptes, portabilite, appareil unique par compte et vouchers conserves.",
+              "",
+              "## Verification",
+              "",
+              "- Suite Go avec detection de courses et go vet : succes (dependance obligatoire du travail Android).",
+              "- Signature permanente, version 0.4.3.5.8/code 36 et APK Shizzi+/Admin embarques : verifies.",
+              "- Aucun fichier de cle privee n'est inclus.",
+          ]
+          for module, totals in counts.items():
+              lines.append("- Tests Android JVM " + module + " : " + str(totals))
+          lines += [
+              "",
+              "## Limites de validation",
+              "",
+              "Les tests Go utilisent des sockets TCP/UDP et gVisor, avec presence/NAT Android simules. Les tests Android sont des tests unitaires JVM.",
+              "Ce travail ne constitue pas une emulation de telephones Android, un essai radio ni un essai reel des applications de streaming.",
+              "Un essai prolonge sur le routeur avec videos, directs, appels video et cameras IP reste necessaire.",
+              "Aucune release n'est publiee.",
+              "",
+              "## SHA-256",
+              "",
+          ]
+          for path in sorted(Path("release-output").glob("*.apk")):
+              lines.append("- " + path.name + " : " + hashlib.sha256(path.read_bytes()).hexdigest())
+          Path("release-output/Validation-Shizzi-0.4.3.5.8.md").write_text("\n".join(lines) + "\n")
+          PY
+
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v5
         with:
@@ -170,6 +219,7 @@ jobs:
             release-output/Shizzi-Plus-Compatible.apk
             release-output/Shizzi-Admin-Compatible.apk
             release-output/SHA256SUMS.txt
+            release-output/Validation-Shizzi-0.4.3.5.8.md
           if-no-files-found: error
 
       - name: Clean up signing material

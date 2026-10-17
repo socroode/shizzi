@@ -278,7 +278,11 @@ fun parseLiveTrafficSnapshot(raw: String?): LiveTrafficSnapshot {
 
     val continuity = root.optJSONObject("continuity")
     val recentFlows = continuity?.optJSONArray("recent")
-    val lastFlow = recentFlows?.let { if (it.length() > 0) it.optJSONObject(it.length() - 1) else null }
+    val lastFlow = recentFlows?.let { history ->
+        (history.length() - 1 downTo 0).asSequence()
+            .mapNotNull { history.optJSONObject(it) }
+            .firstOrNull { it.optString("reason") != "peer-direction-ended" }
+    }
     val attribution = root.optJSONObject("attribution")
     val associated = root.optJSONArray("associatedClients")?.let { array ->
         (0 until array.length()).mapNotNull { index -> array.optJSONObject(index)?.let { AssociatedWifiClient(it.optString("ip"), it.optString("mac")) } }

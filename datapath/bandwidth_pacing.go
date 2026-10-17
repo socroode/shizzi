@@ -7,7 +7,9 @@ import "time"
 type pacingTicket struct{ marker byte }
 
 func (l *bandwidthLimiter) notifyPacingLocked() {
-	if l.changed != nil { close(l.changed) }
+	if l.changed != nil {
+		close(l.changed)
+	}
 	l.changed = make(chan struct{})
 }
 
@@ -31,17 +33,25 @@ func (l *bandwidthLimiter) removePacingLocked(ticket *pacingTicket) {
 // next records admitted transfers only. A datagram larger than the configured
 // burst can use one packet's worth of credit, so it always fits in the bucket.
 func (l *bandwidthLimiter) pacingTargetLocked(now time.Time, byteCount int) time.Time {
-	if l.bytesPerSec <= 0 { return time.Time{} }
+	if l.bytesPerSec <= 0 {
+		return time.Time{}
+	}
 	transfer := time.Duration(float64(byteCount) / l.bytesPerSec * float64(time.Second))
 	floor := now.Add(-max(l.burstDuration, transfer))
 	base := l.next
-	if base.IsZero() || base.Before(floor) { base = floor }
+	if base.IsZero() || base.Before(floor) {
+		base = floor
+	}
 	return base.Add(transfer)
 }
 
 func pacingStopped(channels ...<-chan struct{}) bool {
 	for _, ch := range channels {
-		select { case <-ch: return true; default: }
+		select {
+		case <-ch:
+			return true
+		default:
+		}
 	}
 	return false
 }
@@ -50,27 +60,52 @@ func pacingStopped(channels ...<-chan struct{}) bool {
 // only when its own head packet is ready. Clocks are charged only at admission.
 // Locks always follow router -> client; no TrafficManager lock is held here.
 func waitBandwidthUntil(byteCount int, global, client *bandwidthLimiter, revoked, stopped, flowDone <-chan struct{}) bool {
-	if pacingStopped(revoked, stopped, flowDone) { return false }
-	if byteCount <= 0 { return true }
-	if client == nil { client, global = global, nil }
-	if client == nil { return true }
-	if global == client { global = nil }
+	if pacingStopped(revoked, stopped, flowDone) {
+		return false
+	}
+	if byteCount <= 0 {
+		return true
+	}
+	if client == nil {
+		client, global = global, nil
+	}
+	if client == nil {
+		return true
+	}
+	if global == client {
+		global = nil
+	}
 	ticket := &pacingTicket{}
 	client.mu.Lock()
 	client.enqueuePacingLocked(ticket)
 	client.mu.Unlock()
 	joinedGlobal := false
-	lock := func() { if global != nil { global.mu.Lock() }; client.mu.Lock() }
-	unlock := func() { client.mu.Unlock(); if global != nil { global.mu.Unlock() } }
+	lock := func() {
+		if global != nil {
+			global.mu.Lock()
+		}
+		client.mu.Lock()
+	}
+	unlock := func() {
+		client.mu.Unlock()
+		if global != nil {
+			global.mu.Unlock()
+		}
+	}
 	defer func() {
 		lock()
 		client.removePacingLocked(ticket)
-		if joinedGlobal { global.removePacingLocked(ticket) }
+		if joinedGlobal {
+			global.removePacingLocked(ticket)
+		}
 		unlock()
 	}()
 	for {
 		lock()
-		if pacingStopped(revoked, stopped, flowDone) { unlock(); return false }
+		if pacingStopped(revoked, stopped, flowDone) {
+			unlock()
+			return false
+		}
 		now := time.Now()
 		delay := time.Duration(0)
 		ready := client.waiters[0] == ticket
@@ -86,7 +121,10 @@ func waitBandwidthUntil(byteCount int, global, client *bandwidthLimiter, revoked
 		}
 		globalTarget := time.Time{}
 		if ready && global != nil {
-			if !joinedGlobal { global.enqueuePacingLocked(ticket); joinedGlobal = true }
+			if !joinedGlobal {
+				global.enqueuePacingLocked(ticket)
+				joinedGlobal = true
+			}
 			ready = global.waiters[0] == ticket
 			if ready {
 				globalTarget = global.pacingTargetLocked(now, byteCount)
@@ -96,17 +134,24 @@ func waitBandwidthUntil(byteCount int, global, client *bandwidthLimiter, revoked
 		}
 		if ready {
 			client.next = clientTarget
-			if global != nil { global.next = globalTarget }
+			if global != nil {
+				global.next = globalTarget
+			}
 			unlock()
 			return true
 		}
 		clientChanged := client.changed
 		var globalChanged <-chan struct{}
-		if global != nil { globalChanged = global.changed }
+		if global != nil {
+			globalChanged = global.changed
+		}
 		unlock()
 		var timer *time.Timer
 		var wake <-chan time.Time
-		if delay > 0 { timer = time.NewTimer(delay); wake = timer.C }
+		if delay > 0 {
+			timer = time.NewTimer(delay)
+			wake = timer.C
+		}
 		select {
 		case <-wake:
 		case <-clientChanged:
@@ -115,7 +160,9 @@ func waitBandwidthUntil(byteCount int, global, client *bandwidthLimiter, revoked
 		case <-stopped:
 		case <-flowDone:
 		}
-		if timer != nil { timer.Stop() }
+		if timer != nil {
+			timer.Stop()
+		}
 	}
 }
 

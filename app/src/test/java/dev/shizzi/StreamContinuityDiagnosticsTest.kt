@@ -22,6 +22,16 @@ class StreamContinuityDiagnosticsTest {
     }
 
     @Test
+    fun inducedOppositeClosureDoesNotHideTheInitialError() {
+        val d = parseLiveTrafficSnapshot("""{"continuity":{"recent":[
+            {"protocol":"tcp","reason":"write-error","atMillis":1},
+            {"protocol":"tcp","reason":"peer-direction-ended","atMillis":2}
+        ]}}""").attribution
+        assertEquals("write-error", d.lastFlowEndReason)
+        assertEquals(1L, d.lastFlowEndMillis)
+    }
+
+    @Test
     fun missingAndEmptyFlowHistoryRemainCompatible() {
         for (json in listOf("{}", """{"continuity":{"recent":[]}}""")) {
             val d = parseLiveTrafficSnapshot(json).attribution

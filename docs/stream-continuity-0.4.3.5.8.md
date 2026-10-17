@@ -26,3 +26,5 @@ These are Go socket/netstack simulations with mocked Android presence/NAT,
 plus Android JVM unit tests. They do not emulate Android phones or radios and
 do not prove real-world application stability. An on-device prolonged video
 trial is still needed after installation. No release is published.
+
+Additional regressions cover cancellation in the router queue, preservation of spent bandwidth credit, and a one-way shaped UDP downlink exceeding the 60-second idle timeout. The gVisor fixture uses a local unicast host address and a bounded connection context; production loopback/martian checks remain enabled.
