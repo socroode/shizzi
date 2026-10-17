@@ -16,6 +16,7 @@ import javax.crypto.spec.SecretKeySpec
 import org.json.JSONObject
 
 internal class AdminApiException(val status: Int, message: String) : IOException(message)
+internal class AdminTlsUnavailable(cause: IOException) : IOException("Aucun service TLS Shizzi détecté.", cause)
 
 /** One endpoint, token and Wi-Fi network for the complete session. No redirect or write retry. */
 internal class AdminApi(
@@ -140,7 +141,7 @@ internal object AdminConnector {
         secureFactory: () -> AdminApi, legacyFactory: () -> AdminApi,
     ): Pair<AdminApi, JSONObject> {
         val client = try { secureFactory() } catch (failure: IOException) {
-            if (failure !is ConnectException && failure !is SocketTimeoutException &&
+            if (failure !is AdminTlsUnavailable && failure !is ConnectException && failure !is SocketTimeoutException &&
                 failure !is NoRouteToHostException) throw failure
             legacyFactory()
         }

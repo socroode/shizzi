@@ -211,27 +211,27 @@ class MainActivity : Activity() {
         unavailableActions.clear()
         runNetwork {
             try {
-            if (!bindToWifi()) error("Aucun Wi-Fi connecté.")
-            val wifi = boundWifi ?: error("Aucun Wi-Fi connecté.")
-            val (connected, result) = AdminConnector.connect(
-                username, password,
-                secureFactory = {
-                    val pin = RouterTls.pair(this, wifi)
-                    AdminApi(AdminConnector.HTTPS, secure = true) { url ->
-                        RouterTls.connection(url.toString(), pin, wifi)
-                    }
-                },
-                legacyFactory = {
-                    AdminApi(AdminConnector.HTTP, secure = false) { url ->
-                        wifi.openConnection(url) as HttpURLConnection
-                    }
-                },
-            )
-            check(boundWifi == wifi) { "Le Wi-Fi a changé. Reconnectez-vous au routeur." }
-            api = connected
-            routerName = result.optString("routerName", "Shizzi")
-            refresh()
-            runOnUiThread { scheduleAutoRefresh() }
+                if (!bindToWifi()) error("Aucun Wi-Fi connecté.")
+                val wifi = boundWifi ?: error("Aucun Wi-Fi connecté.")
+                val (connected, result) = AdminConnector.connect(
+                    username, password,
+                    secureFactory = {
+                        val pin = RouterTls.pair(this, wifi)
+                        AdminApi(AdminConnector.HTTPS, secure = true) { url ->
+                            RouterTls.connection(url.toString(), pin, wifi)
+                        }
+                    },
+                    legacyFactory = {
+                        AdminApi(AdminConnector.HTTP, secure = false) { url ->
+                            wifi.openConnection(url) as HttpURLConnection
+                        }
+                    },
+                )
+                check(boundWifi == wifi) { "Le Wi-Fi a changé. Reconnectez-vous au routeur." }
+                api = connected
+                routerName = result.optString("routerName", "Shizzi")
+                refresh()
+                runOnUiThread { scheduleAutoRefresh() }
             } finally { loginInFlight = false }
         }
     }
@@ -427,24 +427,24 @@ class MainActivity : Activity() {
             )
             root.addView(row2)
             if (capabilities.cameras) {
-            val cameraMac = account.optString("cameraMac")
-            if (cameraMac.isNotBlank()) {
-                info("Caméra associée : $cameraMac. Aucune IP fixe requise.")
-                button("Retirer la caméra") { command("camera.remove", JSONObject().put("number", n)) }
-            } else {
-                button("Associer une caméra") {
-                    val candidates = (0 until associated.length()).mapNotNull { associated.optJSONObject(it) }
-                    if (candidates.isEmpty()) toast("Aucun appareil Wi-Fi identifié. Connectez la caméra puis actualisez.")
-                    else AlertDialog.Builder(this).setTitle("Sélectionner la caméra connectée")
-                        .setItems(candidates.map { it.optString("ip") + " · " + it.optString("mac") }.toTypedArray()) { _, index ->
-                            val selected = candidates[index]
-                            prompt("PIN du compte $n", "", password = true) { pin ->
-                                command("camera.enroll", JSONObject().put("number", n).put("pin", pin)
-                                    .put("ip", selected.optString("ip")).put("mac", selected.optString("mac")))
-                            }
-                        }.show()
+                val cameraMac = account.optString("cameraMac")
+                if (cameraMac.isNotBlank()) {
+                    info("Caméra associée : $cameraMac. Aucune IP fixe requise.")
+                    button("Retirer la caméra") { command("camera.remove", JSONObject().put("number", n)) }
+                } else {
+                    button("Associer une caméra") {
+                        val candidates = (0 until associated.length()).mapNotNull { associated.optJSONObject(it) }
+                        if (candidates.isEmpty()) toast("Aucun appareil Wi-Fi identifié. Connectez la caméra puis actualisez.")
+                        else AlertDialog.Builder(this).setTitle("Sélectionner la caméra connectée")
+                            .setItems(candidates.map { it.optString("ip") + " · " + it.optString("mac") }.toTypedArray()) { _, index ->
+                                val selected = candidates[index]
+                                prompt("PIN du compte $n", "", password = true) { pin ->
+                                    command("camera.enroll", JSONObject().put("number", n).put("pin", pin)
+                                        .put("ip", selected.optString("ip")).put("mac", selected.optString("mac")))
+                                }
+                            }.show()
+                    }
                 }
-            }
             }
             divider()
         }

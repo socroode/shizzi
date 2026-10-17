@@ -61,6 +61,14 @@ class AdminCompatibilityTest {
         assertFalse(client.secure)
     }
 
+    @Test fun legacyDatapathClosing443BeforeCertificateSelectsHttp() = withRouter { router ->
+        val (client, _) = AdminConnector.connect("admin", "secret", {
+            throw AdminTlsUnavailable(SSLHandshakeException("Peer closed before any certificate"))
+        }, { router.client() })
+        assertFalse(client.secure)
+        assertEquals(1, router.loginCount.get())
+    }
+
     @Test fun tlsCertificateFailureNeverSelectsLegacy() {
         var legacy = false
         assertThrows(SSLHandshakeException::class.java) {
