@@ -1,9 +1,7 @@
 package dev.shizzi.admin
 
-import com.sun.net.httpserver.HttpServer
 import java.net.ConnectException
 import java.net.HttpURLConnection
-import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
 import java.net.URLDecoder
 import java.util.concurrent.Callable
@@ -217,7 +215,7 @@ class AdminCompatibilityTest {
     }
 
     private class Router(val iterations: Int) : AutoCloseable {
-        private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        private val server = SocketTestServer()
         private val executor = Executors.newCachedThreadPool()
         private val sessions = ConcurrentHashMap.newKeySet<String>()
         val loginCount = AtomicInteger(); val stateCount = AtomicInteger()
@@ -285,4 +283,76 @@ class AdminCompatibilityTest {
         fun client(secure: Boolean = false) = AdminApi("http://127.0.0.1:${server.address.port}/api/v1/admin", secure)
         override fun close() { server.stop(0); executor.shutdownNow() }
     }
+
+    /** Small loopback HTTP fixture using Android/JVM-common APIs only. */
+    private class SocketTestServer {
+        private val listener = java.net.ServerSocket(0, 50, java.net.InetAddress.getByName("127.0.0.1"))
+        val address: java.net.InetSocketAddress get() = listener.localSocketAddress as java.net.InetSocketAddress
+        lateinit var executor: java.util.concurrent.Executor
+        private lateinit var handler: (SocketExchange) -> Unit
+        fun createContext(path: String, block: (SocketExchange) -> Unit) { handler = block }
+        fun start() {
+            executor.execute {
+                while (!listener.isClosed) {
+                    val socket = try { listener.accept() } catch (_: java.io.IOException) { break }
+                    executor.execute { socket.use { handler(SocketExchange(it)) } }
+                }
+            }
+        }
+        fun stop(delay: Int) { listener.close() }
+    }
+
+    private class TestHeaders : java.util.HashMap<String, String>() {
+        fun getFirst(key: String): String? = get(key.lowercase())
+        fun set(key: String, value: String) { put(key.lowercase(), value) }
+        fun add(key: String, value: String) { set(key, value) }
+    }
+
+    private class SocketExchange(private val socket: java.net.Socket) {
+        val requestHeaders = TestHeaders()
+        val responseHeaders = TestHeaders()
+        val requestURI: java.net.URI
+        val requestBody: java.io.ByteArrayInputStream
+        val responseBody = java.io.ByteArrayOutputStream()
+        private var status = 200
+        init {
+            socket.soTimeout = 10_000
+            val input = socket.getInputStream()
+            fun line(): String {
+                val buffer = java.io.ByteArrayOutputStream()
+                while (true) {
+                    val value = input.read()
+                    if (value == -1 || value == 10) break
+                    if (value != 13) buffer.write(value)
+                }
+                return buffer.toString("UTF-8")
+            }
+            requestURI = java.net.URI(line().split(' ')[1])
+            while (true) {
+                val header = line()
+                if (header.isEmpty()) break
+                val parts = header.split(':', limit = 2)
+                requestHeaders.set(parts[0], parts[1].trim())
+            }
+            val bytes = ByteArray(requestHeaders.getFirst("Content-Length")?.toInt() ?: 0)
+            var read = 0
+            while (read < bytes.size) {
+                val n = input.read(bytes, read, bytes.size - read)
+                check(n > 0) { "Incomplete test request" }
+                read += n
+            }
+            requestBody = java.io.ByteArrayInputStream(bytes)
+        }
+        fun sendResponseHeaders(code: Int, length: Long) { status = code }
+        fun close() {
+            val bytes = responseBody.toByteArray()
+            val header = buildString {
+                append("HTTP/1.1 ").append(status).append(" Response\r\n")
+                responseHeaders.forEach { (key, value) -> append(key).append(": ").append(value).append("\r\n") }
+                append("Content-Length: ").append(bytes.size).append("\r\nConnection: close\r\n\r\n")
+            }
+            socket.getOutputStream().apply { write(header.toByteArray(Charsets.UTF_8)); write(bytes); flush() }
+        }
+    }
+
 }

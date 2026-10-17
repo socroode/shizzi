@@ -64,7 +64,7 @@ internal object RouterTls {
             // Older datapaths accept TCP then close port 443 before sending any TLS certificate.
             // A certificate validation failure must never be classified as an absent TLS listener.
             if (!certificateSeen.get()) throw AdminTlsUnavailable(failure)
-            throw failure
+            throw IOException(failure.message ?: "Vérification TLS du routeur impossible.", failure)
         } finally { probe.disconnect() }
         val prefs = activity.getSharedPreferences("router_tls_pins", Activity.MODE_PRIVATE)
         val known = prefs.getStringSet("pins", emptySet()).orEmpty()
