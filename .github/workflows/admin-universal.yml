@@ -63,7 +63,7 @@ jobs:
           assert "name='dev.shizzi.admin'" in package
           assert "versionName='0.3.0-universal'" in package
           assert "versionCode='15'" in package
-          sdk = re.search(r"^sdkVersion:\s*'?(\d+)'?", package, re.MULTILINE)
+          sdk = re.search(r"^(?:minSdkVersion|sdkVersion):\s*'?(\d+)'?", package, re.MULTILINE)
           assert sdk and int(sdk.group(1)) == 30, package
           PY
       - name: Prepare APK and validation record
