@@ -481,6 +481,8 @@ class MainActivity : Activity() {
         fun markCallTransportIdle() {
             callTransportActive = false
             runOnUiThread {
+                setShowWhenLocked(false)
+                setTurnScreenOn(false)
                 if (!secureChatActive) {
                     stopAllCallTones()
                     removeSecureChatBridge()
@@ -1034,6 +1036,7 @@ class MainActivity : Activity() {
         if (!CallReceptionService.validActivityIntent(intent)) return
         val id = intent.getStringExtra(CallReceptionService.EXTRA_CALL_ID).orEmpty()
         pendingNotificationAnswer = if (intent.action == CallReceptionService.ACTION_ANSWER) id else ""
+        if (fullscreenView != null) exitVideoFullscreen()
         setShowWhenLocked(true)
         setTurnScreenOn(true)
         if (secureChatActive && ::webView.isInitialized) {
