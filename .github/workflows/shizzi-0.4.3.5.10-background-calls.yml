@@ -113,7 +113,7 @@ jobs:
           if-no-files-found: warn
 
   android-unit-tests:
-    needs: [datapath, client-checks, android-device]
+    needs: [datapath, client-checks]
     if: github.ref == 'refs/heads/feature/0.4.3.5.10-background-calls'
     timeout-minutes: 40
     runs-on: ubuntu-latest
