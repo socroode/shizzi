@@ -73,7 +73,7 @@ jobs:
           script: ./gradlew -PshizziClientsOnly=true :conso:connectedDebugAndroidTest --no-daemon
       - name: Capture emulator logs
         if: failure()
-        run: adb logcat -d > emulator-logcat.txt || true
+        run: timeout 15s adb logcat -d > emulator-logcat.txt || true
       - uses: actions/upload-artifact@v5
         if: always()
         with:
