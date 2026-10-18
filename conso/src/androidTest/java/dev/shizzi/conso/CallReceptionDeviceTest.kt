@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
 import android.os.ParcelFileDescriptor
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -21,6 +22,8 @@ class CallReceptionDeviceTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context: Context get() = instrumentation.targetContext
     private var scenario: ActivityScenario<MainActivity>? = null
+    private var launchedActivity: MainActivity? = null
+    private var launchIntent: Intent? = null
     private val pending = AtomicReference<String?>(null)
     private val rejected = AtomicReference<String?>(null)
 
@@ -55,6 +58,8 @@ class CallReceptionDeviceTest {
         }
         scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario!!.onActivity {
+            launchedActivity = it
+            launchIntent = Intent(it.intent)
             CallReceptionService.setEnabled(it, true)
             CallReceptionService.start(it)
         }
@@ -70,6 +75,15 @@ class CallReceptionDeviceTest {
         CallReceptionService.setEnabled(context, false)
         CallReceptionService.stop(context)
         await("Reception service did not stop") { !CallReceptionService.running }
+        // Answer intentionally changes Activity.intent. ActivityScenario filters lifecycle
+        // callbacks by its original launch intent, so restore it only after all assertions.
+        instrumentation.runOnMainSync {
+            launchedActivity?.let {
+                it.intent = launchIntent
+                it.finish()
+            }
+        }
+        await("Test activity did not finish") { launchedActivity?.isDestroyed != false }
         scenario?.close()
         CallReceptionService.transportForTests = null
         shell("dumpsys deviceidle unforce")
