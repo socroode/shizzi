@@ -15,6 +15,6 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "Shizzi"
-include(":app")
+if (providers.gradleProperty("shizziClientsOnly").orNull != "true") include(":app")
 include(":conso")
 include(":admin")

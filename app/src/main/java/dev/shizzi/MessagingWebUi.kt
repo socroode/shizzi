@@ -111,7 +111,7 @@ internal object MessagingWebUi {
           var remoteVideo=document.getElementById("remoteVideo"), localVideo=document.getElementById("localVideo"), remoteAudio=document.getElementById("remoteAudio");
           var incomingControls=document.getElementById("incomingControls"), activeControls=document.getElementById("activeControls");
           var callPeer=document.getElementById("callPeer"), callStatus=document.getElementById("callStatus");
-          var currentCall=null, incomingCall=null, pc=null, localStream=null, callCursor=0;
+          var currentCall=null, incomingCall=null, pc=null, localStream=null, callCursor=0, callBootstrapped=false;
           var localCandidateQueue=[], remoteCandidateQueues={}, muted=false, cameraEnabled=true, facingMode="user", callPollBusy=false;
 
           function time(ms){if(!ms)return"";var d=new Date(ms);return d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"})}
@@ -412,6 +412,8 @@ internal object MessagingWebUi {
           }
 
           function showIncoming(event){
+            if(incomingCall&&incomingCall.callId===event.callId){maybeAnswerNotification(event.callId);return;}
+            if(currentCall&&currentCall.id===event.callId)return;
             if(currentCall||incomingCall){
               api("call/reject","POST",{callId:event.callId}).catch(function(){});
               return;
@@ -421,6 +423,16 @@ internal object MessagingWebUi {
             showCall(event.kind,event.fromName||event.from,true);
             startIncomingRingtone();
             if(navigator.vibrate)navigator.vibrate([250,150,250,150,450,150,450]);
+            maybeAnswerNotification(event.callId);
+          }
+
+          function maybeAnswerNotification(id){
+            if(!nativeBridgeAvailable())return;
+            try{
+              if(window.ShizziNativeBridge.consumeIncomingAnswer&&window.ShizziNativeBridge.consumeIncomingAnswer(id)){
+                setTimeout(function(){if(incomingCall&&incomingCall.callId===id)acceptIncoming();},0);
+              }
+            }catch(_){}
           }
 
           async function acceptIncoming(){
@@ -538,12 +550,28 @@ internal object MessagingWebUi {
             try{
               var result=await api("call/poll?after="+encodeURIComponent(callCursor),"GET");
               if(result.ok){
+                if(!callBootstrapped&&Object.prototype.hasOwnProperty.call(result,"incomingCall")){
+                  callBootstrapped=true;
+                  callCursor=Number(result.latestCursor||result.cursor||0);
+                  var pending=result.incomingCall;
+                  if(pending){
+                    (pending.candidates||[]).forEach(function(candidate){queueRemoteCandidate(pending.callId,candidate)});
+                    showIncoming(pending);
+                  }
+                  return;
+                }
+                callBootstrapped=true;
                 callCursor=Number(result.cursor||callCursor);
                 for(var i=0;i<result.events.length;i++)await handleCallEvent(result.events[i]);
               }
             }catch(_){}
-            callPollBusy=false;
+            finally{callPollBusy=false;}
           }
+
+          window.ShizziCalls={answerFromNotification:function(id){
+            if(incomingCall&&incomingCall.callId===id)maybeAnswerNotification(id);
+            else pollCalls();
+          }};
 
           async function toggleMute(){
             if(!localStream)return;muted=!muted;

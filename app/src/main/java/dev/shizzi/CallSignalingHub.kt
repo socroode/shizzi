@@ -275,6 +275,9 @@ class CallSignalingHub {
 
         return JSONObject()
             .put("ok", true)
+            .put("accountNumber", account.number)
+            .put("latestCursor", nextSequence - 1L)
+            .put("incomingCall", incomingSnapshot(account.number, accounts))
             .put("cursor", cursor)
             .put(
                 "events",
@@ -285,6 +288,31 @@ class CallSignalingHub {
                 },
             )
             .put("serverTimeMillis", nowMillis)
+    }
+
+    /** Live state for native receivers; never replays an ended call or consumes WebRTC events. */
+    @Synchronized
+    fun incomingState(accountRaw: String, accounts: Map<String, MessagingAccount>, nowMillis: Long): JSONObject {
+        cleanup(nowMillis)
+        val account = enabledAccount(accountRaw, accounts) ?: return error("Compte invalide.")
+        return JSONObject().put("ok", true).put("accountNumber", account.number)
+            .put("incomingCall", incomingSnapshot(account.number, accounts))
+            .put("serverTimeMillis", nowMillis)
+    }
+
+    private fun incomingSnapshot(account: String, accounts: Map<String, MessagingAccount>): Any {
+        val call = liveCallFor(account)?.takeIf {
+            it.callee == account && it.status == ShizziCallStatus.RINGING
+        } ?: return JSONObject.NULL
+        return JSONObject().put("type", "incoming").put("callId", call.id)
+            .put("from", call.caller).put("fromName", accounts[call.caller]?.name?.ifBlank { call.caller } ?: call.caller)
+            .put("kind", call.kind.name.lowercase()).put("createdAtMillis", call.createdAtMillis)
+            .put("expiresAtMillis", call.createdAtMillis + RING_TIMEOUT_MILLIS)
+            .put("description", JSONObject().put("type", "offer").put("sdp", call.offerSdp))
+            .put("candidates", JSONArray().apply {
+                events.filter { it.callId == call.id && it.recipient == account && it.type == "ice" }
+                    .forEach { put(JSONObject(it.candidateJson)) }
+            })
     }
 
     @Synchronized

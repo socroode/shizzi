@@ -2,6 +2,14 @@ package dev.shizzi.conso
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
+import android.widget.Toast
+import android.widget.ScrollView
 import android.graphics.Color
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
@@ -40,6 +48,10 @@ import kotlin.concurrent.thread
 
 class MainActivity : Activity() {
 
+    @Volatile private var pendingNotificationAnswer = ""
+    private var enableAfterNotificationGrant = false
+    private var receptionToggle: Button? = null
+    private var receptionStatus: TextView? = null
     private lateinit var root: LinearLayout
     private lateinit var webView: WebView
     private lateinit var progress: ProgressBar
@@ -126,6 +138,7 @@ class MainActivity : Activity() {
         buildUi()
         registerLocalWifiCallback()
         detectMedia()
+        handleCallNotification(intent)
     }
 
     private fun buildUi() {
@@ -135,7 +148,7 @@ class MainActivity : Activity() {
             setPadding(dp(20), dp(28), dp(20), dp(20))
         }
 
-        menu = LinearLayout(this).apply {
+        val menuContent = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
 
@@ -191,10 +204,23 @@ class MainActivity : Activity() {
                 setPadding(0, dp(14), 0, dp(8))
             })
 
+            addView(sectionLabel("RÉCEPTION DES APPELS"))
+            receptionStatus = TextView(this@MainActivity).apply {
+                textSize = 13f
+                setTextColor(Color.rgb(148, 163, 184))
+                setPadding(0, dp(8), 0, dp(8))
+            }
+            addView(receptionStatus)
+            receptionToggle = primaryButton("Activer les appels en arrière-plan") { toggleCallReception() }
+            addView(receptionToggle)
+            addView(primaryButton("Autoriser la réception écran éteint") { configureCallBattery() })
+
             addView(primaryButton("Actualiser la détection Shizzi") {
                 detectMedia(showFeedback = true)
             })
         }
+
+        menu = ScrollView(this).apply { isFillViewport = true; addView(menuContent) }
 
         progress = ProgressBar(this).apply {
             visibility = View.GONE
@@ -318,7 +344,8 @@ class MainActivity : Activity() {
             menu,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
+                0,
+                1f,
             ),
         )
         root.addView(progress)
@@ -384,6 +411,13 @@ class MainActivity : Activity() {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_RECEPTION_NOTIFICATIONS) {
+            if (enableAfterNotificationGrant && CallReceptionService.notificationsAllowed(this)) enableCallReception()
+            else Toast.makeText(this, "Autorise les notifications pour recevoir les appels.", Toast.LENGTH_LONG).show()
+            enableAfterNotificationGrant = false
+            updateReceptionUi()
+            return
+        }
         if (requestCode != REQUEST_CALL_PERMISSIONS) return
 
         val request = pendingWebPermissionRequest
@@ -417,7 +451,14 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun startIncomingRingtone() {
             callTransportActive = true
-            runOnUiThread { startIncomingCallAlert() }
+            runOnUiThread { if (!CallReceptionService.running) startIncomingCallAlert() }
+        }
+
+        @JavascriptInterface
+        fun consumeIncomingAnswer(callId: String): Boolean {
+            if (!secureChatActive || callId.isBlank() || pendingNotificationAnswer != callId) return false
+            pendingNotificationAnswer = ""
+            return true
         }
 
         @JavascriptInterface
@@ -428,7 +469,7 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun stopCallTone() {
-            runOnUiThread { stopAllCallTones() }
+            runOnUiThread { stopAllCallTones(); CallReceptionService.silenceCurrent() }
         }
 
         @JavascriptInterface
@@ -936,6 +977,10 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (CallReceptionService.isEnabled(this) && CallReceptionService.notificationsAllowed(this) && !CallReceptionService.running) {
+            runCatching { CallReceptionService.start(this) }
+        }
+        updateReceptionUi()
         if (::webView.isInitialized && webView.visibility == View.VISIBLE) {
             bindPortalToWifi()
         } else {
@@ -978,10 +1023,71 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleCallNotification(intent)
+    }
+
+    private fun handleCallNotification(intent: Intent?) {
+        if (intent == null || intent.action !in setOf(CallReceptionService.ACTION_ANSWER, CallReceptionService.ACTION_OPEN)) return
+        if (!CallReceptionService.validActivityIntent(intent)) return
+        val id = intent.getStringExtra(CallReceptionService.EXTRA_CALL_ID).orEmpty()
+        pendingNotificationAnswer = if (intent.action == CallReceptionService.ACTION_ANSWER) id else ""
+        setShowWhenLocked(true)
+        setTurnScreenOn(true)
+        if (secureChatActive && ::webView.isInitialized) {
+            val encoded = JSONObject.quote(id)
+            webView.evaluateJavascript("if(window.ShizziCalls){window.ShizziCalls.answerFromNotification(" + encoded + ");}", null)
+        } else openSecureChat()
+    }
+
+    private fun toggleCallReception() {
+        if (CallReceptionService.isEnabled(this)) {
+            CallReceptionService.setEnabled(this, false)
+            CallReceptionService.stop(this)
+            updateReceptionUi()
+        } else if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            enableAfterNotificationGrant = true
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_RECEPTION_NOTIFICATIONS)
+        } else if (!CallReceptionService.notificationsAllowed(this)) {
+            startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+        } else enableCallReception()
+    }
+
+    private fun enableCallReception() {
+        CallReceptionService.setEnabled(this, true)
+        runCatching { CallReceptionService.start(this) }.onFailure {
+            CallReceptionService.setEnabled(this, false)
+            Toast.makeText(this, "Réception indisponible : " + it.message, Toast.LENGTH_LONG).show()
+        }
+        updateReceptionUi()
+    }
+
+    private fun updateReceptionUi() {
+        val enabled = CallReceptionService.isEnabled(this)
+        receptionToggle?.text = if (enabled) "Désactiver les appels en arrière-plan" else "Activer les appels en arrière-plan"
+        receptionStatus?.text = if (enabled) "Réception activée. Reste connecté au Wi-Fi Shizzi avec ton compte." else "Active ce mode pour sonner pendant que tu utilises une autre application."
+    }
+
+    private fun configureCallBattery() {
+        if (getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)) {
+            Toast.makeText(this, "Shizzi+ est déjà autorisé à fonctionner sans optimisation de batterie.", Toast.LENGTH_LONG).show()
+            return
+        }
+        AlertDialog.Builder(this).setTitle("Recevoir les appels écran éteint")
+            .setMessage("Autorise Shizzi+ à fonctionner sans optimisation de batterie pour garder la connexion locale disponible en veille. Ce mode consomme davantage de batterie.")
+            .setPositiveButton("Ouvrir le réglage") { _, _ ->
+                runCatching { startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + packageName))) }
+                    .onFailure { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+            }.setNegativeButton("Plus tard", null).show()
+    }
+
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
 
     private companion object {
+        const val REQUEST_RECEPTION_NOTIFICATIONS = 4303
         const val PORTAL_HOST = "192.0.2.1"
         const val REQUEST_CALL_PERMISSIONS = 4102
         const val PORTAL_URL = "http://192.0.2.1/"

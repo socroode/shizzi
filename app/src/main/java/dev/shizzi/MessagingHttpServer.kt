@@ -253,7 +253,7 @@ class MessagingHttpServer(
                 }
 
                 method == "GET" && uri == "/api/call/poll" -> {
-                    val result = callHub.poll(
+                    val result = if (query["snapshot"] == "1") callHub.incomingState(account, accounts, now) else callHub.poll(
                         accountRaw = account,
                         afterSequence = query["after"]?.toLongOrNull() ?: 0L,
                         accounts = accounts,

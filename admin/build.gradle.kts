@@ -13,8 +13,8 @@ android {
         applicationId = "dev.shizzi.admin"
         minSdk = 30
         targetSdk = 35
-        versionCode = 14
-        versionName = "0.2.13-candidate"
+        versionCode = 15
+        versionName = "0.3.0-universal"
     }
 
     val keystoreProperties = Properties().apply {
@@ -62,4 +62,5 @@ android {
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20250107")
 }
