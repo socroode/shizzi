@@ -116,6 +116,7 @@ class CallReceptionService : Service() {
                 if (destroyed) return@post
                 try {
                     val incoming = protocol.update(snapshot)
+                    ready = true
                     holdConnectionLocks()
                     updateStatus("Réception active · compte " + protocol.account)
                     if (currentCallId != protocol.incoming?.id.orEmpty()) actionToken = UUID.randomUUID().toString()
@@ -129,6 +130,7 @@ class CallReceptionService : Service() {
     }
 
     private fun connectionFailed(message: String) {
+        ready = false
         protocol.reset()
         currentCallId = ""
         actionToken = ""
@@ -236,6 +238,7 @@ class CallReceptionService : Service() {
         releaseConnectionLocks()
         stopForeground(STOP_FOREGROUND_REMOVE)
         instance = null
+        ready = false
         currentCallId = ""; actionToken = ""; status = "Réception arrêtée"
         super.onDestroy()
     }
@@ -256,6 +259,7 @@ class CallReceptionService : Service() {
         @Volatile private var instance: CallReceptionService? = null
         @Volatile private var actionToken = ""
         @Volatile var currentCallId = ""; private set
+        @Volatile var ready = false; private set
         @Volatile var status = "Réception arrêtée"; private set
         @Volatile internal var transportForTests: CallReceptionTransport? = null
         val running: Boolean get() = instance != null

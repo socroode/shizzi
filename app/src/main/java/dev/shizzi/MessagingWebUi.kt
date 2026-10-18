@@ -618,7 +618,8 @@ internal object MessagingWebUi {
           document.getElementById("flipCamera").onclick=switchCamera;
 
           window.addEventListener("beforeunload",function(){
-            var id=currentCall&&currentCall.id?currentCall.id:(incomingCall&&incomingCall.callId?incomingCall.callId:"");
+            // An unanswered call stays available to the native background receiver.
+            var id=currentCall&&currentCall.id?currentCall.id:"";
             if(!id)return;
             if(nativeBridgeAvailable()){
               try{window.ShizziNativeBridge.request("call/end","POST",JSON.stringify({callId:id}))}catch(_){}

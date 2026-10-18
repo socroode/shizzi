@@ -451,7 +451,7 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun startIncomingRingtone() {
             callTransportActive = true
-            runOnUiThread { if (!CallReceptionService.running) startIncomingCallAlert() }
+            runOnUiThread { if (!CallReceptionService.ready) startIncomingCallAlert() }
         }
 
         @JavascriptInterface
