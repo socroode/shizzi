@@ -70,7 +70,7 @@ jobs:
           profile: pixel_6
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: ./gradlew -PshizziClientsOnly=true :conso:connectedDebugAndroidTest --no-daemon
+          script: ./gradlew -PshizziClientsOnly=true :conso:connectedDebugAndroidTest --no-daemon || { adb logcat -d > emulator-logcat.txt; exit 1; }
       - name: Capture emulator logs
         if: failure()
         run: timeout 15s adb logcat -d > emulator-logcat.txt || true

@@ -33,7 +33,7 @@ class CallReceptionDeviceTest {
             if (condition()) return
             Thread.sleep(100)
         }
-        assertTrue(message, condition())
+        assertTrue(message + "; status=" + CallReceptionService.status + "; call=" + CallReceptionService.currentCallId, condition())
     }
     private fun incomingNotification() = context.getSystemService(NotificationManager::class.java)
         .activeNotifications.firstOrNull { it.id == CallReceptionService.NOTIFICATION_INCOMING }?.notification
@@ -42,6 +42,7 @@ class CallReceptionDeviceTest {
         shell("input keyevent 224")
         shell("wm dismiss-keyguard")
         instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.POST_NOTIFICATIONS)
+        assertTrue("Notification permission must be granted", CallReceptionService.notificationsAllowed(context))
         CallReceptionService.transportForTests = object : CallReceptionTransport {
             override fun poll(): JSONObject = JSONObject().put("ok", true).put("accountNumber", "1002")
                 .put("serverTimeMillis", System.currentTimeMillis())
@@ -57,7 +58,11 @@ class CallReceptionDeviceTest {
             CallReceptionService.setEnabled(it, true)
             CallReceptionService.start(it)
         }
-        await("Foreground reception service did not start") { CallReceptionService.running }
+        await("Foreground reception service did not start") {
+            CallReceptionService.running && context.getSystemService(NotificationManager::class.java).activeNotifications.any {
+                it.id == CallReceptionService.NOTIFICATION_CONNECTION
+            }
+        }
     }
 
     @After fun cleanup() {
@@ -93,6 +98,7 @@ class CallReceptionDeviceTest {
         shell("dumpsys battery unplug")
         shell("input keyevent 223")
         shell("dumpsys deviceidle force-idle")
+        assertTrue("Device did not enter Doze", context.getSystemService(android.os.PowerManager::class.java).isDeviceIdleMode)
         pending.set("call:doze")
         await("No incoming notification during exempt Doze") { incomingNotification() != null }
         assertTrue(CallReceptionService.running)

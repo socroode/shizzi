@@ -39,6 +39,7 @@ class CallReceptionService : Service() {
     private val main = Handler(Looper.getMainLooper())
     private val protocol = CallReceptionProtocol()
     private var foreground = false
+    private var foregroundNotificationId = NOTIFICATION_CONNECTION
     private var scheduled = false
     private var displayed = ""
     private var lastStatus = ""
@@ -77,8 +78,7 @@ class CallReceptionService : Service() {
         }
         if (!foreground) {
             val notification = listeningNotification("Recherche du routeur Shizzi…")
-            if (Build.VERSION.SDK_INT >= 34) startForeground(NOTIFICATION_CONNECTION, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
-            else startForeground(NOTIFICATION_CONNECTION, notification)
+            promote(NOTIFICATION_CONNECTION, notification)
             foreground = true
         }
         if (intent?.action == ACTION_REJECT) {
@@ -117,7 +117,9 @@ class CallReceptionService : Service() {
                 try {
                     val incoming = protocol.update(snapshot)
                     ready = true
-                    holdConnectionLocks()
+                    runCatching { holdConnectionLocks() }.onFailure {
+                        android.util.Log.w("ShizziCallReception", "Verrou de veille indisponible", it)
+                    }
                     updateStatus("Réception active · compte " + protocol.account)
                     if (currentCallId != protocol.incoming?.id.orEmpty()) actionToken = UUID.randomUUID().toString()
                     currentCallId = protocol.incoming?.id.orEmpty()
@@ -130,6 +132,7 @@ class CallReceptionService : Service() {
     }
 
     private fun connectionFailed(message: String) {
+        android.util.Log.w("ShizziCallReception", message)
         ready = false
         protocol.reset()
         currentCallId = ""
@@ -144,7 +147,7 @@ class CallReceptionService : Service() {
         if (lastStatus == message) return
         lastStatus = message
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
-        notifications.notify(NOTIFICATION_CONNECTION, listeningNotification(message))
+        if (foregroundNotificationId == NOTIFICATION_CONNECTION) notifications.notify(NOTIFICATION_CONNECTION, listeningNotification(message))
     }
 
     private fun listeningNotification(message: String): Notification = Notification.Builder(this, CHANNEL_CONNECTION)
@@ -174,7 +177,9 @@ class CallReceptionService : Service() {
         else builder.addPerson(caller)
             .addAction(Notification.Action.Builder(null, "Refuser", decline).build())
             .addAction(Notification.Action.Builder(null, "Répondre", answer).build())
-        notifications.notify(NOTIFICATION_INCOMING, builder.build())
+        // Android requires CallStyle to be associated with the foreground service itself.
+        promote(NOTIFICATION_INCOMING, builder.build())
+        notifications.cancel(NOTIFICATION_CONNECTION)
 
         val audio = getSystemService(AudioManager::class.java)
         if (notifications.currentInterruptionFilter == NotificationManager.INTERRUPTION_FILTER_ALL) {
@@ -207,8 +212,17 @@ class CallReceptionService : Service() {
     private fun stopAlert() {
         runCatching { ringtone?.stop() }; ringtone = null
         getSystemService(Vibrator::class.java)?.cancel()
+        if (!destroyed && foreground && foregroundNotificationId == NOTIFICATION_INCOMING) {
+            promote(NOTIFICATION_CONNECTION, listeningNotification(lastStatus))
+        }
         notifications.cancel(NOTIFICATION_INCOMING)
         displayed = ""
+    }
+
+    private fun promote(id: Int, notification: Notification) {
+        if (Build.VERSION.SDK_INT >= 34) startForeground(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        else startForeground(id, notification)
+        foregroundNotificationId = id
     }
 
     private fun holdConnectionLocks() {
@@ -237,6 +251,7 @@ class CallReceptionService : Service() {
         stopAlert()
         releaseConnectionLocks()
         stopForeground(STOP_FOREGROUND_REMOVE)
+        notifications.cancel(NOTIFICATION_CONNECTION)
         instance = null
         ready = false
         currentCallId = ""; actionToken = ""; status = "Réception arrêtée"
