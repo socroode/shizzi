@@ -12,7 +12,10 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
+import android.text.SpannableString
+import android.text.Spanned
 import android.text.InputType
+import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
@@ -47,6 +50,7 @@ class MainActivity : Activity() {
     private var routerName: String = "Shizzi"
     private var lastState: JSONObject? = null
     private var lastRenderedStateJson: String = ""
+    private val accountHeadings = linkedMapOf<String, Pair<TextView, String>>()
     private var activityResumed = false
     private var pendingUploadFolderId: String? = null
     private var pendingUploadFolderName: String? = null
@@ -177,6 +181,7 @@ class MainActivity : Activity() {
     }
 
     private fun showLogin(message: String = "") {
+        accountHeadings.clear()
         stopAutoRefresh()
         lastRenderedStateJson = ""
         root.removeAllViews()
@@ -260,14 +265,18 @@ class MainActivity : Activity() {
                         lastRenderedStateJson = snapshot
                         scroll.post { scroll.scrollTo(0, oldScrollY) }
                     }
+                    // Presence continues refreshing while a form is being edited.
+                    updateAccountConnections(response.optJSONObject("traffic"))
                 }
             } catch (failure: Throwable) {
                 if (api !== session) return@thread
                 if (failure is AdminApiException && failure.status == 401) {
                     runOnUiThread { if (api === session) showLogin("Session Admin expirée.") }
-                } else if (manual) {
+                } else {
                     runOnUiThread {
-                        toast(failure.message ?: failure.javaClass.simpleName)
+                        if (api !== session) return@runOnUiThread
+                        updateAccountConnections(null)
+                        if (manual) toast(failure.message ?: failure.javaClass.simpleName)
                     }
                 }
             } finally {
@@ -297,6 +306,7 @@ class MainActivity : Activity() {
     }
 
     private fun showDashboard(response: JSONObject) {
+        accountHeadings.clear()
         root.removeAllViews()
         routerName = response.optString("routerName", routerName)
         title("Shizzi Admin — $routerName")
@@ -322,6 +332,7 @@ class MainActivity : Activity() {
         } else info("Batterie : information indisponible sur cette version de Shizzi.")
 
         if (capabilities.accounts) renderAccounts(state.getJSONArray("accounts"), traffic.optJSONArray("associatedClients") ?: JSONArray())
+        updateAccountConnections(response.optJSONObject("traffic"))
         if (capabilities.offers) renderOffersAndVouchers(state.getJSONArray("offers"), state.getJSONArray("vouchers"))
         if (capabilities.mediaOffers) renderMediaOffersAndVouchers(state.getJSONArray("mediaOffers"), state.getJSONArray("mediaVouchers"))
         if (capabilities.devices) renderDevices(traffic.getJSONArray("portalAuthorizations"))
@@ -373,9 +384,15 @@ class MainActivity : Activity() {
             } else {
                 "Media inactif"
             }
+            val heading = TextView(this).apply {
+                textSize = 16f
+                setTypeface(typeface, Typeface.BOLD)
+                setPadding(0, dp(6), 0, dp(4))
+            }
+            accountHeadings[n] = heading to "$label — N° $n"
+            root.addView(heading)
             info(
-                "$label — N° $n\n" +
-                    (if (enabled) "Actif" else "Suspendu") +
+                (if (enabled) "Actif" else "Suspendu") +
                     " · restant " + formatBytes(account.optLong("dataBalanceBytes")) +
                     " · utilisé " + formatBytes(
                     account.optLong("totalUpBytes") + account.optLong("totalDownBytes"),
@@ -446,6 +463,23 @@ class MainActivity : Activity() {
                 }
             }
             divider()
+        }
+    }
+
+    private fun updateAccountConnections(traffic: JSONObject?) {
+        for ((number, entry) in accountHeadings) {
+            val (view, label) = entry
+            val status = AccountConnectionStatus.fromTraffic(number, traffic)
+            val prefix = "$label · "
+            val color = when (status) {
+                AccountConnectionStatus.CONNECTED -> 0xFF1B5E20.toInt()
+                AccountConnectionStatus.DISCONNECTED -> 0xFFB71C1C.toInt()
+                AccountConnectionStatus.CHECKING -> 0xFF795500.toInt()
+                AccountConnectionStatus.UNAVAILABLE -> 0xFF616161.toInt()
+            }
+            view.text = SpannableString(prefix + status.label).apply {
+                setSpan(ForegroundColorSpan(color), prefix.length, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
         }
     }
 
