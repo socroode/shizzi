@@ -13,8 +13,8 @@ android {
         applicationId = "dev.shizzi.admin"
         minSdk = 30
         targetSdk = 35
-        versionCode = 17
-        versionName = "0.3.2-universal"
+        versionCode = 18
+        versionName = "0.3.3-universal"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

@@ -29,10 +29,34 @@ class UnifiedAccountCardTest {
         for (i in 1..6) put(JSONObject().put("accountNumber", "100$i").put("ip", "10.0.0.$i")
             .put("mac", "02:00:00:00:00:0$i").put("presence", "unknown").put("authorized", i % 2 == 1))
     })
-    private fun response() = JSONObject().put("ok", true).put("routerName", "Routeur de test")
-        .put("state", JSONObject().put("accounts", JSONArray().apply {
-            for (i in 1..6) put(JSONObject().put("number", "100$i").put("name", if (i == 6) "" else "Client $i").put("enabled", true))
-        })).put("traffic", traffic())
+    private fun response(): JSONObject {
+        val now = System.currentTimeMillis()
+        val day = 86_400_000L
+        val accounts = JSONArray()
+        for (i in 1..6) {
+            val account = JSONObject().put("number", "100$i").put("name", if (i == 6) "" else "Client $i")
+                .put("enabled", i != 5).put("dataBalanceBytes", 0L).put("dataValidUntilMillis", 0L)
+                .put("dataDownloadBps", 2_000_000L).put("dataUploadBps", 1_000_000L)
+                .put("unlimitedUntilMillis", 0L).put("unlimitedDownloadBps", 4_000_000L)
+                .put("unlimitedUploadBps", 2_000_000L).put("unlimitedPlanName", "Illimité Confort")
+            when (i) {
+                1 -> account.put("dataBalanceBytes", 5_000_000_000L).put("dataValidUntilMillis", now + 30 * day)
+                2 -> account.put("unlimitedUntilMillis", now + 3 * day).put("dataBalanceBytes", 7_000_000_000L)
+                    .put("dataValidUntilMillis", now + 30 * day)
+                3 -> account.put("unlimitedUntilMillis", now + 2 * day).put("unlimitedPlanName", "Illimité Éco")
+                    .put("unlimitedDownloadBps", 1_000_000L).put("unlimitedUploadBps", 1_000_000L)
+                4 -> account.put("dataBalanceBytes", 1_000_000_000L).put("dataValidUntilMillis", now - day)
+                5 -> account.put("unlimitedUntilMillis", now + 5 * day)
+            }
+            accounts.put(account)
+        }
+        val vouchers = JSONArray().put(JSONObject().put("redeemedByAccount", "1001").put("redeemedAtMillis", now - day)
+            .put("snapshotVersion", 1).put("snapshotKind", "DATA").put("snapshotName", "Data 12 Go"))
+            .put(JSONObject().put("redeemedByAccount", "1002").put("redeemedAtMillis", now - 1000)
+                .put("snapshotVersion", 1).put("snapshotKind", "DATA").put("snapshotName", "Data 20 Go"))
+        return JSONObject().put("ok", true).put("routerName", "Routeur de test")
+            .put("state", JSONObject().put("accounts", accounts).put("vouchers", vouchers)).put("traffic", traffic())
+    }
     private fun invoke(activity: MainActivity, method: String, value: JSONObject?) {
         MainActivity::class.java.getDeclaredMethod(method, JSONObject::class.java).apply { isAccessible = true }.invoke(activity, value)
     }
@@ -88,6 +112,43 @@ class UnifiedAccountCardTest {
             invoke(activity, "updateAccountSessions", traffic())
             assertTrue((all.first { it.tag == "account:1001:details" } as Button).isEnabled)
             assertEquals("saisie conservée", input.text.toString())
+        }
+    }
+
+    @Test fun activePlansAndLastRechargesStayInTheirOwnAccountCards() {
+        scenario.onActivity { activity ->
+            val all = views(activity.window.decorView)
+            fun plan(number: String) = (all.first { it.tag == "account:$number:plan" } as TextView).text.toString()
+            assertTrue(plan("1001").contains("Forfait actif : Data"))
+            assertTrue(plan("1001").contains("Dernière recharge : Data 12 Go"))
+            assertFalse(plan("1001").contains("Data 20 Go"))
+            assertTrue(plan("1002").contains("Forfait actif : Illimité Confort"))
+            assertTrue(plan("1002").contains("Data en attente"))
+            assertTrue(plan("1002").contains("Dernière recharge : Data 20 Go"))
+            assertTrue(plan("1003").contains("Forfait actif : Illimité Éco"))
+            assertTrue(plan("1003").contains("↓ 1 Mbit/s · ↑ 1 Mbit/s"))
+            assertTrue(plan("1004").contains("Forfait actif : aucun"))
+            assertTrue(plan("1004").contains("Data expirée"))
+            assertTrue(plan("1005").contains("Forfait suspendu"))
+            assertTrue(plan("1006").contains("Forfait actif : aucun"))
+        }
+    }
+
+    @Test fun planRefreshPreservesInputAndInvalidatesOldPlanOnFailure() {
+        scenario.onActivity { activity ->
+            val all = views(activity.window.decorView)
+            val input = all.filterIsInstance<EditText>().first()
+            input.setText("modification conservée")
+            val state = response().getJSONObject("state")
+            state.getJSONArray("accounts").getJSONObject(0).put("unlimitedUntilMillis", System.currentTimeMillis() + 86_400_000L)
+                .put("unlimitedPlanName", "Offre spéciale").put("dataBalanceBytes", 0L)
+            invoke(activity, "updateAccountPlans", state)
+            val plan = all.first { it.tag == "account:1001:plan" } as TextView
+            assertTrue(plan.text.contains("Forfait actif : Illimité · Offre spéciale"))
+            assertEquals("modification conservée", input.text.toString())
+            invoke(activity, "updateAccountPlans", null)
+            assertEquals("Forfait : information indisponible", plan.text.toString())
+            assertEquals("modification conservée", input.text.toString())
         }
     }
 }

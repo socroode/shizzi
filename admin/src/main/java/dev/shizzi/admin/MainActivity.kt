@@ -53,6 +53,7 @@ class MainActivity : Activity() {
     private data class AccountCard(
         val heading: TextView,
         val label: String,
+        val planText: TextView,
         val sessionText: TextView,
         val detailsButton: Button,
         var session: AccountSessionSummary? = null,
@@ -274,6 +275,7 @@ class MainActivity : Activity() {
                     }
                     // Presence continues refreshing while a form is being edited.
                     updateAccountSessions(response.optJSONObject("traffic"))
+                    updateAccountPlans(response.optJSONObject("state"))
                 }
             } catch (failure: Throwable) {
                 if (api !== session) return@thread
@@ -283,6 +285,7 @@ class MainActivity : Activity() {
                     runOnUiThread {
                         if (api !== session) return@runOnUiThread
                         updateAccountSessions(null)
+                        updateAccountPlans(null)
                         if (manual) toast(failure.message ?: failure.javaClass.simpleName)
                     }
                 }
@@ -340,6 +343,7 @@ class MainActivity : Activity() {
 
         if (capabilities.accounts) renderAccounts(state.getJSONArray("accounts"), traffic.optJSONArray("associatedClients") ?: JSONArray())
         updateAccountSessions(response.optJSONObject("traffic"))
+        updateAccountPlans(response.optJSONObject("state"))
         if (capabilities.devices) {
             val accounts = state.optJSONArray("accounts") ?: JSONArray()
             val numbers = (0 until accounts.length()).mapNotNull { accounts.optJSONObject(it)?.optString("number") }.toSet()
@@ -408,10 +412,15 @@ class MainActivity : Activity() {
             }
             heading.tag = "account:$n:heading"
             root.addView(heading)
+            val planText = TextView(this).apply {
+                textSize = 14f
+                setPadding(0, dp(4), 0, dp(6))
+                tag = "account:$n:plan"
+            }
+            root.addView(planText)
             info(
                 (if (enabled) "Actif" else "Suspendu") +
-                    " · restant " + formatBytes(account.optLong("dataBalanceBytes")) +
-                    " · utilisé " + formatBytes(
+                    " · trafic cumulé " + formatBytes(
                     account.optLong("totalUpBytes") + account.optLong("totalDownBytes"),
                 ) + if (account.has("mediaUntilMillis")) "\n" + mediaStatus else "",
             )
@@ -424,7 +433,7 @@ class MainActivity : Activity() {
             val details = makeButton("Détails") { showAccountSessionDetails(n) }.apply {
                 tag = "account:$n:details"
             }
-            accountCards[n] = AccountCard(heading, "$label — N° $n", sessionText, details)
+            accountCards[n] = AccountCard(heading, "$label — N° $n", planText, sessionText, details)
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             row.addView(
                 makeButton(if (enabled) "Suspendre" else "Activer") {
@@ -510,6 +519,19 @@ class MainActivity : Activity() {
             }
             card.sessionText.text = summary.information
             card.detailsButton.isEnabled = summary.sessions.isNotEmpty()
+        }
+    }
+
+    private fun updateAccountPlans(state: JSONObject?) {
+        val accounts = state?.optJSONArray("accounts")
+        val byNumber = if (accounts == null) emptyMap() else (0 until accounts.length())
+            .mapNotNull { accounts.optJSONObject(it) }.associateBy { it.optString("number") }
+        val now = System.currentTimeMillis()
+        for ((number, card) in accountCards) {
+            card.planText.text = AccountPlanLabel.format(
+                byNumber[number], state?.optJSONArray("offers"), state?.optJSONArray("vouchers"),
+                now, ::formatBytes, ::formatDateTime,
+            )
         }
     }
 
