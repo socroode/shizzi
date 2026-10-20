@@ -1,6 +1,5 @@
 package dev.shizzi.admin
 
-import android.graphics.Bitmap
 import android.view.View
 import android.view.ViewGroup
 import android.view.inspector.WindowInspector
@@ -17,7 +16,6 @@ import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.io.File
 
 /** Real Android views with a six-account simulated admin response. No router/network claims. */
 @RunWith(AndroidJUnit4::class)
@@ -57,14 +55,6 @@ class UnifiedAccountCardTest {
                 val summary = all.first { it.tag == "account:100$i:session" } as TextView
                 assertTrue(summary.text.contains(if (i % 2 == 1) "Internet autorisé" else "Internet bloqué"))
             }
-        }
-        val bitmap = instrumentation.uiAutomation.takeScreenshot()
-        if (bitmap != null) {
-            val context = instrumentation.targetContext
-            File(context.getExternalFilesDir(null), "unified-accounts.png").outputStream().use {
-                bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
-            }
-            bitmap.recycle()
         }
     }
 

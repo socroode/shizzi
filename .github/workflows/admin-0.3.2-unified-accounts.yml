@@ -145,7 +145,6 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
             ./gradlew -PshizziClientsOnly=true :admin:connectedDebugAndroidTest --no-daemon || { adb logcat -d > emulator-logcat.txt; exit 1; }
-            adb pull /sdcard/Android/data/dev.shizzi.admin/files/unified-accounts.png unified-accounts.png
       - name: Upload Android UI results
         if: always()
         uses: actions/upload-artifact@v5
@@ -154,6 +153,5 @@ jobs:
           path: |
             admin/build/outputs/androidTest-results/
             admin/build/reports/androidTests/
-            unified-accounts.png
             emulator-logcat.txt
           if-no-files-found: warn
