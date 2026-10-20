@@ -70,6 +70,32 @@ class UnifiedAccountCardTest {
     }
     @After fun closeActivity() { scenario.close() }
 
+    @Test fun routerBatteryUpdatesWithoutRebuildingAccountsOrLosingEdits() {
+        scenario.onActivity { activity ->
+            val create = views(activity.window.decorView).filterIsInstance<Button>()
+                .first { it.text.toString() == "Créer un compte" }
+            create.performClick()
+            val all = views(activity.window.decorView)
+            val input = all.filterIsInstance<EditText>().first()
+            input.setText("saisie préservée")
+            val batteryView = all.first { it.tag == "router:battery" } as TextView
+            assertEquals("Batterie du routeur : indisponible", batteryView.text.toString())
+            val charging = JSONObject().put("state", JSONObject().put("battery",
+                JSONObject().put("available", true).put("percent", 78).put("charging", true)))
+            invoke(activity, "updateRouterBattery", charging)
+            assertEquals("Batterie du routeur : 78 % · En charge", batteryView.text.toString())
+            assertEquals("saisie préservée", input.text.toString())
+            assertSame(batteryView, views(activity.window.decorView).first { it.tag == "router:battery" })
+            charging.getJSONObject("state").getJSONObject("battery")
+                .put("percent", 77).put("charging", false)
+            invoke(activity, "updateRouterBattery", charging)
+            assertEquals("Batterie du routeur : 77 % · Sur batterie", batteryView.text.toString())
+            invoke(activity, "updateRouterBattery", null)
+            assertEquals("Batterie du routeur : connexion indisponible", batteryView.text.toString())
+            assertEquals("saisie préservée", input.text.toString())
+        }
+    }
+
     @Test fun applicationHasItsOwnIdentityAndName() {
         val context = instrumentation.targetContext
         assertEquals("dev.shizzi.accounts", context.packageName)

@@ -41,6 +41,7 @@ class MainActivity : Activity() {
     private val unavailableActions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private var routerName: String = "Shizzi"
     private var lastState: JSONObject? = null
+    private var routerBatteryView: TextView? = null
     private var lastRenderedStateJson: String = ""
     private var showAccountCreation = false
     private val liveTraffic = AccountLiveTraffic()
@@ -166,6 +167,7 @@ class MainActivity : Activity() {
         stopAutoRefresh()
         lastRenderedStateJson = ""
         root.removeAllViews()
+        routerBatteryView = null
         title("Shizzi Comptes")
         info(
             "Comptes, forfaits et débits Shizzi. " +
@@ -248,6 +250,8 @@ class MainActivity : Activity() {
                         lastRenderedStateJson = snapshot
                         scroll.post { scroll.scrollTo(0, oldScrollY) }
                     }
+                    // The router battery is refreshed in-place even when the form stays open.
+                    updateRouterBattery(response)
                     // Presence continues refreshing while a form is being edited.
                     updateAccountSessions(response.optJSONObject("traffic"))
                     updateAccountPlans(response.optJSONObject("state"))
@@ -261,6 +265,7 @@ class MainActivity : Activity() {
                     runOnUiThread {
                         if (api !== session) return@runOnUiThread
                         updateAccountSessions(null)
+                        updateRouterBattery(null)
                         updateAccountPlans(null)
                         clearLiveTraffic()
                         updateAccountRates(null)
@@ -293,6 +298,10 @@ class MainActivity : Activity() {
         refreshHandler.removeCallbacks(autoRefreshRunnable)
     }
 
+    private fun updateRouterBattery(response: JSONObject?) {
+        routerBatteryView?.text = RouterBatteryLabel.fromResponse(response)
+    }
+
     private fun showDashboard(response: JSONObject) {
         lastState = response
         accountCards.clear()
@@ -306,6 +315,13 @@ class MainActivity : Activity() {
         header.addView(makeButton("Actualiser") { refresh() }, weighted())
         header.addView(makeButton("Déconnexion") { logout() }, weighted())
         root.addView(header)
+        routerBatteryView = TextView(this).apply {
+            textSize = 15f
+            setPadding(0, dp(8), 0, dp(8))
+            tag = "router:battery"
+        }
+        root.addView(routerBatteryView)
+        updateRouterBattery(response)
         info("Comptes · débits mesurés chaque seconde lorsque cet écran est visible.")
         val state = response.optJSONObject("state") ?: JSONObject()
         capabilities = AdminCapabilities(response)
