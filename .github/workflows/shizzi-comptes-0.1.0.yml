@@ -147,6 +147,7 @@ jobs:
             ./gradlew -PshizziClientsOnly=true :admin:assembleDebug --no-daemon
             adb install -r admin/build/outputs/apk/debug/admin-debug.apk
             ./gradlew -PshizziAccountsOnly=true :accounts:connectedDebugAndroidTest --no-daemon || { adb logcat -d > emulator-logcat.txt; exit 1; }
+            adb install -r accounts/build/outputs/apk/debug/accounts-debug.apk
             adb shell pm path dev.shizzi.admin
             adb shell pm path dev.shizzi.accounts
       - name: Upload Android UI results
