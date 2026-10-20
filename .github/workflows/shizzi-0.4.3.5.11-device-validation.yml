@@ -1,0 +1,62 @@
+name: Shizzi 0.4.3.5.11 delivery and client device validation
+on:
+  push:
+    branches: [validation/0.4.3.5.11-delivery]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  android-device:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: actions/download-artifact@v5
+        with:
+          name: Shizzi-0.4.3.5.11-candidate
+          path: release-output
+          run-id: 39414265230
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install real downloaded APK and test reception on Android 15
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            adb install -r release-output/Shizzi-Plus-0.3.0-from-portal.apk
+            adb shell dumpsys package dev.shizzi.conso | grep 'versionName=0.3.0-background-calls'
+            adb shell dumpsys package dev.shizzi.conso | grep 'versionCode=17'
+            adb shell am start -W -n dev.shizzi.conso/.MainActivity
+            sleep 2
+            adb shell pidof dev.shizzi.conso
+            adb uninstall dev.shizzi.conso
+            ./gradlew -PshizziClientsOnly=true :conso:connectedDebugAndroidTest --no-daemon || { adb logcat -d > emulator-logcat.txt; exit 1; }
+      - name: Capture emulator logs
+        if: failure()
+        run: timeout 15s adb logcat -d > emulator-logcat.txt || true
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: Shizzi-background-calls-device-reports
+          path: |
+            conso/build/outputs/androidTest-results/
+            conso/build/reports/androidTests/
+            emulator-logcat.txt
+          if-no-files-found: warn
+

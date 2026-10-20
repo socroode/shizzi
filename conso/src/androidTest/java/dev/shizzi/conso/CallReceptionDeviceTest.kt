@@ -27,9 +27,10 @@ class CallReceptionDeviceTest {
     private val pending = AtomicReference<String?>(null)
     private val rejected = AtomicReference<String?>(null)
 
-    private fun shell(command: String) {
-        ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command)).use { it.readBytes() }
-    }
+    private fun shell(command: String): String =
+        ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command)).use {
+            it.readBytes().toString(Charsets.UTF_8)
+        }
     private fun await(message: String, condition: () -> Boolean) {
         val until = android.os.SystemClock.elapsedRealtime() + 12_000
         while (android.os.SystemClock.elapsedRealtime() < until) {
@@ -111,8 +112,10 @@ class CallReceptionDeviceTest {
         shell("input keyevent 3")
         shell("dumpsys battery unplug")
         shell("input keyevent 223")
-        shell("dumpsys deviceidle force-idle")
-        assertTrue("Device did not enter Doze", context.getSystemService(android.os.PowerManager::class.java).isDeviceIdleMode)
+        val power = context.getSystemService(android.os.PowerManager::class.java)
+        await("Screen did not turn off before forcing Doze") { !power.isInteractive }
+        val result = shell("dumpsys deviceidle force-idle")
+        await("Device did not enter Doze: $result") { power.isDeviceIdleMode }
         pending.set("call:doze")
         await("No incoming notification during exempt Doze") { incomingNotification() != null }
         assertTrue(CallReceptionService.running)
