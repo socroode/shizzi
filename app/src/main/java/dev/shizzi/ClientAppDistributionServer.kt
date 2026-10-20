@@ -11,6 +11,7 @@ import java.security.MessageDigest
 import java.util.zip.ZipFile
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import org.json.JSONObject
 
 data class ClientAppDistributionInfo(
     val available: Boolean,
@@ -35,7 +36,9 @@ class ClientAppDistributionServer(
     private val running = AtomicBoolean(false)
     private val acceptExecutor = Executors.newSingleThreadExecutor()
     private val clientExecutor = Executors.newFixedThreadPool(2)
-    private var serverSocket: ServerSocket? = null
+    @Volatile private var serverSocket: ServerSocket? = null
+
+    val port: Int get() = if (running.get()) serverSocket?.localPort ?: 0 else 0
 
     val info: ClientAppDistributionInfo by lazy {
         inspectClientAppBytes(apkBytes)
@@ -49,7 +52,7 @@ class ClientAppDistributionServer(
         )
     }
 
-    fun start(): Boolean {
+    @Synchronized fun start(): Boolean {
         if (!info.available || !adminInfo.available) {
             SessionLog.warn(
                 "Embedded app distribution asset unavailable: " +
@@ -65,7 +68,7 @@ class ClientAppDistributionServer(
                 bind(
                     InetSocketAddress(
                         InetAddress.getByName(LOOPBACK_HOST),
-                        PORT,
+                        0,
                     ),
                 )
             }
@@ -232,15 +235,28 @@ class ClientAppDistributionServer(
 
     companion object {
         const val LOOPBACK_HOST = "127.0.0.1"
-        const val PORT = 8091
-        const val CLIENT_VERSION = "0.2.11-candidate"
-        const val CLIENT_FILE_NAME = "Shizzi-Plus-0.2.11-candidate.apk"
+        const val CLIENT_VERSION = "0.3.0-background-calls"
+        const val CLIENT_FILE_NAME = "Shizzi-Plus-0.3.0-background-calls.apk"
         const val ASSET_PATH = "shizzi/Shizzi-Plus.apk"
-        const val ADMIN_VERSION = "0.2.11-candidate"
-        const val ADMIN_FILE_NAME = "Shizzi-Admin-0.2.11-candidate.apk"
+        const val ADMIN_VERSION = "0.3.0-universal"
+        const val ADMIN_FILE_NAME = "Shizzi-Admin-0.3.0-universal.apk"
         const val ADMIN_ASSET_PATH = "shizzi/Shizzi-Admin.apk"
     }
 }
+
+/** The privileged process publishes the identity and port of its own live server.
+ * Never retain an app-process announcement referring to a different installed APK/server. */
+internal fun portalConfigWithDistribution(configJson: String, info: ClientAppDistributionInfo, port: Int): String =
+    JSONObject(configJson.ifBlank { "{}" }).apply {
+        put("clientApp", JSONObject().apply {
+            put("available", info.available && port in 1..65535)
+            put("version", info.version)
+            put("fileName", info.fileName)
+            put("sizeBytes", info.sizeBytes)
+            put("sha256", info.sha256)
+            put("bridgePort", port)
+        })
+    }.toString()
 
 
 internal fun readClientAppAsset(context: Context): ByteArray =

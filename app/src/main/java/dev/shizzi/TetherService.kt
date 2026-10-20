@@ -98,7 +98,9 @@ class TetherService : ITetherService.Stub {
 
     override fun setPortalConfig(required: Boolean, configJson: String?) {
         ensureClientAppDistribution()
-        session.setPortalConfig(required, configJson.orEmpty())
+        session.setPortalConfig(required, portalConfigWithDistribution(
+            configJson.orEmpty(), clientAppDistribution.info, clientAppDistribution.port,
+        ))
     }
 
     override fun ackPortalClaims(idsJson: String?) { session.ackPortalClaims(idsJson ?: "[]") }
@@ -150,7 +152,7 @@ class TetherService : ITetherService.Stub {
                     Log.i(
                         TAG,
                         "Shizzi+ / Shizzi Admin distribution hosted in shell process on 127.0.0.1:" +
-                            ClientAppDistributionServer.PORT,
+                            clientAppDistribution.port,
                     )
                 } else {
                     Log.w(TAG, "embedded app shell distribution asset unavailable")

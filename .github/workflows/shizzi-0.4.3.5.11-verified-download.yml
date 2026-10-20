@@ -1,0 +1,340 @@
+name: Shizzi 0.4.3.5.11 verified portal download
+
+on:
+  push:
+    branches:
+      - fix/0.4.3.5.11-verified-download
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shizzi-043511-download-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  client-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Check chat JavaScript syntax
+        run: |
+          python3 - <<'PYJS'
+          from pathlib import Path
+          text = Path('app/src/main/java/dev/shizzi/MessagingWebUi.kt').read_text().split('<script>', 1)[1].split('</script>', 1)[0]
+          Path('/tmp/shizzi-chat.js').write_text(text)
+          PYJS
+          node --check /tmp/shizzi-chat.js
+      - name: Test and lint Shizzi Plus and Universal Admin
+        run: ./gradlew -PshizziClientsOnly=true :conso:testDebugUnitTest :admin:testDebugUnitTest :conso:lintDebug :conso:assembleDebugAndroidTest --no-daemon
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: Shizzi-background-calls-client-reports
+          path: |
+            conso/build/test-results/
+            conso/build/reports/
+            admin/build/test-results/
+          if-no-files-found: warn
+
+  android-device:
+    needs: [client-checks, android-unit-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: actions/download-artifact@v5
+        with:
+          name: Shizzi-0.4.3.5.11-candidate
+          path: release-output
+      - name: Install real downloaded APK and test reception on Android 15
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            adb install -r release-output/Shizzi-Plus-0.3.0-from-portal.apk
+            adb shell dumpsys package dev.shizzi.conso | grep 'versionName=0.3.0-background-calls'
+            adb shell dumpsys package dev.shizzi.conso | grep 'versionCode=17'
+            adb shell am start -W -n dev.shizzi.conso/.MainActivity
+            sleep 2
+            adb shell pidof dev.shizzi.conso
+            adb uninstall dev.shizzi.conso
+            ./gradlew -PshizziClientsOnly=true :conso:connectedDebugAndroidTest --no-daemon || { adb logcat -d > emulator-logcat.txt; exit 1; }
+      - name: Capture emulator logs
+        if: failure()
+        run: timeout 15s adb logcat -d > emulator-logcat.txt || true
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: Shizzi-background-calls-device-reports
+          path: |
+            conso/build/outputs/androidTest-results/
+            conso/build/reports/androidTests/
+            emulator-logcat.txt
+          if-no-files-found: warn
+
+  datapath:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: datapath/go.mod
+          cache-dependency-path: datapath/go.sum
+      - name: Format verified download sources
+        run: gofmt -w datapath/portal.go datapath/verified_client_download.go datapath/verified_client_download_test.go
+      - name: Check Go source formatting
+        run: |
+          test -z "$(gofmt -l datapath/attribution.go datapath/attribution_wait.go datapath/forwarding_attribution.go datapath/forwarding_attribution_test.go datapath/forward.go datapath/traffic.go)"
+      - name: Verify browser authentication proof vector
+        run: node scripts/test-portal-proof.cjs
+      - name: Test portal, attribution, routing and account regressions
+        working-directory: datapath
+        run: |
+          go vet ./...
+          set -o pipefail
+          go test -race -count=1 -timeout=10m -json ./... | tee go-test-results.jsonl
+
+      - name: Upload Go regression results
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: Shizzi-0.4.3.5.11-go-tests
+          path: datapath/go-test-results.jsonl
+          if-no-files-found: warn
+
+  android-unit-tests:
+    if: github.ref == 'refs/heads/fix/0.4.3.5.11-verified-download'
+    timeout-minutes: 40
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: datapath/go.mod
+          cache-dependency-path: datapath/go.sum
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+      - name: Install Android NDK
+        run: sdkmanager --install "ndk;27.0.12077973"
+      - name: Install pinned gomobile toolchain
+        working-directory: datapath
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile
+          go install golang.org/x/mobile/cmd/gobind
+          gomobile init
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Restore permanent signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.SHIZZI_KEYSTORE_B64 || secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.SHIZZI_STORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SHIZZI_KEY_ALIAS || secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SHIZZI_KEY_PASSWORD || secrets.KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_B64"
+          test -n "$STORE_PASSWORD"
+          test -n "$KEY_ALIAS"
+          test -n "$KEY_PASSWORD"
+          echo "$KEYSTORE_B64" | base64 -d > shizzi-release.jks
+          cat > keystore.properties <<EOF
+          storeFile=shizzi-release.jks
+          storePassword=$STORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+
+      - name: Test Shizzi router, Plus and Admin
+        run: ./gradlew :app:testDebugUnitTest :conso:testDebugUnitTest :admin:testDebugUnitTest --no-daemon
+
+      - name: Build signed Shizzi 0.4.3.5.11
+        run: ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Verify actual portal HTTP delivery of the signed release APK
+        env:
+          SHIZZI_VERIFY_PORTAL: 'true'
+        run: |
+          export SHIZZI_VERIFY_ROUTER_APK="$PWD/app/build/outputs/apk/release/app-release.apk"
+          mkdir -p full-test-reports
+          cp -R app/build/test-results full-test-reports/router-unit-tests
+          ./gradlew :app:cleanTestDebugUnitTest :app:testDebugUnitTest --tests dev.shizzi.ClientAppDistributionServerHttpTest --no-daemon
+
+      - name: Verify version, signature and embedded applications
+        env:
+          EXPECTED_CERT_SHA256: "FA:DF:C5:E8:7F:A6:03:51:F7:DC:B7:5D:34:F1:AB:91:11:08:24:33:3C:D1:09:7A:38:B3:C7:03:F7:AF:3D:B7"
+        run: |
+          BUILD_TOOLS=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | grep -v -- "-rc" | sort -V | tail -1)
+          EXPECTED_NORM=$(echo "$EXPECTED_CERT_SHA256" | tr -d ': ')
+
+          APK=app/build/outputs/apk/release/app-release.apk
+          BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$APK")
+          PACKAGE=$(echo "$BADGING" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
+          VERSION_NAME=$(echo "$BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
+          VERSION_CODE=$(echo "$BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
+          test "$PACKAGE" = "dev.shizzi"
+          test "$VERSION_NAME" = "0.4.3.5.11"
+          test "$VERSION_CODE" = "39"
+
+          ROUTER_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
+          test "$ROUTER_CERT" = "$EXPECTED_NORM"
+
+          PLUS=conso/build/outputs/apk/release/conso-release.apk
+          ADMIN=admin/build/outputs/apk/release/admin-release.apk
+          test -s "$PLUS"
+          test -s "$ADMIN"
+
+          EMBEDDED_PLUS=/tmp/Shizzi-Plus-embedded.apk
+          EMBEDDED_ADMIN=/tmp/Shizzi-Admin-embedded.apk
+          unzip -p "$APK" assets/shizzi/Shizzi-Plus.apk > "$EMBEDDED_PLUS"
+          unzip -p "$APK" assets/shizzi/Shizzi-Admin.apk > "$EMBEDDED_ADMIN"
+          test "$(stat -c%s "$EMBEDDED_PLUS")" -gt 20000
+          test "$(stat -c%s "$EMBEDDED_ADMIN")" -gt 20000
+          unzip -t "$EMBEDDED_PLUS" >/dev/null
+          unzip -t "$EMBEDDED_ADMIN" >/dev/null
+          cmp "$PLUS" "$EMBEDDED_PLUS"
+          cmp "$ADMIN" "$EMBEDDED_ADMIN"
+
+          DOWNLOADED=release-output/Shizzi-Plus-0.3.0-from-portal.apk
+          cmp "$PLUS" "$DOWNLOADED"
+          DOWNLOADED_BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$DOWNLOADED")
+          echo "$DOWNLOADED_BADGING" | head -3
+          echo "$DOWNLOADED_BADGING" | grep -q "versionName='0.3.0-background-calls'"
+          echo "$DOWNLOADED_BADGING" | grep -q "versionCode='17'"
+          DOWNLOADED_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$DOWNLOADED" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
+          test "$DOWNLOADED_CERT" = "$EXPECTED_NORM"
+
+          PLUS_BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$PLUS")
+          ADMIN_BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$ADMIN")
+          test "$(echo "$PLUS_BADGING" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")" = "dev.shizzi.conso"
+          test "$(echo "$ADMIN_BADGING" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")" = "dev.shizzi.admin"
+
+          test "$(echo "$PLUS_BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")" = "0.3.0-background-calls"
+          test "$(echo "$ADMIN_BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")" = "0.3.0-universal"
+          test "$(echo "$PLUS_BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")" = "17"
+          test "$(echo "$ADMIN_BADGING" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")" = "15"
+
+          PLUS_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$PLUS" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
+          ADMIN_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$ADMIN" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
+          EMBEDDED_PLUS_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$EMBEDDED_PLUS" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
+          EMBEDDED_ADMIN_CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$EMBEDDED_ADMIN" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
+          test "$PLUS_CERT" = "$EXPECTED_NORM"
+          test "$ADMIN_CERT" = "$EXPECTED_NORM"
+          test "$EMBEDDED_PLUS_CERT" = "$EXPECTED_NORM"
+          test "$EMBEDDED_ADMIN_CERT" = "$EXPECTED_NORM"
+
+      - name: Prepare APK artifacts
+        run: |
+          mkdir -p release-output
+          cp app/build/outputs/apk/release/app-release.apk release-output/Shizzi-Hotspot-0.4.3.5.11.apk
+          cp conso/build/outputs/apk/release/conso-release.apk release-output/Shizzi-Plus-0.3.0-background-calls.apk
+          cp admin/build/outputs/apk/release/admin-release.apk release-output/Shizzi-Admin-Compatible.apk
+          cd release-output
+          sha256sum *.apk > SHA256SUMS.txt
+
+      - name: Write candidate validation report
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, os, xml.etree.ElementTree as ET
+          counts = {}
+          for module in ("app", "conso", "admin"):
+              totals = dict(tests=0, failures=0, errors=0, skipped=0)
+              results = Path("full-test-reports/router-unit-tests/testDebugUnitTest") if module == "app" else Path(module, "build/test-results/testDebugUnitTest")
+              for path in results.glob("TEST-*.xml"):
+                  root = ET.parse(path).getroot()
+                  for key in totals:
+                      totals[key] += int(root.attrib.get(key, 0))
+              assert totals["tests"] > 0 and totals["failures"] == totals["errors"] == totals["skipped"] == 0, (module, totals)
+              counts[module] = totals
+          lines = [
+              "# Validation Shizzi 0.4.3.5.11",
+              "",
+              "Commit : " + os.environ["GITHUB_SHA"],
+              "CI : https://github.com/" + os.environ["GITHUB_REPOSITORY"] + "/actions/runs/" + os.environ["GITHUB_RUN_ID"],
+              "",
+              "Distribution corrigee : serveur local sur port libre, annonce du serveur actif, validation SHA-256 du fichier complet avant envoi, nom/version du portail corriges et URL liee a l empreinte.",
+              "Plafonds conserves : routeur 40/4 Mbit/s ; Illimite Confort 4/2 Mbit/s. Ce sont des maximums, pas des debits garantis.",
+              "Portail, comptes, portabilite, appareil unique par compte et vouchers conserves.",
+              "",
+              "## Verification",
+              "",
+              "- Suite Go avec detection de courses et go vet : succes (dependance obligatoire du travail Android).",
+              "- Signature permanente, version 0.4.3.5.11/code 39 et APK Shizzi+/Admin embarques : verifies.",
+              "- Aucun fichier de cle privee n'est inclus.",
+          ]
+          for module, totals in counts.items():
+              lines.append("- Tests Android JVM " + module + " : " + str(totals))
+          lines += [
+              "",
+              "## Limites de validation",
+              "",
+              "Les tests Go utilisent des sockets TCP/UDP et gVisor, avec presence/NAT Android simules. Les tests Android sont des tests unitaires JVM.",
+              "Le fichier signe effectivement servi par le pont Kotlin et le proxy Go est compare octet par octet, controle via aapt2/apksigner, puis installe sur Android API 35. Un emulateur Android API 35 execute les tests de service, notification, refus, retour a l application et veille Doze avec exemption batterie. Le transport est simule dans ces tests Android. Ce travail ne constitue pas un essai radio ou WebRTC audio/video reel entre telephones.",
+              "Les tests de signalisation couvrent six destinataires distincts. Un essai materiel sur Oppo et Samsung reste necessaire, notamment en veille prolongee et pour le son WebRTC.",
+              "Activation Shizzi+ : Activer les appels en arriere-plan ; autoriser les notifications ; Autoriser la reception ecran eteint pour l exemption batterie.",
+              "Aucune release n'est publiee.",
+              "",
+              "## SHA-256",
+              "",
+          ]
+          for path in sorted(Path("release-output").glob("*.apk")):
+              lines.append("- " + path.name + " : " + hashlib.sha256(path.read_bytes()).hexdigest())
+          Path("release-output/Validation-Shizzi-0.4.3.5.11.md").write_text("\n".join(lines) + "\n")
+          PY
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: Shizzi-0.4.3.5.11-candidate
+          path: |
+            release-output/Shizzi-Hotspot-0.4.3.5.11.apk
+            release-output/Shizzi-Plus-0.3.0-background-calls.apk
+            release-output/Shizzi-Plus-0.3.0-from-portal.apk
+            release-output/Shizzi-Admin-Compatible.apk
+            release-output/SHA256SUMS.txt
+            release-output/Validation-Shizzi-0.4.3.5.11.md
+          if-no-files-found: error
+
+      - name: Clean up signing material
+        if: always()
+        run: rm -f shizzi-release.jks keystore.properties
+
+      - name: Upload Android test reports
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: Shizzi-0.4.3.5.11-test-reports
+          path: |
+            app/build/test-results/
+            full-test-reports/
+            conso/build/test-results/
+            admin/build/test-results/
+            app/build/reports/tests/
+            conso/build/reports/tests/
+            admin/build/reports/tests/
+          if-no-files-found: warn

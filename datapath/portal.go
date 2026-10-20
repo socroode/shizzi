@@ -134,11 +134,12 @@ type adminChallenge struct {
 }
 
 type portalClientApp struct {
-	Available bool   `json:"available"`
-	Version   string `json:"version"`
-	FileName  string `json:"fileName"`
-	SizeBytes int64  `json:"sizeBytes"`
-	SHA256    string `json:"sha256"`
+	Available  bool   `json:"available"`
+	Version    string `json:"version"`
+	FileName   string `json:"fileName"`
+	SizeBytes  int64  `json:"sizeBytes"`
+	SHA256     string `json:"sha256"`
+	BridgePort int    `json:"bridgePort,omitempty"`
 }
 
 type MediaDiagnostic struct {
@@ -1721,9 +1722,25 @@ func (m *TrafficManager) serveClientAppDownload(conn net.Conn, request *http.Req
 		}
 		return
 	}
+	if request.URL != nil {
+		if requested := request.URL.Query().Get("sha256"); requested != "" && !strings.EqualFold(requested, app.SHA256) {
+			body := []byte("Ce téléchargement Shizzi+ a changé. Rechargez le portail.")
+			_, _ = fmt.Fprintf(conn, "HTTP/1.1 410 Gone\r\nCache-Control: no-store\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", len(body))
+			if request.Method != http.MethodHead { _, _ = conn.Write(body) }
+			return
+		}
+	}
+	if !adminDownload && app.BridgePort > 0 {
+		m.serveVerifiedClientAppDownload(conn, request, app)
+		return
+	}
 
 	_ = conn.SetDeadline(time.Now().Add(2 * time.Minute))
-	local, err := net.DialTimeout("tcp", clientAppBridgeAddress, 3*time.Second)
+	address := clientAppBridgeAddress
+	if app.BridgePort > 0 {
+		address = net.JoinHostPort("127.0.0.1", strconv.Itoa(app.BridgePort))
+	}
+	local, err := net.DialTimeout("tcp", address, 3*time.Second)
 	if err != nil {
 		body := []byte("Téléchargement Shizzi+ momentanément indisponible.")
 		header := fmt.Sprintf(
@@ -1992,6 +2009,8 @@ func (m *TrafficManager) writePortalHTML(
 <div class="speedtest-note">Navigateur uniquement · aucun Termux nécessaire</div></section>`
 
 	if clientApp.Available {
+		downloadURL := "http://192.0.2.1/shizzi-plus.apk"
+		if clientApp.BridgePort > 0 { downloadURL += "?sha256=" + clientApp.SHA256 }
 		shortSHA := clientApp.SHA256
 		if len(shortSHA) > 12 {
 			shortSHA = shortSHA[:12]
@@ -2000,10 +2019,10 @@ func (m *TrafficManager) writePortalHTML(
 			`<section class="app-download"><div class="eyebrow">APPLICATION CLIENT</div>
 <strong>Shizzi+ %s</strong>
 <p>Installez Shizzi+ directement depuis ce Wi-Fi. Aucun Internet ni quota Data n'est utilisé.</p>
-<a class="download-button" href="http://192.0.2.1/shizzi-plus.apk" download="%s">Télécharger Shizzi+</a>
+<a class="download-button" href="%s" download="%s">Télécharger Shizzi+</a>
 <div id="shizzi-download-status" class="app-note" aria-live="polite"></div>
 <div class="app-meta">%s · SHA-256 %s…</div>
-<div class="app-note">Lien direct : http://192.0.2.1/shizzi-plus.apk</div>
+<div class="app-note">Lien direct : %s</div>
 <div class="app-note">Android peut demander d'autoriser l'installation depuis cette source.</div></section>
 <section class="app-download"><div class="eyebrow">APPLICATION ADMIN</div>
 <strong>Shizzi Admin</strong>
@@ -2013,9 +2032,11 @@ func (m *TrafficManager) writePortalHTML(
 <div class="app-note">Lien direct : http://192.0.2.1/shizzi-admin.apk</div>
 <div class="app-note">Téléchargement local · aucun Internet ni quota Data utilisé.</div></section>`,
 			html.EscapeString(clientApp.Version),
+			html.EscapeString(downloadURL),
 			html.EscapeString(clientApp.FileName),
 			html.EscapeString(formatPortalFileSize(clientApp.SizeBytes)),
 			html.EscapeString(shortSHA),
+			html.EscapeString(downloadURL),
 		)
 	}
 
