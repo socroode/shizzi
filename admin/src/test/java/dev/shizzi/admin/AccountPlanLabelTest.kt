@@ -112,8 +112,16 @@ class AccountPlanLabelTest {
     @Test fun voucherCreationTimeIsNeverInventedAsARechargeDate() {
         val unused = voucher("DATA", "Non utilisée").apply { remove("redeemedAtMillis") }
         val text = label(account(), JSONArray().put(unused))
-        assertTrue(text.contains("aucune dans l'historique disponible"))
+        assertTrue(text.contains("date non renseignée dans l'historique"))
         assertFalse(text.contains("Non utilisée"))
+    }
+
+    @Test fun anUndatedRechargeMakesTheKnownDatedHistoryExplicitlyPartial() {
+        val known = voucher("DATA", "Data 12 Go")
+        val undated = voucher("UNLIMITED", "Date inconnue").put("redeemedAtMillis", 0L)
+        val text = label(account(), JSONArray().put(known).put(undated))
+        assertTrue(text.contains("Dernière recharge datée connue : Data 12 Go"))
+        assertFalse(text.contains("Dernière recharge : Data 12 Go"))
     }
 
     @Test fun queuedDataWarnsWhenItWillExpireByTheEndOfUnlimited() {

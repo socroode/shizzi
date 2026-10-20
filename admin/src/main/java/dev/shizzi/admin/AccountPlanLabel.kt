@@ -33,7 +33,12 @@ internal object AccountPlanLabel {
         val unlimited = hasUnlimited && unlimitedUntil > nowMillis
         val data = hasData && balance > 0 && hasDataDate && (dataUntil <= 0 || dataUntil > nowMillis)
         val complete = hasUnlimited && hasData && (balance == 0L || hasDataDate)
-        val history = history(account.optString("number"), offers, vouchers)
+        val number = account.optString("number")
+        val history = history(number, offers, vouchers)
+        val undated = number.isNotBlank() && vouchers != null && (0 until vouchers.length()).any {
+            val item = vouchers.optJSONObject(it) ?: return@any false
+            item.optString("redeemedByAccount") == number && item.optLong("redeemedAtMillis") <= 0
+        }
         val last = history.maxByOrNull { it.time }
         val lastData = history.filter { it.kind == "DATA" }.maxByOrNull { it.time }
         val unlimitedName = account.optString("unlimitedPlanName").trim().let {
@@ -53,7 +58,9 @@ internal object AccountPlanLabel {
             lines += "Illimité valable jusqu'au " + date(unlimitedUntil)
         } else if (data && hasUnlimited) {
             lines += limits(account, "data")
-            if (lastData != null && last?.kind != "DATA") lines += "Dernière offre Data : " + lastData.label
+            if (lastData != null && last?.kind != "DATA") {
+                lines += (if (undated) "Dernière offre Data datée connue : " else "Dernière offre Data : ") + lastData.label
+            }
         } else if (hasUnlimited && unlimitedUntil > 0) {
             lines += "Illimité terminé le " + date(unlimitedUntil)
         }
@@ -78,7 +85,8 @@ internal object AccountPlanLabel {
         }
 
         lines += when {
-            last != null -> "Dernière recharge : " + last.label + " · " + date(last.time)
+            last != null -> (if (undated) "Dernière recharge datée connue : " else "Dernière recharge : ") + last.label + " · " + date(last.time)
+            undated -> "Dernière recharge : date non renseignée dans l'historique"
             vouchers == null -> "Dernière recharge : historique non fourni par ce Shizzi"
             else -> "Dernière recharge : aucune dans l'historique disponible"
         }

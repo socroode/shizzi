@@ -419,7 +419,7 @@ class MainActivity : Activity() {
             }
             root.addView(planText)
             info(
-                (if (enabled) "Actif" else "Suspendu") +
+                (if (enabled) "Compte autorisé" else "Compte suspendu") +
                     " · trafic cumulé " + formatBytes(
                     account.optLong("totalUpBytes") + account.optLong("totalDownBytes"),
                 ) + if (account.has("mediaUntilMillis")) "\n" + mediaStatus else "",
