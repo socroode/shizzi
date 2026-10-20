@@ -50,7 +50,14 @@ class MainActivity : Activity() {
     private var routerName: String = "Shizzi"
     private var lastState: JSONObject? = null
     private var lastRenderedStateJson: String = ""
-    private val accountHeadings = linkedMapOf<String, Pair<TextView, String>>()
+    private data class AccountCard(
+        val heading: TextView,
+        val label: String,
+        val sessionText: TextView,
+        val detailsButton: Button,
+        var session: AccountSessionSummary? = null,
+    )
+    private val accountCards = linkedMapOf<String, AccountCard>()
     private var activityResumed = false
     private var pendingUploadFolderId: String? = null
     private var pendingUploadFolderName: String? = null
@@ -181,7 +188,7 @@ class MainActivity : Activity() {
     }
 
     private fun showLogin(message: String = "") {
-        accountHeadings.clear()
+        accountCards.clear()
         stopAutoRefresh()
         lastRenderedStateJson = ""
         root.removeAllViews()
@@ -266,7 +273,7 @@ class MainActivity : Activity() {
                         scroll.post { scroll.scrollTo(0, oldScrollY) }
                     }
                     // Presence continues refreshing while a form is being edited.
-                    updateAccountConnections(response.optJSONObject("traffic"))
+                    updateAccountSessions(response.optJSONObject("traffic"))
                 }
             } catch (failure: Throwable) {
                 if (api !== session) return@thread
@@ -275,7 +282,7 @@ class MainActivity : Activity() {
                 } else {
                     runOnUiThread {
                         if (api !== session) return@runOnUiThread
-                        updateAccountConnections(null)
+                        updateAccountSessions(null)
                         if (manual) toast(failure.message ?: failure.javaClass.simpleName)
                     }
                 }
@@ -306,7 +313,7 @@ class MainActivity : Activity() {
     }
 
     private fun showDashboard(response: JSONObject) {
-        accountHeadings.clear()
+        accountCards.clear()
         root.removeAllViews()
         routerName = response.optString("routerName", routerName)
         title("Shizzi Admin — $routerName")
@@ -332,10 +339,20 @@ class MainActivity : Activity() {
         } else info("Batterie : information indisponible sur cette version de Shizzi.")
 
         if (capabilities.accounts) renderAccounts(state.getJSONArray("accounts"), traffic.optJSONArray("associatedClients") ?: JSONArray())
-        updateAccountConnections(response.optJSONObject("traffic"))
+        updateAccountSessions(response.optJSONObject("traffic"))
+        if (capabilities.devices) {
+            val accounts = state.optJSONArray("accounts") ?: JSONArray()
+            val numbers = (0 until accounts.length()).mapNotNull { accounts.optJSONObject(it)?.optString("number") }.toSet()
+            val otherSessions = JSONArray()
+            val sessions = traffic.getJSONArray("portalAuthorizations")
+            for (index in 0 until sessions.length()) {
+                val session = sessions.optJSONObject(index) ?: continue
+                if (session.optString("accountNumber") !in numbers) otherSessions.put(session)
+            }
+            if (otherSessions.length() > 0) renderDevices(otherSessions, if (capabilities.accounts) "Sessions sans compte disponible" else "Appareils et sessions")
+        }
         if (capabilities.offers) renderOffersAndVouchers(state.getJSONArray("offers"), state.getJSONArray("vouchers"))
         if (capabilities.mediaOffers) renderMediaOffersAndVouchers(state.getJSONArray("mediaOffers"), state.getJSONArray("mediaVouchers"))
-        if (capabilities.devices) renderDevices(traffic.getJSONArray("portalAuthorizations"))
         if (capabilities.modules) renderModules(state.getJSONObject("modules"))
         if (capabilities.media) renderMediaManagement(state.getJSONObject("media"), state.optJSONArray("accounts") ?: JSONArray())
         if (capabilities.portal) renderPortal(state.getJSONObject("portal"))
@@ -376,7 +393,7 @@ class MainActivity : Activity() {
         for (i in 0 until accounts.length()) {
             val account = accounts.optJSONObject(i) ?: continue
             val n = account.optString("number")
-            val label = account.optString("name").ifBlank { "Compte $n" }
+            val label = account.optString("name").ifBlank { "Compte" }
             val enabled = account.optBoolean("enabled", true)
             val mediaUntil = account.optLong("mediaUntilMillis")
             val mediaStatus = if (enabled && mediaUntil > System.currentTimeMillis()) {
@@ -389,7 +406,7 @@ class MainActivity : Activity() {
                 setTypeface(typeface, Typeface.BOLD)
                 setPadding(0, dp(6), 0, dp(4))
             }
-            accountHeadings[n] = heading to "$label — N° $n"
+            heading.tag = "account:$n:heading"
             root.addView(heading)
             info(
                 (if (enabled) "Actif" else "Suspendu") +
@@ -398,6 +415,16 @@ class MainActivity : Activity() {
                     account.optLong("totalUpBytes") + account.optLong("totalDownBytes"),
                 ) + if (account.has("mediaUntilMillis")) "\n" + mediaStatus else "",
             )
+            val sessionText = TextView(this).apply {
+                textSize = 14f
+                setPadding(0, 0, 0, dp(6))
+                tag = "account:$n:session"
+            }
+            root.addView(sessionText)
+            val details = makeButton("Détails") { showAccountSessionDetails(n) }.apply {
+                tag = "account:$n:details"
+            }
+            accountCards[n] = AccountCard(heading, "$label — N° $n", sessionText, details)
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             row.addView(
                 makeButton(if (enabled) "Suspendre" else "Activer") {
@@ -414,6 +441,7 @@ class MainActivity : Activity() {
                 },
                 weighted(),
             )
+            row.addView(details, weighted())
             root.addView(row)
 
             val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -466,21 +494,33 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun updateAccountConnections(traffic: JSONObject?) {
-        for ((number, entry) in accountHeadings) {
-            val (view, label) = entry
-            val status = AccountConnectionStatus.fromTraffic(number, traffic)
-            val prefix = "$label · "
-            val color = when (status) {
+    private fun updateAccountSessions(traffic: JSONObject?) {
+        for ((number, card) in accountCards) {
+            val summary = AccountSessionSummary.fromTraffic(number, traffic)
+            card.session = summary
+            val prefix = "${card.label} · "
+            val color = when (summary.connection) {
                 AccountConnectionStatus.CONNECTED -> 0xFF1B5E20.toInt()
                 AccountConnectionStatus.DISCONNECTED -> 0xFFB71C1C.toInt()
                 AccountConnectionStatus.CHECKING -> 0xFF795500.toInt()
                 AccountConnectionStatus.UNAVAILABLE -> 0xFF616161.toInt()
             }
-            view.text = SpannableString(prefix + status.label).apply {
+            card.heading.text = SpannableString(prefix + summary.headingLabel).apply {
                 setSpan(ForegroundColorSpan(color), prefix.length, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
+            card.sessionText.text = summary.information
+            card.detailsButton.isEnabled = summary.sessions.isNotEmpty()
         }
+    }
+
+    private fun showAccountSessionDetails(number: String) {
+        val summary = accountCards[number]?.session ?: return
+        if (summary.sessions.isEmpty()) return
+        AlertDialog.Builder(this)
+            .setTitle("Détails de l'appareil")
+            .setMessage(summary.details)
+            .setPositiveButton("Fermer", null)
+            .show()
     }
 
     private fun renderOffersAndVouchers(offers: JSONArray, vouchers: JSONArray) {
@@ -707,8 +747,8 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun renderDevices(sessions: JSONArray) {
-        section("Appareils et sessions")
+    private fun renderDevices(sessions: JSONArray, sectionTitle: String) {
+        section(sectionTitle)
         if (sessions.length() == 0) info("Aucune session client enregistrée.")
         for (i in 0 until sessions.length()) {
             val item = sessions.optJSONObject(i) ?: continue
