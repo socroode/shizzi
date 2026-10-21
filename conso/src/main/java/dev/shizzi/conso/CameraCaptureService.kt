@@ -9,173 +9,275 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.graphics.BitmapFactory
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.BatteryManager
-import android.os.Build
-import android.os.IBinder
 import android.os.Binder
+import android.os.Build
 import android.os.Handler
+import android.os.IBinder
 import android.os.Looper
-import org.webrtc.SurfaceViewRenderer
-import dev.shizzi.camrtc.CamPeer
+import android.widget.ImageView
 import org.json.JSONObject
-import java.net.URLEncoder
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
-/** Single opt-in capture session. RTP+Opus remain encrypted by WebRTC DTLS-SRTP. */
-class CameraCaptureService:Service() {
-    @Volatile private var running=false
-    private var pin=""
-    private var quality="auto"
-    private var network:Network?=null
-    private var peer:CamPeer?=null
-    private lateinit var worker:ScheduledExecutorService
-    private val sending=Executors.newSingleThreadExecutor()
-    private var cursor=0L
-    private var count=0
-    private var failures=0
-    private var currentSession=""
-    private lateinit var notifications:NotificationManager
-    private val main=Handler(Looper.getMainLooper())
-    @Volatile private var preview:SurfaceViewRenderer?=null
-    @Volatile var captureStatus:String="Caméra inactive"
+/** Camera JPEG video and PCM16 audio are always uploaded to the router over pinned HTTPS.
+ * No direct media connection to any viewer is created.
+ */
+class CameraCaptureService : Service() {
+    @Volatile private var running = false
+    @Volatile private var relay: RelayCamera? = null
+    @Volatile private var micEnabled = true
+    private var pin = ""
+    private var quality = "auto"
+    private var network: Network? = null
+    private lateinit var worker: ScheduledExecutorService
+    private val frames = Executors.newSingleThreadExecutor()
+    private val audioWorker = Executors.newSingleThreadExecutor()
+    private val audioSender = Executors.newSingleThreadExecutor()
+    private val frameBusy = AtomicBoolean(false)
+    private val audioBusy = AtomicBoolean(false)
+    private var cursor = 0L
+    private var count = 0
+    private var failures = 0
+    private var transmitted = 0L
+    private var session = ""
+    private val main = Handler(Looper.getMainLooper())
+    @Volatile private var preview: ImageView? = null
+    @Volatile var captureStatus = "Caméra inactive"
         private set
-    inner class LocalBinder:Binder() {fun service():CameraCaptureService=this@CameraCaptureService}
-    private val localBinder=LocalBinder()
-    fun attachPreview(renderer:SurfaceViewRenderer) {
-        preview=renderer
-        peer?.attachLocalPreview(renderer)
+
+    inner class LocalBinder : Binder() { fun service(): CameraCaptureService = this@CameraCaptureService }
+    private val binder = LocalBinder()
+    fun attachPreview(image: ImageView) { preview = image; relay?.attach(image) }
+    fun detachPreview(image: ImageView) {
+        relay?.detach(image)
+        if (preview === image) preview = null
     }
-    fun detachPreview(renderer:SurfaceViewRenderer) {
-        if(preview===renderer)preview=null
-        peer?.detachLocalPreview(renderer)
+    fun controlLocal(command: String, value: String) {
+        if (command == "mic") {
+            micEnabled = value == "on"
+            captureStatus = if (micEnabled) "Microphone activé" else "Microphone coupé"
+        } else relay?.control(command,value)
     }
 
     override fun onCreate() {
         super.onCreate()
-        worker=Executors.newSingleThreadScheduledExecutor()
-        notifications=getSystemService(NotificationManager::class.java)
-        notifications.createNotificationChannel(NotificationChannel("shizzicam_av","ShizziCam vidéo + son",NotificationManager.IMPORTANCE_LOW))
+        worker = Executors.newSingleThreadScheduledExecutor()
+        getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel("shizzicam_av", "ShizziCam caméra et son", NotificationManager.IMPORTANCE_LOW)
+        )
     }
-    override fun onBind(intent:Intent?):IBinder=localBinder
-    override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int {
-        if(intent?.action==ACTION_STOP){stopSelf();return START_NOT_STICKY}
-        if(running)return START_NOT_STICKY
-        pin=intent?.getStringExtra(EXTRA_PIN).orEmpty()
-        quality=intent?.getStringExtra(EXTRA_QUALITY).orEmpty().takeIf(CamPeer::validQuality) ?: "auto"
-        if(!pin.matches(Regex("[a-f0-9]{64}"))||
-           checkSelfPermission(Manifest.permission.CAMERA)!=PackageManager.PERMISSION_GRANTED||
-           checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED) {
-            stopSelf();return START_NOT_STICKY
+    override fun onBind(intent: Intent?): IBinder = binder
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) { stopSelf(); return START_NOT_STICKY }
+        if (running) return START_NOT_STICKY
+        pin = intent?.getStringExtra(EXTRA_PIN).orEmpty()
+        quality = intent?.getStringExtra(EXTRA_QUALITY).orEmpty()
+            .takeIf { it in listOf("auto","360p","480p","720p") } ?: "auto"
+        if (!pin.matches(Regex("[a-f0-9]{64}")) ||
+            checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED ||
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            captureStatus = "Autorisation caméra / micro manquante"
+            stopSelf(); return START_NOT_STICKY
         }
-        val stop=PendingIntent.getService(this,100,Intent(this,CameraCaptureService::class.java).setAction(ACTION_STOP),
+        val stop = PendingIntent.getService(this,100,
+            Intent(this,CameraCaptureService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val note=Notification.Builder(this,"shizzicam_av")
+        val note = Notification.Builder(this,"shizzicam_av")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setContentTitle("Shizzi+Cam : vidéo et microphone actifs")
-            .setContentText("Transmission WebRTC locale sécurisée · Arrêter à tout moment")
+            .setContentTitle("Shizzi+Cam : capture locale")
+            .setContentText("Vidéo / audio envoyés au routeur ShizziCam · Arrêter")
             .setOngoing(true)
             .addAction(Notification.Action.Builder(null,"Arrêter",stop).build()).build()
         try {
-            if(Build.VERSION.SDK_INT>=34)
-                startForeground(8421,note,ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-            else startForeground(8421,note)
-        }catch(_:Exception){stopSelf();return START_NOT_STICKY}
-        running=true
-        captureStatus="Ouverture caméra et microphone…"
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(8421,note,ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+            } else startForeground(8421,note)
+        } catch (e: Exception) {
+            captureStatus = "Service caméra refusé : " + e.javaClass.simpleName
+            stopSelf(); return START_NOT_STICKY
+        }
+        running = true
+        captureStatus = "Ouverture caméra, attente première image réelle…"
         worker.execute {
             try {
-                network=wifi() ?: error("Pas de Wi-Fi Shizzi")
-                peer=CamPeer(this,null,signal={ send(it) },status={state->
-                    captureStatus=state
-                    android.util.Log.i("ShizziCam",state)
-                })
-                peer?.prepareSender()
-                captureStatus="Capture caméra + son actifs, en attente de visionneuse"
-                main.post {preview?.let {peer?.attachLocalPreview(it)}}
-                worker.scheduleWithFixedDelay({tick()},0,650,TimeUnit.MILLISECONDS)
-            }catch(e:Exception) {
-                captureStatus="Échec capture : "+(e.message ?: e.javaClass.simpleName)
-                android.util.Log.e("ShizziCam","Capture impossible",e)
+                network = getSystemService(ConnectivityManager::class.java).allNetworks.firstOrNull {
+                    getSystemService(ConnectivityManager::class.java)
+                        .getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+                } ?: error("Connexion Wi-Fi ShizziCam manquante")
+                val camera = RelayCamera(this, onFrame = { bytes -> uploadFrame(bytes) },
+                    onStatus = { message ->
+                        captureStatus = message
+                        android.util.Log.i("ShizziCam",message)
+                    })
+                relay = camera
+                main.post { preview?.let { camera.attach(it) } }
+                camera.start(quality)
+                audioWorker.execute { audioLoop() }
+                worker.scheduleWithFixedDelay({ tick() }, 0, 650, TimeUnit.MILLISECONDS)
+            } catch (e: Exception) {
+                captureStatus = "Échec capture : " + (e.message ?: e.javaClass.simpleName)
+                android.util.Log.e("ShizziCam","Camera service start failed",e)
                 stopSelf()
             }
         }
         return START_NOT_STICKY
     }
-    private fun wifi():Network? {
-        val cm=getSystemService(ConnectivityManager::class.java)
-        return cm.allNetworks.firstOrNull {
-            cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)==true
+
+    private fun connection(path: String): javax.net.ssl.HttpsURLConnection =
+        RouterTls.connection("https://192.0.2.1" + path, pin, network ?: error("Wi-Fi indisponible"))
+            .apply { connectTimeout = 3000; readTimeout = 3000; instanceFollowRedirects = false }
+
+    private fun uploadFrame(bytes: ByteArray) {
+        if (!running || !frameBusy.compareAndSet(false,true)) return
+        frames.execute {
+            try {
+                val c = connection("/api/v1/cam/frame")
+                try {
+                    c.requestMethod = "POST"
+                    c.doOutput = true
+                    c.setRequestProperty("Content-Type","image/jpeg")
+                    c.setRequestProperty("X-Shizzi-Cam-Battery",battery().toString())
+                    c.setFixedLengthStreamingMode(bytes.size)
+                    c.outputStream.use { it.write(bytes) }
+                    if (c.responseCode != 200) error("Relais image HTTP " + c.responseCode)
+                    transmitted++
+                    if (transmitted == 1L) captureStatus = "Première image transmise au routeur"
+                } finally { c.disconnect() }
+            } catch (e: Exception) {
+                android.util.Log.w("ShizziCam","Frame relay failed",e)
+                if (transmitted == 0L) captureStatus = "Image locale présente, relais inaccessible : " +
+                    (e.message ?: "erreur")
+            } finally { frameBusy.set(false) }
         }
     }
-    private fun request(method:String,path:String,body:JSONObject?=null):JSONObject {
-        val n=network ?: error("Wi-Fi déconnecté")
-        val c=RouterTls.connection("https://192.0.2.1"+path,pin,n)
+
+    private fun uploadAudio(bytes: ByteArray) {
+        if (!running || !audioBusy.compareAndSet(false,true)) return
+        audioSender.execute {
+            try {
+                val c = connection("/api/v1/cam/audio")
+                try {
+                    c.requestMethod = "POST"
+                    c.doOutput = true
+                    c.setRequestProperty("Content-Type","application/octet-stream")
+                    c.setFixedLengthStreamingMode(bytes.size)
+                    c.outputStream.use { it.write(bytes) }
+                    if (c.responseCode != 200) error("Relais audio HTTP " + c.responseCode)
+                } finally { c.disconnect() }
+            } catch (e: Exception) {
+                android.util.Log.w("ShizziCam","Audio relay failed",e)
+            } finally { audioBusy.set(false) }
+        }
+    }
+
+    private fun audioLoop() {
+        val rate = 16000
+        val size = maxOf(6400,AudioRecord.getMinBufferSize(rate,
+            AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT))
+        if (size <= 0) { android.util.Log.e("ShizziCam","AudioRecord unsupported"); return }
+        val record = try {
+            AudioRecord(MediaRecorder.AudioSource.MIC,rate,AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,size*2)
+        } catch (e: Exception) {
+            android.util.Log.e("ShizziCam","Microphone unavailable",e)
+            return
+        }
+        var active = false
         try {
-            c.connectTimeout=3500
-            c.readTimeout=3500
-            c.requestMethod=method
-            if(body!=null) {
-                c.doOutput=true
-                c.setRequestProperty("Content-Type","application/json")
-                val data=body.toString().toByteArray(Charsets.UTF_8)
-                c.setFixedLengthStreamingMode(data.size)
-                c.outputStream.use{it.write(data)}
+            val data = ByteArray(6400) // 200ms mono PCM16
+            while (running) {
+                if (!micEnabled) {
+                    if (active) { record.stop(); active = false }
+                    Thread.sleep(150)
+                    continue
+                }
+                if (!active) { record.startRecording(); active = true }
+                val length = record.read(data,0,data.size)
+                if (length > 0 && length % 2 == 0) uploadAudio(data.copyOf(length))
+                else if (length < 0) Thread.sleep(100)
             }
-            if(c.responseCode!=200)error("API caméra: HTTP "+c.responseCode)
-            return JSONObject(c.inputStream.bufferedReader().use{it.readText()})
-        }finally{c.disconnect()}
-    }
-    private fun send(obj:JSONObject) {
-        sending.execute {
-            if(!running)return@execute
-            runCatching {request("POST","/api/v1/cam/events?side=camera",obj)}
-                .onFailure {android.util.Log.w("ShizziCam","Signal non remis",it)}
+        } catch (e: Exception) {
+            android.util.Log.w("ShizziCam","Audio capture ended",e)
+        } finally {
+            if (active) try { record.stop() } catch (_: Exception) {}
+            record.release()
         }
+    }
+
+    private fun battery(): Int = getSystemService(BatteryManager::class.java)
+        .getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+
+    private fun json(method: String, path: String, body: JSONObject? = null): JSONObject {
+        val c = connection(path)
+        try {
+            c.requestMethod = method
+            if (body != null) {
+                c.doOutput = true
+                c.setRequestProperty("Content-Type","application/json")
+                val data = body.toString().toByteArray(Charsets.UTF_8)
+                c.setFixedLengthStreamingMode(data.size)
+                c.outputStream.use { it.write(data) }
+            }
+            if (c.responseCode != 200) error("API caméra : HTTP " + c.responseCode)
+            return JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+        } finally { c.disconnect() }
     }
     private fun tick() {
-        if(!running)return
+        if (!running) return
         try {
-            if(count%3==0) {
-                val battery=getSystemService(BatteryManager::class.java).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-                request("POST","/api/v1/cam/hello?side=camera",
-                    JSONObject().put("battery",battery).put("audio",true).put("quality",quality))
+            if (count % 3 == 0) {
+                json("POST","/api/v1/cam/hello?side=camera",
+                    JSONObject().put("battery",battery()).put("audio",micEnabled).put("quality",quality))
             }
-            val msg=request("GET","/api/v1/cam/events?side=camera&after="+cursor)
+            val items = json("GET","/api/v1/cam/events?side=camera&after=" + cursor)
                 .optJSONArray("events")
-            if(msg!=null) for(i in 0 until msg.length()) {
-                val event=msg.getJSONObject(i)
-                cursor=maxOf(cursor,event.optLong("id"))
-                if(event.optString("type")=="watch") {
-                    currentSession=event.getString("session")
-                    peer?.beginSender(currentSession,quality)
-                }else peer?.accept(event)
+            if (items != null) for (i in 0 until items.length()) {
+                val event = items.getJSONObject(i)
+                cursor = maxOf(cursor,event.optLong("id"))
+                when (event.optString("type")) {
+                    "watch" -> session = event.optString("session")
+                    "control" -> if (event.optString("session") == session) {
+                        val command = event.optString("command")
+                        val value = event.optString("value")
+                        controlLocal(command,value)
+                        if (command == "quality") quality = value
+                    }
+                }
             }
             count++
-            if(count%6==0)peer?.adjustAutomatic()
-            failures=0
-        }catch(e:Exception) {
+            failures = 0
+        } catch (e: Exception) {
             failures++
-            if(failures==4)android.util.Log.w("ShizziCam","Le hotspot ne répond plus : "+e.message)
-            // No Wi-Fi forced reconnect; keep service but stop on sustained lost network.
-            if(failures>25)stopSelf()
+            if (failures == 4) captureStatus = "Routeur inaccessible : " + (e.message ?: "erreur réseau")
+            if (failures > 25) stopSelf()
         }
     }
     override fun onDestroy() {
-        captureStatus="Caméra et microphone arrêtés"
-        running=false
+        running = false
+        captureStatus = "Caméra et microphone arrêtés"
         worker.shutdownNow()
-        sending.shutdownNow()
-        peer?.close();peer=null
+        frames.shutdownNow()
+        audioSender.shutdownNow()
+        audioWorker.shutdownNow()
+        relay?.stop()
+        relay = null
         super.onDestroy()
     }
     companion object {
-        const val ACTION_STOP="dev.shizzi.conso.CAM_STOP"
-        const val EXTRA_PIN="routerCertPin"
-        const val EXTRA_QUALITY="quality"
+        const val ACTION_STOP = "dev.shizzi.conso.CAM_STOP"
+        const val EXTRA_PIN = "routerCertPin"
+        const val EXTRA_QUALITY = "quality"
     }
 }
