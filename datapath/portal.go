@@ -2011,7 +2011,7 @@ func (m *TrafficManager) writePortalHTML(
 <a class="speedtest-button" href="/speedtest/">Tester le débit local</a>
 <div class="speedtest-note">Navigateur uniquement · aucun Termux nécessaire</div></section>`
 
-	if clientApp.Available {
+	if clientApp.Available && (clientApp.BridgePort == 0 || validVerifiedClientAPKMetadata(clientApp)) {
 		downloadURL := "http://192.0.2.1/shizzi-plus.apk"
 		if clientApp.BridgePort > 0 { downloadURL += "?sha256=" + clientApp.SHA256 }
 		shortSHA := clientApp.SHA256
@@ -2041,7 +2041,11 @@ func (m *TrafficManager) writePortalHTML(
 			html.EscapeString(shortSHA),
 			html.EscapeString(downloadURL),
 		)
-	}
+	} else if clientApp.Available {
+    content += `<section class="app-download"><div class="eyebrow">TÉLÉCHARGEMENT EN ATTENTE</div>
+<strong>APK Shizzi temporairement indisponible</strong>
+<p>Le routeur ne confirme pas la taille et l'empreinte du fichier. Aucun téléchargement ne sera lancé. Relancez Shizzi Hotspot puis actualisez la page.</p></section>`
+  }
 
 	refresh := ""
 	if status.ClaimPending {
@@ -2140,15 +2144,49 @@ func injectClientAppDownload(page string) string {
 	// navigation intact so the browser starts streaming from Shizzi immediately.
 	script := `<script>
 (function(){
-  function wire(selector,statusId,defaultLabel){
+  // HEAD checks response headers only. APK bytes are still downloaded by Android.
+  function wire(selector,statusId,label){
     var link=document.querySelector(selector);
-    if(!link || link.dataset.shizziNativeDownload==="1") return;
+    if(!link || link.dataset.shizziNativeDownload==="1")return;
     link.dataset.shizziNativeDownload="1";
+    link.removeAttribute("download");
     var status=document.getElementById(statusId);
-    link.addEventListener("click",function(){
+    var ready=false;
+    link.style.pointerEvents="none";
+    link.style.opacity="0.55";
+    if(status)status.textContent="Vérification du fichier APK…";
+    fetch(link.href,{method:"HEAD",cache:"no-store",redirect:"error"}).then(function(response){
+      var size=Number(response.headers.get("Content-Length")||0);
+      var type=(response.headers.get("Content-Type")||"").toLowerCase();
+      var digest=(response.headers.get("X-Shizzi-SHA256")||"").toLowerCase();
+      var required=new URL(link.href,location.href).searchParams.get("sha256");
+      if(!response.ok || response.headers.get("X-Shizzi-Download-Error")==="1" ||
+         !type.includes("application/vnd.android.package-archive") ||
+         !Number.isFinite(size) || size<1048576 || size>134217728 ||
+         (required && required.toLowerCase()!==digest))
+        throw new Error("Réponse invalide du serveur (HTTP "+response.status+")");
+      ready=true;
+      link.dataset.shizziDownloadReady="1";
+      link.style.pointerEvents="";
+      link.style.opacity="";
+      if(status)status.textContent="APK disponible : "+(size/1000000).toFixed(1)+" Mo. Téléchargement prêt.";
+    }).catch(function(error){
+      ready=false;
+      link.dataset.shizziDownloadReady="0";
+      link.style.pointerEvents="";
+      link.style.opacity="";
+      if(status)status.textContent="APK indisponible : "+(error.message||"vérification impossible")+
+        ". Actualisez pour réessayer. Aucun faux APK ne doit être installé.";
+    });
+    link.addEventListener("click",function(event){
+      if(!ready){
+        event.preventDefault();
+        if(status)status.textContent="Téléchargement bloqué : APK non vérifiée. Actualisez puis réessayez.";
+        return;
+      }
       link.textContent="Téléchargement lancé…";
-      if(status) status.textContent="Téléchargement direct depuis le routeur Shizzi…";
-      setTimeout(function(){ link.textContent=defaultLabel; },1500);
+      if(status)status.textContent="Téléchargement natif depuis le routeur Shizzi…";
+      setTimeout(function(){link.textContent=label;},1500);
     });
   }
   wire('a.download-button[href*="shizzi-plus.apk"]',"shizzi-download-status","Télécharger Shizzi+");
