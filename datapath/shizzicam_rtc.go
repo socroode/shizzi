@@ -80,10 +80,10 @@ func (m *TrafficManager) serveCameraRTC(conn net.Conn, r *http.Request, clientIP
  }
  if r.Method==http.MethodGet && p=="/api/v1/cam/capabilities" {
   writeJSONStatus(conn,"200 OK",map[string]any{
-    "ok":true, "protocol":"shizzicam-webrtc-v1",
-    "video":"H264", "audio":"Opus", "qualities":[]string{"360p","480p","720p","auto"},
+    "ok":true, "protocol":"shizzicam-relay-jpeg-pcm-v1",
+    "video":"JPEG", "audio":"PCM16", "qualities":[]string{"360p","480p","720p","auto"},
     "requiresAccount":true,"requiresAdmin":true,
-    "transport":"webrtc-p2p-local", "relayAvailable":false,
+    "transport":"https-router-relay", "relayAvailable":true,
   })
   return true
  }
@@ -151,7 +151,6 @@ func (m *TrafficManager) serveCameraRTC(conn net.Conn, r *http.Request, clientIP
   state.ViewerLastSeen=now
   state.ToCamera=nil
   state.ToViewer=nil
-  state.Counter=0
   camRtcPostMessage(state,false,camRtcMessage{Type:"watch",Session:state.ViewerSession,Quality:"auto"})
   writeJSONStatus(conn,"200 OK",map[string]any{"ok":true,"session":state.ViewerSession})
   return true

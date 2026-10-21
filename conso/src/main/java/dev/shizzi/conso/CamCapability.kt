@@ -6,8 +6,9 @@ internal object CamCapability {
         if(status!=200)return false
         return runCatching{
             val payload=JSONObject(json)
-            payload.optBoolean("ok") && payload.optString("protocol")=="shizzicam-webrtc-v1" &&
-                payload.optString("audio")=="Opus" && payload.optString("video")=="H264"
+            payload.optBoolean("ok") && payload.optString("protocol")=="shizzicam-relay-jpeg-pcm-v1" &&
+                payload.optString("audio")=="PCM16" && payload.optString("video")=="JPEG" &&
+                payload.optBoolean("relayAvailable") && payload.optString("transport")=="https-router-relay"
         }.getOrDefault(false)
     }
 }

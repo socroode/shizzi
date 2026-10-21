@@ -19,6 +19,7 @@ type camAudioPacket struct { data []byte; sequence uint64; updated time.Time }
 var camAudioPackets = struct{
  sync.Mutex
  entries map[string]camAudioPacket
+ counter uint64
 }{entries: make(map[string]camAudioPacket)}
 func camAudioStore(account string,pcm []byte,now time.Time) uint64 {
  camAudioPackets.Lock()
@@ -27,7 +28,8 @@ func camAudioStore(account string,pcm []byte,now time.Time) uint64 {
   if now.Sub(p.updated)>camAudioTTL {delete(camAudioPackets.entries,account)}
  }
  p:=camAudioPackets.entries[account]
- p.sequence++
+ camAudioPackets.counter++
+ p.sequence=camAudioPackets.counter
  p.data=append([]byte(nil),pcm...)
  p.updated=now
  camAudioPackets.entries[account]=p
