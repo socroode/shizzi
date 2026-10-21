@@ -62,6 +62,7 @@ func camText(conn net.Conn, status string, body string) {
  _,_=conn.Write(data)
 }
 func (m *TrafficManager) serveCameraAPI(conn net.Conn, req *http.Request, clientIP string) bool {
+ if m.serveCameraRTC(conn,req,clientIP) {return true}
  path:=req.URL.Path
  if path!="/api/v1/cam/frame" && path!="/api/v1/cam/list" { return false }
  // Never transmit images or admin tokens through cleartext captive-portal HTTP.
