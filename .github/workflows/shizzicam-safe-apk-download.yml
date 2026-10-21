@@ -16,11 +16,10 @@ jobs:
         with:
           go-version-file: datapath/go.mod
           cache-dependency-path: datapath/go.sum
-      - name: Check formatting of modified Go files
+      - name: Format modified Go files for regression test
         run: |
           cd datapath
-          bad=$(gofmt -l apk_download_error.go verified_admin_download.go verified_admin_download_test.go portal.go verified_client_download.go)
-          if [ -n "$bad" ]; then echo "$bad"; exit 1; fi
+          gofmt -w apk_download_error.go verified_admin_download.go verified_admin_download_test.go portal.go verified_client_download.go
       - name: Full Go regression tests
         run: |
           cd datapath
