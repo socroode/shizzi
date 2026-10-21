@@ -20,6 +20,9 @@ func TestClientAppDownloadUsesNativeBrowserStreaming(t *testing.T) {
 		`download="Shizzi-Plus-0.2.10-test.apk"`,
 		`Téléchargement direct depuis le routeur Shizzi`,
 		`shizziNativeDownload`,
+        `request.open("HEAD",link.href,true)`,
+        `aria-disabled`,
+        `APK vérifiée sur le routeur`,
 	} {
 		if !strings.Contains(page, expected) {
 			t.Fatalf("native local download path missing %q", expected)
@@ -27,7 +30,6 @@ func TestClientAppDownloadUsesNativeBrowserStreaming(t *testing.T) {
 	}
 
 	for _, forbidden := range []string{
-		"event.preventDefault()",
 		"fetch(href",
 		"response.blob()",
 		"URL.createObjectURL",

@@ -1714,27 +1714,21 @@ func (m *TrafficManager) serveClientAppDownload(conn net.Conn, request *http.Req
 	}
 
 	if !app.Available {
-		body := []byte(appLabel + " indisponible")
-		header := fmt.Sprintf(
-			"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
-			len(body),
-		)
-		_, _ = conn.Write([]byte(header))
-		if request.Method != http.MethodHead {
-			_, _ = conn.Write(body)
-		}
+		writeAPKDownloadError(conn, request.Method, "404 Not Found", appLabel+" indisponible. Démarrez le routeur et réessayez.")
 		return
 	}
 	if request.URL != nil {
 		if requested := request.URL.Query().Get("sha256"); requested != "" && !strings.EqualFold(requested, app.SHA256) {
-			body := []byte("Ce téléchargement Shizzi+ a changé. Rechargez le portail.")
-			_, _ = fmt.Fprintf(conn, "HTTP/1.1 410 Gone\r\nCache-Control: no-store\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", len(body))
-			if request.Method != http.MethodHead { _, _ = conn.Write(body) }
+			writeAPKDownloadError(conn,request.Method,"410 Gone","Ce téléchargement Shizzi+ a changé. Rechargez le portail.")
 			return
 		}
 	}
-	if !adminDownload && app.BridgePort > 0 {
-		m.serveVerifiedClientAppDownload(conn, request, app)
+	if app.BridgePort > 0 {
+		if adminDownload {
+			m.serveVerifiedAdminAppDownload(conn, request, app)
+		} else {
+			m.serveVerifiedClientAppDownload(conn, request, app)
+		}
 		return
 	}
 
@@ -2134,10 +2128,9 @@ func injectClientAppDownload(page string) string {
 		return page
 	}
 
-	// Do not fetch the APK into JavaScript first. On Android captive portals that
-	// extra fetch/blob/object-URL hop can delay the DownloadManager hand-off by
-	// tens of seconds even for a tiny local file. Keep the native <a download>
-	// navigation intact so the browser starts streaming from Shizzi immediately.
+	// Verify that the router is ready to serve the *complete* APK before
+	// enabling the native Android download. Only HEAD metadata is requested:
+	// JS never buffers, blobs or re-serves a 48MB APK.
 	script := `<script>
 (function(){
   function wire(selector,statusId,defaultLabel){
@@ -2145,11 +2138,47 @@ func injectClientAppDownload(page string) string {
     if(!link || link.dataset.shizziNativeDownload==="1") return;
     link.dataset.shizziNativeDownload="1";
     var status=document.getElementById(statusId);
-    link.addEventListener("click",function(){
+    var ready=false;
+    link.setAttribute("aria-disabled","true");
+    link.style.pointerEvents="none";
+    link.style.opacity="0.6";
+    if(status) status.textContent="Vérification du fichier APK sur le routeur…";
+    function fail(message){
+      ready=false;
+      link.textContent=defaultLabel;
+      link.setAttribute("aria-disabled","true");
+      link.style.pointerEvents="none";
+      if(status) status.textContent="Téléchargement indisponible : "+message+" Rechargez le portail pour réessayer.";
+    }
+    link.addEventListener("click",function(event){
+      if(!ready){ event.preventDefault(); return; }
       link.textContent="Téléchargement lancé…";
       if(status) status.textContent="Téléchargement direct depuis le routeur Shizzi…";
       setTimeout(function(){ link.textContent=defaultLabel; },1500);
     });
+    if(!window.XMLHttpRequest){fail("navigateur non compatible avec la vérification");return;}
+    var request=new XMLHttpRequest();
+    request.open("HEAD",link.href,true);
+    request.timeout=30000;
+    request.onload=function(){
+      var size=Number(request.getResponseHeader("Content-Length"));
+      var type=(request.getResponseHeader("Content-Type")||"").toLowerCase();
+      var sha=request.getResponseHeader("X-Shizzi-SHA256")||"";
+      if(request.status===200 && size>=262144 && size<=134217728 &&
+         type.indexOf("application/vnd.android.package-archive")===0 &&
+         /^[0-9a-f]{64}$/i.test(sha)){
+        ready=true;
+        link.removeAttribute("aria-disabled");
+        link.style.pointerEvents="";
+        link.style.opacity="";
+        if(status) status.textContent="APK vérifiée sur le routeur ("+(size/1048576).toFixed(1)+" Mo). Prête à télécharger.";
+      }else{
+        fail("réponse invalide, fichier absent ou serveur indisponible");
+      }
+    };
+    request.onerror=function(){fail("connexion au serveur local échouée");};
+    request.ontimeout=function(){fail("délai dépassé");};
+    request.send();
   }
   wire('a.download-button[href*="shizzi-plus.apk"]',"shizzi-download-status","Télécharger Shizzi+");
   wire('a.download-button[href*="shizzi-admin.apk"]',"shizzi-admin-download-status","Télécharger Shizzi Admin");

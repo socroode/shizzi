@@ -20,11 +20,7 @@ const maxVerifiedClientAPKBytes = 128 * 1024 * 1024
 // loopback server, a mismatched announcement or a truncated response must fail.
 func (m *TrafficManager) serveVerifiedClientAppDownload(conn net.Conn, request *http.Request, app portalClientApp) {
 	fail := func(status, message string) {
-		body := []byte(message)
-		_, _ = fmt.Fprintf(conn, "HTTP/1.1 %s\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: inline\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", status, len(body))
-		if request.Method != http.MethodHead {
-			_, _ = conn.Write(body)
-		}
+		writeAPKDownloadError(conn,request.Method,status,message)
 	}
 	// Signed 48MB APKs can take over 30 seconds on a busy 2.4GHz hotspot.
 	_ = conn.SetDeadline(time.Now().Add(4 * time.Minute))
@@ -35,7 +31,7 @@ func (m *TrafficManager) serveVerifiedClientAppDownload(conn net.Conn, request *
 	}
 	transport := &http.Transport{DialContext: (&net.Dialer{Timeout: 3 * time.Second}).DialContext, DisableKeepAlives: true}
 	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := &http.Client{Transport: transport, Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Get("http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(app.BridgePort)) + "/shizzi-plus.apk")
 	if err != nil {
 		fail("503 Service Unavailable", "Téléchargement Shizzi+ indisponible. Relancez Shizzi Hotspot.")
