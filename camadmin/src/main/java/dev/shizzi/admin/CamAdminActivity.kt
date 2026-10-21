@@ -1,182 +1,220 @@
 package dev.shizzi.admin
 
 import android.app.Activity
-import android.graphics.BitmapFactory
+import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.text.InputType
-import android.view.Gravity
-import android.widget.Button
-import android.widget.EditText
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
-import java.net.URL
-import java.nio.charset.StandardCharsets
-import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.concurrent.thread
+import android.widget.*
+import dev.shizzi.camrtc.CamPeer
+import org.webrtc.SurfaceViewRenderer
 import org.json.JSONObject
+import java.net.URLEncoder
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
-/** Independent ShizziCam camera viewer. Requires the original router Admin login. */
+/** Read-only ShizziCam viewer: original Admin credentials, pinned TLS, WebRTC H264/Opus. */
 class CamAdminActivity:Activity() {
     private lateinit var root:LinearLayout
-    private var network:Network?=null
+    private lateinit var status:TextView
+    private lateinit var cameraButtons:LinearLayout
+    private var wifi:Network?=null
     private var pin=""
     private var admin:AdminApi?=null
-    private var active=true
-    private var viewing=false
-    private val polling=AtomicBoolean(false)
-    private val handler=Handler(Looper.getMainLooper())
-    private lateinit var content:LinearLayout
-    private val refresh=object:Runnable {
-        override fun run() {
-            if (active && viewing) fetch()
-            if (active) handler.postDelayed(this,1800)
-        }
-    }
+    private var account=""
+    private var session=""
+    private var cursor=0L
+    private var peer:CamPeer?=null
+    private val polling=Executors.newSingleThreadScheduledExecutor()
+    private val outgoing=Executors.newSingleThreadExecutor()
+    @Volatile private var watching=false
+    private var audioMode=AudioManager.MODE_NORMAL
+    private var speaker=false
+
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
-        val scroll=ScrollView(this)
-        root=LinearLayout(this).apply {
-            orientation=LinearLayout.VERTICAL
-            setPadding(28,36,28,40)
-        }
-        scroll.addView(root)
-        setContentView(scroll)
+        root=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;setPadding(24,32,24,32)}
+        setContentView(ScrollView(this).apply{addView(root)})
         loginScreen()
+        polling.scheduleWithFixedDelay({poll()},1200,700,TimeUnit.MILLISECONDS)
     }
-    override fun onResume() {
-        super.onResume()
-        active=true
-        handler.removeCallbacks(refresh)
-        handler.post(refresh)
-    }
-    override fun onPause() {
-        active=false
-        handler.removeCallbacks(refresh)
-        super.onPause()
-    }
-    private fun wifi():Network? {
-        val manager=getSystemService(ConnectivityManager::class.java)
-        return manager.allNetworks.firstOrNull {
-            manager.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)==true
+    private fun selectWifi():Network? {
+        val cm=getSystemService(ConnectivityManager::class.java)
+        return cm.allNetworks.firstOrNull {
+            cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)==true
         }
     }
-    private fun title(text:String) = root.addView(TextView(this).apply {this.text=text; textSize=26f})
-    private fun label(text:String) = root.addView(TextView(this).apply {this.text=text; textSize=15f;setPadding(0,12,0,12)})
+    private fun label(text:String,size:Float=16f):TextView=TextView(this).apply{
+        this.text=text;textSize=size;setPadding(0,12,0,12)
+    }
     private fun loginScreen() {
-        viewing=false
+        stopViewing()
         root.removeAllViews()
-        title("ShizziCam · Administration")
-        label("Connectez ce téléphone au Wi-Fi ShizziCam et vérifiez l'empreinte TLS du routeur.")
-        val user=EditText(this).apply {hint="Identifiant administrateur";setText("admin");setSingleLine()}
-        val password=EditText(this).apply {
-            hint="Mot de passe administrateur"
-            inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setSingleLine()
+        root.addView(label("ShizziCam · Surveillance",25f))
+        root.addView(label("Vidéo H.264 et audio Opus sur le Wi-Fi local. Connexion Admin sécurisée."))
+        val login=EditText(this).apply{hint="Identifiant Admin";setText("admin");setSingleLine()}
+        val pass=EditText(this).apply{
+            hint="Mot de passe Admin";inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
-        root.addView(user);root.addView(password)
-        val state=TextView(this)
-        root.addView(state)
+        root.addView(login);root.addView(pass)
+        status=label("")
+        root.addView(status)
         root.addView(Button(this).apply {
-            text="Se connecter aux caméras"
+            text="Se connecter"
             setOnClickListener {
-                state.text="Connexion sécurisée…"
                 isEnabled=false
-                thread(name="shizzicam-admin-login") {
+                val button=this
+                status.text="Vérification du certificat du routeur…"
+                Thread{
                     try {
-                        val chosen=wifi() ?: error("Aucun Wi-Fi ShizziCam détecté")
-                        val certificate=RouterTls.pair(this@CamAdminActivity,chosen)
-                        val api=AdminApi("https://192.0.2.1/api/v1/admin",true) { url ->
-                            RouterTls.connection(url.toString(),certificate,chosen)
+                        val net=selectWifi() ?: error("Connecte le Wi-Fi ShizziCam")
+                        val cert=RouterTls.pair(this@CamAdminActivity,net)
+                        val api=AdminApi("https://192.0.2.1/api/v1/admin",true){url->
+                            RouterTls.connection(url.toString(),cert,net)
                         }
-                        api.login(user.text.toString().trim(),password.text.toString())
-                        network=chosen
-                        pin=certificate
-                        admin=api
-                        runOnUiThread {showCameras()}
-                    } catch(e:Exception) {
-                        runOnUiThread {state.text=e.message ?: "Connexion impossible";isEnabled=true}
+                        api.login(login.text.toString().trim(),pass.text.toString())
+                        wifi=net;pin=cert;admin=api
+                        runOnUiThread{listScreen()}
+                    }catch(e:Exception){
+                        runOnUiThread{status.text=e.message ?: "Connexion impossible";button.isEnabled=true}
                     }
-                }
+                }.start()
             }
         })
     }
-    private fun showCameras() {
-        viewing=true
-        root.removeAllViews()
-        title("ShizziCam · Caméras")
-        label("Images locales reçues du hotspot. Un téléphone n'apparaît qu'après activation volontaire dans Shizzi+Cam.")
-        root.addView(Button(this).apply {text="Actualiser";setOnClickListener {fetch()} })
-        root.addView(Button(this).apply {text="Déconnexion";setOnClickListener {
-            admin?.clearSession();admin=null;viewing=false;loginScreen()
-        }})
-        content=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
-        root.addView(content)
-        fetch()
-    }
-    private fun cameraRequest(path:String):ByteArray {
-        val n=network ?: error("Wi-Fi indisponible")
-        val api=admin ?: error("Admin non connecté")
-        val url=URL("https://192.0.2.1"+path)
-        val conn=RouterTls.connection(url.toString(),pin,n)
+    private fun api(method:String,path:String,body:JSONObject?=null):JSONObject {
+        val network=wifi ?: error("Wi-Fi non connecté")
+        val token=admin?.token.orEmpty()
+        check(token.isNotEmpty()){"Session Admin absente"}
+        val c=RouterTls.connection("https://192.0.2.1"+path,pin,network)
         try {
-            conn.requestMethod="GET"
-            conn.connectTimeout=4000
-            conn.readTimeout=4500
-            conn.setRequestProperty("X-Shizzi-Admin-Token",api.token)
-            check(conn.responseCode==200) {"Erreur caméra HTTP "+conn.responseCode}
-            return conn.inputStream.use {it.readBytes()}
-        } finally {conn.disconnect()}
+            c.requestMethod=method;c.connectTimeout=3500;c.readTimeout=3500
+            c.setRequestProperty("X-Shizzi-Admin-Token",token)
+            if(body!=null){
+                c.doOutput=true;c.setRequestProperty("Content-Type","application/json")
+                val bytes=body.toString().toByteArray(Charsets.UTF_8)
+                c.setFixedLengthStreamingMode(bytes.size)
+                c.outputStream.use{it.write(bytes)}
+            }
+            check(c.responseCode==200){"Caméra HTTP "+c.responseCode}
+            return JSONObject(c.inputStream.bufferedReader().use{it.readText()})
+        }finally{c.disconnect()}
     }
-    private fun fetch() {
-        if (!viewing || !polling.compareAndSet(false,true)) return
-        thread(name="shizzicam-admin-refresh") {
-            try {
-                val list=JSONObject(String(cameraRequest("/api/v1/cam/list"),StandardCharsets.UTF_8))
-                    .getJSONArray("cameras")
-                val entries=mutableListOf<Triple<String,Int,ByteArray>>()
-                for (i in 0 until list.length()) {
-                    val item=list.getJSONObject(i)
-                    val account=item.getString("account")
-                    val battery=item.optInt("battery",-1)
-                    val bytes=cameraRequest("/api/v1/cam/frame?account="+java.net.URLEncoder.encode(account,"UTF-8"))
-                    entries.add(Triple(account,battery,bytes))
-                }
-                runOnUiThread {
-                    if (!viewing) return@runOnUiThread
-                    content.removeAllViews()
-                    if (entries.isEmpty()) content.addView(TextView(this).apply {
-                        text="Aucune caméra active (les images expirent après 15 secondes).";textSize=16f
-                    })
-                    for ((account,battery,bytes) in entries) {
-                        val frame=BitmapFactory.decodeByteArray(bytes,0,bytes.size)
-                        content.addView(TextView(this).apply {
-                            text="Caméra compte "+account+" · Batterie "+(if(battery<0)"?" else battery.toString()+"%")
-                            textSize=17f;setPadding(0,22,0,10)
-                        })
-                        if (frame!=null) content.addView(ImageView(this).apply {
-                            setImageBitmap(frame)
-                            adjustViewBounds=true
-                            layoutParams=LinearLayout.LayoutParams(-1,-2)
-                        })
-                    }
-                }
-            } catch (e:Exception) {
-                runOnUiThread {
-                    if(viewing) {
-                        content.removeAllViews()
-                        content.addView(TextView(this).apply {
-                            text="Connexion caméra : "+(e.message ?: "Erreur réseau")
-                        })
-                    }
-                }
-            } finally {polling.set(false)}
+    private fun send(message:JSONObject) {
+        if(!watching)return
+        val which=account
+        outgoing.execute {
+            runCatching{api("POST","/api/v1/cam/events?side=viewer",message.put("account",which))}
+                .onFailure{android.util.Log.w("ShizziCam","Signal caméra non remis",it)}
         }
+    }
+    private fun listScreen() {
+        stopViewing()
+        root.removeAllViews()
+        root.addView(label("ShizziCam · Caméras",25f))
+        root.addView(label("Caméras visibles uniquement après activation volontaire sur le téléphone."))
+        status=label("")
+        root.addView(status)
+        root.addView(Button(this).apply{text="Actualiser";setOnClickListener{refresh()}})
+        root.addView(Button(this).apply{text="Déconnexion";setOnClickListener{admin?.clearSession();admin=null;loginScreen()}})
+        cameraButtons=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
+        root.addView(cameraButtons)
+        refresh()
+    }
+    private fun refresh() {
+        Thread {
+            try {
+                val arr=api("GET","/api/v1/cam/list").getJSONArray("cameras")
+                val list=mutableListOf<Pair<String,Int>>()
+                for(i in 0 until arr.length()){
+                    val obj=arr.getJSONObject(i)
+                    list.add(obj.getString("account") to obj.optInt("battery",-1))
+                }
+                runOnUiThread{
+                    cameraButtons.removeAllViews()
+                    if(list.isEmpty())cameraButtons.addView(label("Aucune caméra en ligne"))
+                    for ((number,battery) in list){
+                        cameraButtons.addView(Button(this).apply{
+                            text="Caméra "+number+" · "+(if(battery<0)"?" else "$battery%")
+                            setOnClickListener{watch(number)}
+                        })
+                    }
+                    status.text="Caméras en ligne : "+list.size
+                }
+            }catch(e:Exception){runOnUiThread{status.text=e.message ?: "Liste indisponible"}}
+        }.start()
+    }
+    private fun watch(number:String) {
+        stopViewing()
+        root.removeAllViews()
+        root.addView(label("Direct · "+number,25f))
+        root.addView(Button(this).apply{text="Retour";setOnClickListener{listScreen()}})
+        status=label("Association caméra…")
+        root.addView(status)
+        val renderer=SurfaceViewRenderer(this)
+        renderer.layoutParams=LinearLayout.LayoutParams(-1,resources.displayMetrics.widthPixels*9/16)
+        root.addView(renderer)
+        root.addView(label("Le son est transmis par WebRTC et diffusé sur le haut-parleur."))
+        val qualities=listOf("auto","360p","480p","720p")
+        val selector=Spinner(this).apply {
+            adapter=ArrayAdapter(this@CamAdminActivity,android.R.layout.simple_spinner_dropdown_item,
+                listOf("Auto","360p","480p","720p"))
+        }
+        root.addView(selector)
+        root.addView(Button(this).apply{
+            text="Appliquer qualité"
+            setOnClickListener{
+                send(JSONObject().put("session",session).put("type","quality")
+                    .put("quality",qualities[selector.selectedItemPosition]))
+            }
+        })
+        watching=true;account=number;cursor=0
+        val audio=getSystemService(AudioManager::class.java)
+        audioMode=audio.mode;speaker=audio.isSpeakerphoneOn
+        audio.mode=AudioManager.MODE_IN_COMMUNICATION;audio.isSpeakerphoneOn=true
+        try {
+            peer=CamPeer(this,renderer,signal={send(it)},status={message->
+                runOnUiThread{if(watching)status.text=message}
+            })
+        }catch(e:Exception){
+            watching=false;status.text=e.message ?: "Décodage indisponible";return
+        }
+        Thread {
+            try {
+                val sid=api("POST","/api/v1/cam/watch?side=viewer",
+                    JSONObject().put("account",number)).getString("session")
+                runOnUiThread{
+                    if(watching && account==number) {
+                        session=sid;peer?.beginViewer(sid)
+                        status.text="Connexion WebRTC H.264 / Opus…"
+                    }
+                }
+            }catch(e:Exception){runOnUiThread{status.text=e.message ?: "Caméra inaccessible"}}
+        }.start()
+    }
+    private fun poll() {
+        if(!watching || session.isEmpty())return
+        try {
+            val q="/api/v1/cam/events?side=viewer&account="+URLEncoder.encode(account,"UTF-8")+
+                "&session="+URLEncoder.encode(session,"UTF-8")+"&after="+cursor
+            val events=api("GET",q).getJSONArray("events")
+            for(i in 0 until events.length()){
+                val event=events.getJSONObject(i)
+                cursor=maxOf(cursor,event.optLong("id"))
+                peer?.accept(event)
+            }
+        }catch(e:Exception){android.util.Log.w("ShizziCam","Signalisation interrompue",e)}
+    }
+    private fun stopViewing() {
+        watching=false;session="";account="";cursor=0
+        peer?.close();peer=null
+        val a=getSystemService(AudioManager::class.java)
+        a.mode=audioMode;a.isSpeakerphoneOn=speaker
+    }
+    override fun onDestroy(){
+        stopViewing();polling.shutdownNow();outgoing.shutdownNow()
+        super.onDestroy()
     }
 }

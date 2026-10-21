@@ -97,6 +97,14 @@ func (m *TrafficManager) serveCameraAPI(conn net.Conn, req *http.Request, client
   type item struct {Account string `json:"account"`; Battery int `json:"battery"`; AgeMillis int64 `json:"ageMillis"`}
   list:=make([]item,0,len(frames))
   for account,frame:=range frames {list=append(list,item{account,frame.battery,time.Since(frame.last).Milliseconds()})}
+  camRtc.Lock()
+  camRtcPruneLocked(time.Now())
+  for account,live:=range camRtc.cameras {
+   if _,exists:=frames[account];!exists {
+    list=append(list,item{account,live.Battery,time.Since(live.LastSeen).Milliseconds()})
+   }
+  }
+  camRtc.Unlock()
   writeJSONStatus(conn,"200 OK",map[string]any{"ok":true,"cameras":list})
   return true
  }
