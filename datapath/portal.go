@@ -1113,6 +1113,9 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	if m.serveAdminAPI(conn, request, clientIP) {
 		return
 	}
+	if m.serveCameraAPI(conn, request, clientIP) {
+		return
+	}
 
 	path := request.URL.Path
 	if captiveProbePath(path) {
