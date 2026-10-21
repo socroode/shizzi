@@ -34,7 +34,7 @@ func (m *TrafficManager) serveVerifiedAdminAppDownload(conn net.Conn, request *h
  }
  defer response.Body.Close()
  if response.StatusCode!=http.StatusOK ||
-    response.ContentLength<256*1024 || response.ContentLength>maxVerifiedClientAPKBytes ||
+    response.ContentLength<16*1024 || response.ContentLength>maxVerifiedClientAPKBytes ||
     !strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")),"application/vnd.android.package-archive") {
   fail("502 Bad Gateway","Le serveur ne propose pas un fichier APK Admin complet.")
   return
@@ -89,7 +89,7 @@ func (m *TrafficManager) serveVerifiedAdminAppDownload(conn net.Conn, request *h
 }
 
 func apkHasAndroidManifestAndDex(data []byte)bool {
- if len(data)<256*1024 || !bytes.HasPrefix(data,[]byte("PK\x03\x04")) {return false}
+ if len(data)<16*1024 || !bytes.HasPrefix(data,[]byte("PK\x03\x04")) {return false}
  archive,err:=zip.NewReader(bytes.NewReader(data),int64(len(data)))
  if err!=nil {return false}
  manifest,dex:=false,false

@@ -22,7 +22,7 @@ func fakeValidatedAdminAPK(t *testing.T) []byte {
   item,err:=writer.CreateHeader(header)
   if err!=nil {t.Fatal(err)}
   body:=[]byte("test-apk-data")
-  if name=="assets/stored.bin" {body=bytes.Repeat([]byte{123},300*1024)}
+  if name=="assets/stored.bin" {body=bytes.Repeat([]byte{123},90*1024)}
   if _,err:=item.Write(body);err!=nil {t.Fatal(err)}
  }
  if err:=writer.Close();err!=nil {t.Fatal(err)}

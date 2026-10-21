@@ -2164,7 +2164,7 @@ func injectClientAppDownload(page string) string {
       var size=Number(request.getResponseHeader("Content-Length"));
       var type=(request.getResponseHeader("Content-Type")||"").toLowerCase();
       var sha=request.getResponseHeader("X-Shizzi-SHA256")||"";
-      if(request.status===200 && size>=262144 && size<=134217728 &&
+      if(request.status===200 && size>=16384 && size<=134217728 &&
          type.indexOf("application/vnd.android.package-archive")===0 &&
          /^[0-9a-f]{64}$/i.test(sha)){
         ready=true;
