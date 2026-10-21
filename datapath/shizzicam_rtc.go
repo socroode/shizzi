@@ -23,6 +23,8 @@ type camRtcMessage struct {
  MLine int `json:"mline,omitempty"`
  Candidate string `json:"candidate,omitempty"`
  Quality string `json:"quality,omitempty"`
+ Command string `json:"command,omitempty"`
+ Value string `json:"value,omitempty"`
 }
 type camRtcSession struct {
  LastSeen time.Time
@@ -112,6 +114,8 @@ func (m *TrafficManager) serveCameraRTC(conn net.Conn, r *http.Request, clientIP
   Battery int `json:"battery"`
   Audio bool `json:"audio"`
   Quality string `json:"quality"`
+  Command string `json:"command"`
+  Value string `json:"value"`
  }
  if r.Method==http.MethodPost {
   if r.ContentLength<0||r.ContentLength>16*1024 {writeJSONStatus(conn,"413 Content Too Large",map[string]any{"ok":false});return true}
@@ -181,14 +185,32 @@ func (m *TrafficManager) serveCameraRTC(conn net.Conn, r *http.Request, clientIP
    if len(req.Candidate)<10||len(req.Candidate)>2048 {writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true}
   case "quality":
    if isCamera || !camRtcAllowedQuality(req.Quality) {writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true}
+  case "control":
+   if isCamera || !camRtcValidControl(req.Command,req.Value) {writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true}
+  case "status":
+   if !isCamera || !camRtcValidControl(req.Command,req.Value) {writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true}
   case "stop": // either side can stop its peer session
   default: writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true
   }
-  camRtcPostMessage(state,isCamera,camRtcMessage{Type:req.Type,Session:state.ViewerSession,SDP:req.SDP,Mid:req.Mid,MLine:req.MLine,Candidate:req.Candidate,Quality:req.Quality})
+  camRtcPostMessage(state,isCamera,camRtcMessage{Type:req.Type,Session:state.ViewerSession,SDP:req.SDP,Mid:req.Mid,MLine:req.MLine,Candidate:req.Candidate,Quality:req.Quality,Command:req.Command,Value:req.Value})
   writeJSONStatus(conn,"200 OK",map[string]any{"ok":true})
   return true
  default:
   writeJSONStatus(conn,"405 Method Not Allowed",map[string]any{"ok":false})
   return true
  }
+}
+
+
+// Restrict remote hardware controls to known actions and bounded values.
+func camRtcValidControl(command,value string) bool {
+ switch command {
+ case "camera": return value=="front" || value=="back"
+ case "torch","mic": return value=="on" || value=="off"
+ case "quality": return camRtcAllowedQuality(value)
+ case "zoom":
+  n,err:=strconv.ParseFloat(value,64)
+  return err==nil && n>=1 && n<=8
+ }
+ return false
 }
