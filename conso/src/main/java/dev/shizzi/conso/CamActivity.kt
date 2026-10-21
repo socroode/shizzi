@@ -21,7 +21,7 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.Spinner
 import android.widget.TextView
-import org.webrtc.SurfaceViewRenderer
+import android.widget.ImageView
 import java.nio.charset.StandardCharsets
 import kotlin.concurrent.thread
 
@@ -29,7 +29,9 @@ import kotlin.concurrent.thread
 class CamActivity:Activity() {
     private lateinit var status:TextView
     private lateinit var quality:Spinner
-    private lateinit var preview:SurfaceViewRenderer
+    private lateinit var preview:ImageView
+    private var zoomLevel=1f
+    private var torchEnabled=false
     @Volatile private var busy=false
     private var service:CameraCaptureService?=null
     private var bound=false
@@ -58,14 +60,38 @@ class CamActivity:Activity() {
         }
         root.addView(TextView(this).apply{text="Shizzi+Cam";textSize=26f})
         root.addView(TextView(this).apply{
-            text="Aperçu local, vidéo H.264 et audio Opus. Le compte doit être connecté sur ShizziCam Hotspot. Sur Shizzi 0.4.3.5.11, les fonctions Shizzi+ restent disponibles mais pas la caméra."
+            text="Aperçu réel sur ce téléphone. Images et son transmis uniquement au téléphone routeur ShizziCam par HTTPS. Mode relais de test : JPEG + PCM16. Le compte doit être connecté."
             textSize=14f
         })
-        preview=SurfaceViewRenderer(this).apply{
+        preview=ImageView(this).apply{
+            scaleType=ImageView.ScaleType.FIT_CENTER
+            adjustViewBounds=true
             layoutParams=LinearLayout.LayoutParams(-1,resources.displayMetrics.widthPixels*9/16)
             setBackgroundColor(android.graphics.Color.BLACK)
         }
         root.addView(preview)
+        val buttons=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        buttons.addView(Button(this).apply{text="Dos";setOnClickListener{service?.controlLocal("camera","back")}})
+        buttons.addView(Button(this).apply{text="Selfie";setOnClickListener{service?.controlLocal("camera","front")}})
+        root.addView(buttons)
+        val controls=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        val zoomText=TextView(this).apply{text="Zoom 1.0×";gravity=Gravity.CENTER}
+        controls.addView(Button(this).apply{text="−";setOnClickListener{
+            zoomLevel=(zoomLevel-0.5f).coerceAtLeast(1f)
+            zoomText.text="Zoom %.1f×".format(zoomLevel)
+            service?.controlLocal("zoom",zoomLevel.toString())
+        }})
+        controls.addView(zoomText)
+        controls.addView(Button(this).apply{text="+";setOnClickListener{
+            zoomLevel=(zoomLevel+0.5f).coerceAtMost(8f)
+            zoomText.text="Zoom %.1f×".format(zoomLevel)
+            service?.controlLocal("zoom",zoomLevel.toString())
+        }})
+        controls.addView(Button(this).apply{text="Flash";setOnClickListener{
+            torchEnabled=!torchEnabled
+            service?.controlLocal("torch",if(torchEnabled)"on" else "off")
+        }})
+        root.addView(controls)
         quality=Spinner(this).apply{
             adapter=ArrayAdapter(this@CamActivity,android.R.layout.simple_spinner_dropdown_item,
                 listOf("Auto","360p","480p","720p"))
