@@ -15,6 +15,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
@@ -25,7 +26,7 @@
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity android:name=".CamActivity" android:exported="false" />
         <service android:name=".CameraCaptureService" android:exported="false"
-            android:foregroundServiceType="camera" android:stopWithTask="false" />
+            android:foregroundServiceType="camera|microphone" android:stopWithTask="false" />
         <service android:name=".CallReceptionService" android:exported="false"
             android:foregroundServiceType="connectedDevice" android:stopWithTask="false" />
         <activity

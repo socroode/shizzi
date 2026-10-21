@@ -81,11 +81,11 @@ class CamPeer(
         capturer = cam
         captureHelper = SurfaceTextureHelper.create("ShizziCam-Video",egl.eglBaseContext)
         videoSource = factory.createVideoSource(false)
-        cam.initialize(captureHelper,context.applicationContext,videoSource!!.capturerObserver)
+        cam.initialize(captureHelper!!,context.applicationContext,videoSource!!.capturerObserver)
         cam.startCapture(854,480,20)
-        localVideo = factory.createVideoTrack("shizzicam-video",videoSource)
+        localVideo = factory.createVideoTrack("shizzicam-video",videoSource!!)
         audioSource = factory.createAudioSource(MediaConstraints())
-        localAudio = factory.createAudioTrack("shizzicam-audio",audioSource)
+        localAudio = factory.createAudioTrack("shizzicam-audio",audioSource!!)
         localAudio?.setEnabled(true)
         status("Caméra + micro démarrés · 480p")
     }

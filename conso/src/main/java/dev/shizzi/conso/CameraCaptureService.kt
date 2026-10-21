@@ -9,170 +9,147 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
-import android.graphics.ImageFormat
-import android.hardware.camera2.CameraCaptureSession
-import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.CameraDevice
-import android.hardware.camera2.CameraManager
-import android.hardware.camera2.CaptureRequest
-import android.media.ImageReader
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import android.os.Build
-import android.os.Handler
-import android.os.HandlerThread
 import android.os.IBinder
-import java.net.URL
+import dev.shizzi.camrtc.CamPeer
+import org.json.JSONObject
+import java.net.URLEncoder
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
-import javax.net.ssl.HttpsURLConnection
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
-/**
- * Proof-of-concept secure still-frame streaming. The router stores only the most recent JPEG.
- * Captures are opt-in and run with Android's visible CAMERA foreground-service indicator.
- */
-class CameraCaptureService : Service() {
-    private lateinit var cameraThread: HandlerThread
-    private lateinit var cameraHandler: Handler
-    private val sender = Executors.newSingleThreadExecutor()
-    private val sending = AtomicBoolean(false)
-    private var device: CameraDevice? = null
-    private var session: CameraCaptureSession? = null
-    private var reader: ImageReader? = null
-    private var pin: String = ""
-    @Volatile private var active = false
+/** Single opt-in capture session. RTP+Opus remain encrypted by WebRTC DTLS-SRTP. */
+class CameraCaptureService:Service() {
+    @Volatile private var running=false
+    private var pin=""
+    private var quality="auto"
+    private var network:Network?=null
+    private var peer:CamPeer?=null
+    private lateinit var worker:ScheduledExecutorService
+    private val sending=Executors.newSingleThreadExecutor()
+    private var cursor=0L
+    private var count=0
+    private var failures=0
+    private var currentSession=""
+    private lateinit var notifications:NotificationManager
 
     override fun onCreate() {
         super.onCreate()
-        cameraThread = HandlerThread("shizzicam-camera").also { it.start() }
-        cameraHandler = Handler(cameraThread.looper)
-        getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel("shizzicam_capture","Caméra ShizziCam",NotificationManager.IMPORTANCE_LOW)
-        )
+        worker=Executors.newSingleThreadScheduledExecutor()
+        notifications=getSystemService(NotificationManager::class.java)
+        notifications.createNotificationChannel(NotificationChannel("shizzicam_av","ShizziCam vidéo + son",NotificationManager.IMPORTANCE_LOW))
     }
-    override fun onBind(intent:Intent?):IBinder? = null
+    override fun onBind(intent:Intent?):IBinder?=null
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int {
-        if (intent?.action == ACTION_STOP) { stopSelf(); return START_NOT_STICKY }
-        if (active) return START_NOT_STICKY
-        val proposed = intent?.getStringExtra(EXTRA_PIN).orEmpty()
-        if (!proposed.matches(Regex("[0-9a-f]{64}")) ||
-            checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+        if(intent?.action==ACTION_STOP){stopSelf();return START_NOT_STICKY}
+        if(running)return START_NOT_STICKY
+        pin=intent?.getStringExtra(EXTRA_PIN).orEmpty()
+        quality=intent?.getStringExtra(EXTRA_QUALITY).orEmpty().takeIf(CamPeer::validQuality) ?: "auto"
+        if(!pin.matches(Regex("[a-f0-9]{64}"))||
+           checkSelfPermission(Manifest.permission.CAMERA)!=PackageManager.PERMISSION_GRANTED||
+           checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED) {
             stopSelf();return START_NOT_STICKY
         }
-        pin = proposed
-        val stop = PendingIntent.getService(this,3,Intent(this,CameraCaptureService::class.java).setAction(ACTION_STOP),
+        val stop=PendingIntent.getService(this,100,Intent(this,CameraCaptureService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val note = Notification.Builder(this,"shizzicam_capture")
+        val note=Notification.Builder(this,"shizzicam_av")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setContentTitle("Shizzi+Cam : caméra active")
-            .setContentText("Images envoyées uniquement au routeur ShizziCam")
+            .setContentTitle("Shizzi+Cam : vidéo et microphone actifs")
+            .setContentText("Transmission WebRTC locale sécurisée · Arrêter à tout moment")
             .setOngoing(true)
             .addAction(Notification.Action.Builder(null,"Arrêter",stop).build()).build()
-        if (Build.VERSION.SDK_INT >= 34) startForeground(8421,note,ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA)
-        else startForeground(8421,note)
-        active = true
-        openCamera()
+        try {
+            if(Build.VERSION.SDK_INT>=34)
+                startForeground(8421,note,ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+            else startForeground(8421,note)
+        }catch(_:Exception){stopSelf();return START_NOT_STICKY}
+        running=true
+        worker.execute {
+            try {
+                network=wifi() ?: error("Pas de Wi-Fi Shizzi")
+                peer=CamPeer(this,null,signal={ send(it) },status={state->android.util.Log.i("ShizziCam",state)})
+                peer?.prepareSender()
+                worker.scheduleWithFixedDelay({tick()},0,650,TimeUnit.MILLISECONDS)
+            }catch(e:Exception) {
+                android.util.Log.e("ShizziCam","Capture impossible",e)
+                stopSelf()
+            }
+        }
         return START_NOT_STICKY
     }
-    private fun openCamera() {
-        try {
-            val manager = getSystemService(CameraManager::class.java)
-            val cameraId = manager.cameraIdList.firstOrNull {
-                manager.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) ==
-                    CameraCharacteristics.LENS_FACING_BACK
-            } ?: manager.cameraIdList.firstOrNull() ?: error("Pas de caméra")
-            val map=manager.getCameraCharacteristics(cameraId)
-                .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: error("Format caméra indisponible")
-            val sizes=map.getOutputSizes(ImageFormat.JPEG).orEmpty()
-            val chosen=sizes.filter { it.width<=1280 && it.height<=720 }
-                .minByOrNull { kotlin.math.abs(it.width*it.height-640*480) }
-                ?: sizes.firstOrNull() ?: error("Capture JPEG indisponible")
-            reader=ImageReader.newInstance(chosen.width,chosen.height,ImageFormat.JPEG,2).apply {
-                setOnImageAvailableListener({ source ->
-                    val img=source.acquireLatestImage() ?: return@setOnImageAvailableListener
-                    try {
-                        val buffer=img.planes[0].buffer
-                        if (buffer.remaining() in 8..180000 && sending.compareAndSet(false,true)) {
-                            val bytes=ByteArray(buffer.remaining())
-                            buffer.get(bytes)
-                            sender.execute {
-                                try { upload(bytes) } finally { sending.set(false) }
-                            }
-                        }
-                    } finally {img.close()}
-                },cameraHandler)
-            }
-            if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                stopSelf();return
-            }
-            manager.openCamera(cameraId,object:CameraDevice.StateCallback() {
-                override fun onOpened(camera:CameraDevice) {
-                    if (!active) {camera.close();return}
-                    device=camera
-                    camera.createCaptureSession(listOf(reader!!.surface),object:CameraCaptureSession.StateCallback() {
-                        override fun onConfigured(s:CameraCaptureSession) {
-                            session=s
-                            cameraHandler.post(captureLoop)
-                        }
-                        override fun onConfigureFailed(s:CameraCaptureSession) { stopSelf() }
-                    },cameraHandler)
-                }
-                override fun onDisconnected(camera:CameraDevice) {camera.close();stopSelf()}
-                override fun onError(camera:CameraDevice,error:Int) {camera.close();stopSelf()}
-            },cameraHandler)
-        } catch (_:Exception) {stopSelf()}
-    }
-    private val captureLoop=object:Runnable {
-        override fun run() {
-            if (!active) return
-            try {
-                val camera=device ?: return
-                val s=session ?: return
-                val capture=camera.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
-                    addTarget(reader!!.surface)
-                    set(CaptureRequest.CONTROL_AF_MODE,CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                }
-                s.capture(capture.build(),null,cameraHandler)
-            } catch (_:Exception) {}
-            if (active) cameraHandler.postDelayed(this,850)
+    private fun wifi():Network? {
+        val cm=getSystemService(ConnectivityManager::class.java)
+        return cm.allNetworks.firstOrNull {
+            cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)==true
         }
     }
-    private fun upload(bytes:ByteArray) {
+    private fun request(method:String,path:String,body:JSONObject?=null):JSONObject {
+        val n=network ?: error("Wi-Fi déconnecté")
+        val c=RouterTls.connection("https://192.0.2.1"+path,pin,n)
         try {
-            val manager=getSystemService(ConnectivityManager::class.java)
-            val wifi=manager.allNetworks.firstOrNull {
-                manager.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)==true
-            } ?: return
-            val conn=RouterTls.connection("https://192.0.2.1/api/v1/cam/frame",pin,wifi)
-            try {
-                conn.requestMethod="POST"
-                conn.connectTimeout=4000
-                conn.readTimeout=4000
-                conn.doOutput=true
-                conn.setRequestProperty("Content-Type","image/jpeg")
+            c.connectTimeout=3500
+            c.readTimeout=3500
+            c.requestMethod=method
+            if(body!=null) {
+                c.doOutput=true
+                c.setRequestProperty("Content-Type","application/json")
+                val data=body.toString().toByteArray(Charsets.UTF_8)
+                c.setFixedLengthStreamingMode(data.size)
+                c.outputStream.use{it.write(data)}
+            }
+            if(c.responseCode!=200)error("API caméra: HTTP "+c.responseCode)
+            return JSONObject(c.inputStream.bufferedReader().use{it.readText()})
+        }finally{c.disconnect()}
+    }
+    private fun send(obj:JSONObject) {
+        sending.execute {
+            if(!running)return@execute
+            runCatching {request("POST","/api/v1/cam/events?side=camera",obj)}
+                .onFailure {android.util.Log.w("ShizziCam","Signal non remis",it)}
+        }
+    }
+    private fun tick() {
+        if(!running)return
+        try {
+            if(count%3==0) {
                 val battery=getSystemService(BatteryManager::class.java).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-                conn.setRequestProperty("X-Shizzi-Cam-Battery",battery.toString())
-                conn.setFixedLengthStreamingMode(bytes.size)
-                conn.outputStream.use { it.write(bytes) }
-                conn.responseCode
-            } finally {conn.disconnect()}
-        } catch (_:Exception) {
-            // Keep camera active, but never fall back to unencrypted HTTP or mobile Internet.
+                request("POST","/api/v1/cam/hello?side=camera",
+                    JSONObject().put("battery",battery).put("audio",true).put("quality",quality))
+            }
+            val msg=request("GET","/api/v1/cam/events?side=camera&after="+cursor)
+                .optJSONArray("events")
+            if(msg!=null) for(i in 0 until msg.length()) {
+                val event=msg.getJSONObject(i)
+                cursor=maxOf(cursor,event.optLong("id"))
+                if(event.optString("type")=="watch") {
+                    currentSession=event.getString("session")
+                    peer?.beginSender(currentSession,quality)
+                }else peer?.accept(event)
+            }
+            count++
+            if(count%6==0)peer?.adjustAutomatic()
+            failures=0
+        }catch(e:Exception) {
+            failures++
+            if(failures==4)android.util.Log.w("ShizziCam","Le hotspot ne répond plus : "+e.message)
+            // No Wi-Fi forced reconnect; keep service but stop on sustained lost network.
+            if(failures>25)stopSelf()
         }
     }
     override fun onDestroy() {
-        active=false
-        cameraHandler.removeCallbacks(captureLoop)
-        try {session?.close()}catch (_:Exception){}
-        try {device?.close()}catch (_:Exception){}
-        try {reader?.close()}catch (_:Exception){}
-        sender.shutdownNow()
-        cameraThread.quitSafely()
+        running=false
+        worker.shutdownNow()
+        sending.shutdownNow()
+        peer?.close();peer=null
         super.onDestroy()
     }
     companion object {
         const val ACTION_STOP="dev.shizzi.conso.CAM_STOP"
         const val EXTRA_PIN="routerCertPin"
+        const val EXTRA_QUALITY="quality"
     }
 }
