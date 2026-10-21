@@ -10,33 +10,28 @@ import (
 	"time"
 )
 
-func TestClientAppDownloadUsesNativeBrowserStreaming(t *testing.T) {
-	page := injectClientAppDownload(
-		`<html><body><a class="download-button" href="http://192.0.2.1/shizzi-plus.apk" download="Shizzi-Plus-0.2.10-test.apk">Télécharger</a><div id="shizzi-download-status"></div></body></html>`,
-	)
-
-	for _, expected := range []string{
-		`href="http://192.0.2.1/shizzi-plus.apk"`,
-		`download="Shizzi-Plus-0.2.10-test.apk"`,
-		`Téléchargement direct depuis le routeur Shizzi`,
-		`shizziNativeDownload`,
-	} {
-		if !strings.Contains(page, expected) {
-			t.Fatalf("native local download path missing %q", expected)
-		}
-	}
-
-	for _, forbidden := range []string{
-		"event.preventDefault()",
-		"fetch(href",
-		"response.blob()",
-		"URL.createObjectURL",
-		"window.location.assign",
-	} {
-		if strings.Contains(page, forbidden) {
-			t.Fatalf("download path still buffers APK in JavaScript via %q", forbidden)
-		}
-	}
+func TestClientAppDownloadChecksHEADBeforeNativeAndroidStreaming(t *testing.T) {
+ page := injectClientAppDownload(
+   `<html><body><a class="download-button" href="http://192.0.2.1/shizzi-plus.apk">Télécharger</a><div id="shizzi-download-status"></div></body></html>`,
+ )
+ for _,expected:=range []string{
+  `href="http://192.0.2.1/shizzi-plus.apk"`,
+  `method:"HEAD"`,
+  `Content-Length`,
+  `Content-Type`,
+  `X-Shizzi-SHA256`,
+  `X-Shizzi-Download-Error`,
+  `shizziDownloadReady`,
+  `event.preventDefault()`,
+  `Téléchargement bloqué`,
+ } {
+  if !strings.Contains(page,expected) {t.Fatalf("missing APK preflight safeguard: %q",expected)}
+ }
+ for _,forbidden:=range []string{
+  "response.blob()","URL.createObjectURL","response.arrayBuffer()",
+ } {
+  if strings.Contains(page,forbidden) {t.Fatalf("APK body must stay native: %q",forbidden)}
+ }
 }
 
 func TestClientAppDownloadScriptIsNotInjectedWithoutDownloadLink(t *testing.T) {
@@ -486,4 +481,28 @@ func TestDirectShizziAdminAliasStreamsResponse(t *testing.T) {
 			t.Fatalf("Shizzi Admin APK response missing %q: %q", expected, actual)
 		}
 	}
+}
+
+func TestPortalHidesBrokenVerifiedAPKLink(t *testing.T) {
+ m:=newTrafficManager()
+ m.portalClientApp=portalClientApp{
+   Available:true,Version:"candidate",FileName:"Shizzi-PlusCam.apk",
+   SizeBytes:48600000,SHA256:"",BridgePort:8097,
+ }
+ server,client:=net.Pipe()
+ done:=make(chan struct{})
+ go func(){defer close(done); defer server.Close();m.servePortal(server,"192.168.7.66")}()
+ _=client.SetDeadline(time.Now().Add(5*time.Second))
+ _,_=fmt.Fprint(client,"GET / HTTP/1.1\r\nHost: 192.0.2.1\r\nConnection: close\r\n\r\n")
+ body,err:=io.ReadAll(client)
+ _=client.Close()
+ <-done
+ if err!=nil {t.Fatal(err)}
+ page:=string(body)
+ if strings.Contains(page,`href="http://192.0.2.1/shizzi-plus.apk`){
+   t.Fatal("portal must not offer broken APK download")
+ }
+ if !strings.Contains(page,"APK Shizzi temporairement indisponible"){
+   t.Fatal("portal must explain missing APK metadata")
+ }
 }
