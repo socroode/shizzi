@@ -1,8 +1,10 @@
 package datapath
 
 import (
-	"bufio"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"io"
 	"net"
 	"strings"
@@ -11,33 +13,15 @@ import (
 )
 
 func TestClientAppDownloadUsesNativeBrowserStreaming(t *testing.T) {
-	page := injectClientAppDownload(
-		`<html><body><a class="download-button" href="http://192.0.2.1/shizzi-plus.apk" download="Shizzi-Plus-0.2.10-test.apk">Télécharger</a><div id="shizzi-download-status"></div></body></html>`,
-	)
-
-	for _, expected := range []string{
-		`href="http://192.0.2.1/shizzi-plus.apk"`,
-		`download="Shizzi-Plus-0.2.10-test.apk"`,
-		`Téléchargement direct depuis le routeur Shizzi`,
-		`shizziNativeDownload`,
-	} {
-		if !strings.Contains(page, expected) {
-			t.Fatalf("native local download path missing %q", expected)
-		}
-	}
-
-	for _, forbidden := range []string{
-		"event.preventDefault()",
-		"fetch(href",
-		"response.blob()",
-		"URL.createObjectURL",
-		"window.location.assign",
-	} {
-		if strings.Contains(page, forbidden) {
-			t.Fatalf("download path still buffers APK in JavaScript via %q", forbidden)
-		}
-	}
+    page:=injectClientAppDownload(`<html><body><a class="download-button" href="http://192.0.2.1/shizzi-plus.apk?sha256=some" data-size="100" data-sha256="abc">Télécharger</a><div id="shizzi-download-status"></div></body></html>`)
+    for _,expected:=range []string{"shizziNativeDownload","method:\"HEAD\"","Content-Length","X-Shizzi-SHA256","APK indisponible","link.addEventListener"} {
+        if !strings.Contains(page,expected) {t.Fatalf("missing safe download preflight %q",expected)}
+    }
+    for _,forbidden:=range []string{"response.blob()","URL.createObjectURL","download=\"Shizzi-Plus-0.2.10-test.apk\""} {
+        if strings.Contains(page,forbidden) {t.Fatalf("download must never buffer and save an unverified APK: %q",forbidden)}
+    }
 }
+
 
 func TestClientAppDownloadScriptIsNotInjectedWithoutDownloadLink(t *testing.T) {
 	page := `<html><body>Portail sans application</body></html>`
@@ -55,7 +39,8 @@ func TestPortalShowsDirect192DownloadLink(t *testing.T) {
 		Version:   "0.2.10-test",
 		FileName:  "Shizzi-Plus-0.2.10-test.apk",
 		SizeBytes: 123456,
-		SHA256:    "0123456789abcdef",
+		SHA256:    strings.Repeat("a",64),
+        BridgePort:8091,
 	}
 	manager.mu.Unlock()
 
@@ -119,201 +104,31 @@ func TestShizziPlusDownloadPathVariants(t *testing.T) {
 }
 
 func TestTrailingSlashShizziPlusDownloadNeverFallsBackToPortalHTML(t *testing.T) {
-	backend, err := net.Listen("tcp", clientAppBridgeAddress)
-	if err != nil {
-		t.Fatalf("listen Shizzi+ backend: %v", err)
-	}
-	defer backend.Close()
-
-	apk := []byte("REAL-SHIZZI-PLUS-APK-BYTES")
-	doneBackend := make(chan struct{})
-	go func() {
-		defer close(doneBackend)
-		conn, acceptErr := backend.Accept()
-		if acceptErr != nil {
-			return
-		}
-		defer conn.Close()
-
-		reader := bufio.NewReader(conn)
-		for {
-			line, readErr := reader.ReadString('\n')
-			if readErr != nil {
-				return
-			}
-			if line == "\r\n" {
-				break
-			}
-		}
-
-		_, _ = fmt.Fprintf(
-			conn,
-			"HTTP/1.1 200 OK\r\n"+
-				"Content-Type: application/vnd.android.package-archive\r\n"+
-				"Content-Disposition: attachment; filename=\"Shizzi-Plus-0.2.10-test.apk\"\r\n"+
-				"Content-Length: %d\r\n"+
-				"Connection: close\r\n\r\n",
-			len(apk),
-		)
-		_, _ = conn.Write(apk)
-	}()
-
-	manager := newTrafficManager()
-	manager.mu.Lock()
-	manager.portalClientApp = portalClientApp{
-		Available: true,
-		Version:   "0.2.10-test",
-		FileName:  "Shizzi-Plus-0.2.10-test.apk",
-		SizeBytes: int64(len(apk)),
-		SHA256:    "virtual-apk-sha",
-	}
-	manager.mu.Unlock()
-
-	server, client := net.Pipe()
-	donePortal := make(chan struct{})
-	go func() {
-		defer close(donePortal)
-		manager.servePortal(server, "192.168.7.66")
-	}()
-
-	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
-	_, err = fmt.Fprint(
-		client,
-		"GET /shizzi-plus.apk/ HTTP/1.1\r\n"+
-			"Host: 192.0.2.1\r\n"+
-			"User-Agent: Android-Browser\r\n"+
-			"Connection: close\r\n\r\n",
-	)
-	if err != nil {
-		t.Fatalf("write trailing-slash download request: %v", err)
-	}
-
-	response, readErr := io.ReadAll(client)
-	_ = client.Close()
-	if readErr != nil {
-		t.Fatalf("read trailing-slash download response: %v", readErr)
-	}
-	<-donePortal
-	<-doneBackend
-
-	actual := string(response)
-	if !strings.Contains(actual, "Content-Type: application/vnd.android.package-archive") {
-		t.Fatalf("download variant returned a non-APK response: %q", actual)
-	}
-	if !strings.HasSuffix(actual, string(apk)) {
-		t.Fatalf("download variant did not return APK bytes: %q", actual)
-	}
-	if strings.Contains(strings.ToLower(actual), "<!doctype html") ||
-		strings.Contains(actual, "Test de débit Shizzi") {
-		t.Fatalf("download variant fell back to portal HTML instead of APK: %q", actual)
-	}
+    m:=newTrafficManager()
+    m.portalClientApp=portalClientApp{Available:true,Version:"test",FileName:"client.apk",SizeBytes:100,SHA256:strings.Repeat("a",64)}
+    response,body:=verifiedDownloadRequest(t,m,"GET","","http://192.0.2.1/shizzi-plus.apk/")
+    if response.StatusCode!=503 || strings.Contains(response.Header.Get("Content-Type"),"package-archive") ||
+       strings.Contains(response.Header.Get("Content-Disposition"),"attachment") {
+       t.Fatalf("stale fixed-port download was not blocked: %d %q",response.StatusCode,body)
+    }
 }
 
+
 func TestDirectShizziPlusAliasForwardsRangeAndStreamsResponse(t *testing.T) {
-	backend, err := net.Listen("tcp", clientAppBridgeAddress)
-	if err != nil {
-		t.Fatalf("listen Shizzi+ backend: %v", err)
-	}
-	t.Cleanup(func() { _ = backend.Close() })
-
-	headersSeen := make(chan string, 1)
-	doneBackend := make(chan struct{})
-	go func() {
-		defer close(doneBackend)
-		conn, acceptErr := backend.Accept()
-		if acceptErr != nil {
-			return
-		}
-		defer conn.Close()
-
-		reader := bufio.NewReader(conn)
-		var headers strings.Builder
-		for {
-			line, readErr := reader.ReadString('\n')
-			if readErr != nil {
-				return
-			}
-			headers.WriteString(line)
-			if line == "\r\n" {
-				break
-			}
-		}
-		headersSeen <- headers.String()
-
-		body := "APK-BYTES-5678"
-		_, _ = fmt.Fprintf(
-			conn,
-			"HTTP/1.1 206 Partial Content\r\n"+
-				"Content-Type: application/vnd.android.package-archive\r\n"+
-				"Content-Disposition: attachment; filename=\"Shizzi-Plus-0.2.10-test.apk\"\r\n"+
-				"Accept-Ranges: bytes\r\n"+
-				"Content-Range: bytes 5-18/19\r\n"+
-				"Content-Length: %d\r\n"+
-				"Connection: close\r\n\r\n%s",
-			len(body),
-			body,
-		)
-	}()
-
-	manager := newTrafficManager()
-	manager.mu.Lock()
-	manager.portalClientApp = portalClientApp{
-		Available: true,
-		Version:   "0.2.10-test",
-		FileName:  "Shizzi-Plus-0.2.10-test.apk",
-		SizeBytes: 19,
-		SHA256:    "abc",
-	}
-	manager.mu.Unlock()
-
-	server, client := net.Pipe()
-	donePortal := make(chan struct{})
-	go func() {
-		defer close(donePortal)
-		manager.servePortal(server, "192.168.7.66")
-	}()
-
-	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
-	_, err = fmt.Fprint(
-		client,
-		"GET /shizzi-plus.apk HTTP/1.1\r\n"+
-			"Host: 192.0.2.1\r\n"+
-			"Range: bytes=5-\r\n"+
-			"User-Agent: Android-DownloadManager\r\n"+
-			"Connection: close\r\n\r\n",
-	)
-	if err != nil {
-		t.Fatalf("write direct download request: %v", err)
-	}
-
-	response, readErr := io.ReadAll(client)
-	_ = client.Close()
-	if readErr != nil {
-		t.Fatalf("read direct download response: %v", readErr)
-	}
-	<-donePortal
-	<-doneBackend
-
-	backendRequest := <-headersSeen
-	if !strings.Contains(backendRequest, "Range: bytes=5-") {
-		t.Fatalf("Range header was not forwarded: %q", backendRequest)
-	}
-	if !strings.Contains(backendRequest, "User-Agent: Android-DownloadManager") {
-		t.Fatalf("Android user agent was not forwarded: %q", backendRequest)
-	}
-
-	actual := string(response)
-	for _, expected := range []string{
-		"206 Partial Content",
-		"application/vnd.android.package-archive",
-		`filename="Shizzi-Plus-0.2.10-test.apk"`,
-		"Accept-Ranges: bytes",
-		"APK-BYTES-5678",
-	} {
-		if !strings.Contains(actual, expected) {
-			t.Fatalf("direct APK response missing %q: %q", expected, actual)
-		}
-	}
+    data:=[]byte("0123456789abcdef")
+    upstream:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+       _,_=w.Write(data)
+    }))
+    defer upstream.Close()
+    _,portRaw,_:=net.SplitHostPort(upstream.Listener.Addr().String())
+    port,_:=strconv.Atoi(portRaw)
+    m:=newTrafficManager()
+    m.portalClientApp=verifiedAnnouncement(data,port)
+    response,body:=verifiedDownloadRequest(t,m,"GET","bytes=5-","http://192.0.2.1/download/shizzi-plus.apk")
+    if response.StatusCode!=206 || string(body)!="56789abcdef" || response.Header.Get("X-Shizzi-SHA256")!=m.portalClientApp.SHA256 ||
+       !strings.Contains(response.Header.Get("Content-Disposition"),"attachment") {
+       t.Fatalf("verified HTTP range broken: %d %q",response.StatusCode,body)
+    }
 }
 
 
@@ -327,6 +142,10 @@ func TestPortalShowsDirectShizziAdminDownloadLink(t *testing.T) {
 		SizeBytes: 123456,
 		SHA256:    "0123456789abcdef",
 	}
+	manager.portalAdminApp = portalClientApp{
+        Available:true,Version:"0.3.0-test",FileName:"Shizzi-Admin-test.apk",
+        SizeBytes:234567,SHA256:strings.Repeat("b",64),BridgePort:8091,
+    }
 	manager.mu.Unlock()
 
 	server, client := net.Pipe()
@@ -389,101 +208,22 @@ func TestShizziAdminDownloadPathVariants(t *testing.T) {
 }
 
 func TestDirectShizziAdminAliasStreamsResponse(t *testing.T) {
-	backend, err := net.Listen("tcp", clientAppBridgeAddress)
-	if err != nil {
-		t.Fatalf("listen embedded app backend: %v", err)
-	}
-	t.Cleanup(func() { _ = backend.Close() })
-
-	requestSeen := make(chan string, 1)
-	doneBackend := make(chan struct{})
-	go func() {
-		defer close(doneBackend)
-		conn, acceptErr := backend.Accept()
-		if acceptErr != nil {
-			return
-		}
-		defer conn.Close()
-
-		reader := bufio.NewReader(conn)
-		var headers strings.Builder
-		for {
-			line, readErr := reader.ReadString('\n')
-			if readErr != nil {
-				return
-			}
-			headers.WriteString(line)
-			if line == "\r\n" {
-				break
-			}
-		}
-		requestSeen <- headers.String()
-
-		body := "ADMIN-APK-BYTES"
-		_, _ = fmt.Fprintf(
-			conn,
-			"HTTP/1.1 200 OK\r\n"+
-				"Content-Type: application/vnd.android.package-archive\r\n"+
-				"Content-Disposition: attachment; filename=\"Shizzi-Admin-0.2.9-test.apk\"\r\n"+
-				"Content-Length: %d\r\n"+
-				"Connection: close\r\n\r\n%s",
-			len(body),
-			body,
-		)
-	}()
-
-	manager := newTrafficManager()
-	manager.mu.Lock()
-	manager.portalClientApp = portalClientApp{
-		Available: true,
-		Version:   "0.2.10-test",
-		FileName:  "Shizzi-Plus-0.2.10-test.apk",
-		SizeBytes: 19,
-		SHA256:    "abc",
-	}
-	manager.mu.Unlock()
-
-	server, client := net.Pipe()
-	donePortal := make(chan struct{})
-	go func() {
-		defer close(donePortal)
-		manager.servePortal(server, "192.168.7.66")
-	}()
-
-	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
-	_, err = fmt.Fprint(
-		client,
-		"GET /shizzi-admin.apk HTTP/1.1\r\n"+
-			"Host: 192.0.2.1\r\n"+
-			"User-Agent: Android-DownloadManager\r\n"+
-			"Connection: close\r\n\r\n",
-	)
-	if err != nil {
-		t.Fatalf("write Shizzi Admin request: %v", err)
-	}
-
-	response, readErr := io.ReadAll(client)
-	_ = client.Close()
-	if readErr != nil {
-		t.Fatalf("read Shizzi Admin response: %v", readErr)
-	}
-	<-donePortal
-	<-doneBackend
-
-	backendRequest := <-requestSeen
-	if !strings.HasPrefix(backendRequest, "GET /shizzi-admin.apk HTTP/1.1") {
-		t.Fatalf("admin route was not forwarded to embedded bridge: %q", backendRequest)
-	}
-
-	actual := string(response)
-	for _, expected := range []string{
-		"200 OK",
-		"application/vnd.android.package-archive",
-		`filename="Shizzi-Admin-0.2.9-test.apk"`,
-		"ADMIN-APK-BYTES",
-	} {
-		if !strings.Contains(actual, expected) {
-			t.Fatalf("Shizzi Admin APK response missing %q: %q", expected, actual)
-		}
-	}
+    data:=[]byte("verified-admin-apk")
+    upstream:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+        if r.URL.Path!="/shizzi-admin.apk" {w.WriteHeader(404);return}
+        _,_=w.Write(data)
+    }))
+    defer upstream.Close()
+    _,portRaw,_:=net.SplitHostPort(upstream.Listener.Addr().String())
+    port,_:=strconv.Atoi(portRaw)
+    m:=newTrafficManager()
+    m.portalAdminApp=verifiedAnnouncement(data,port)
+    m.portalAdminApp.FileName="Shizzi-Admin-test.apk"
+    response,body:=verifiedDownloadRequest(t,m,"GET","","http://192.0.2.1/shizzi-admin.apk")
+    if response.StatusCode!=200 || string(body)!=string(data) ||
+        response.Header.Get("X-Shizzi-SHA256")!=m.portalAdminApp.SHA256 ||
+        !strings.Contains(response.Header.Get("Content-Disposition"),"Shizzi-Admin-test.apk"){
+        t.Fatalf("admin verification failed: status=%d body=%q",response.StatusCode,body)
+    }
 }
+
