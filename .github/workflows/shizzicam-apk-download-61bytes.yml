@@ -1,0 +1,38 @@
+name: ShizziCam APK 61-byte download regression
+on:
+  push:
+    branches: [fix/shizzicam-apk-download-61bytes]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portal-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: datapath/go.mod
+          cache-dependency-path: datapath/go.sum
+      - name: Check portal JavaScript syntax
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          code=Path("datapath/portal.go").read_text()
+          start=code.index("func injectClientAppDownload(")
+          script=code[start:].split("script := `<script>\n",1)[1].split("\n</script>`",1)[0]
+          Path("/tmp/shizzicam-apk-head-preflight.js").write_text(script)
+          PY
+          node --check /tmp/shizzicam-apk-head-preflight.js
+      - name: Run download and portal regression tests
+        working-directory: datapath
+        run: |
+          go test -count=1 -timeout=10m -run 'Test(ClientAppDownloadChecksHEADBeforeNativeAndroidStreaming|InvalidVerifiedAPKMetadataIsNeverPresentedAsAnAPK|PortalHidesBrokenVerifiedAPKLink|VerifiedDownloadRejectsWrongOrTruncatedAPKBeforeSendingBytes|VerifiedDownloadPreservesRangesAndHeadAfterFullVerification|ReleasePortalDownload)$' .
+      - name: Full Go test suite
+        working-directory: datapath
+        run: |
+          go vet ./...
+          go test -count=1 -timeout=10m ./...
