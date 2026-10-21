@@ -162,6 +162,7 @@ type TrafficManager struct {
 	portalMessage        string
 	portalHTML           string
 	portalClientApp      portalClientApp
+	portalAdminApp       portalClientApp
 	portalAccounts       map[string]PortalAccount
 	portalAuthorized     map[string]*PortalAuthorization
 	portalRechargeClaims []PortalRechargeClaim

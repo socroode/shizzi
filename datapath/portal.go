@@ -168,6 +168,7 @@ type portalConfig struct {
 	Admin              remoteAdminConfig `json:"admin"`
 	AdminState         json.RawMessage   `json:"adminState"`
 	ClientApp          portalClientApp   `json:"clientApp"`
+	AdminApp           portalClientApp   `json:"adminApp"`
 	// ClaimResults lets Android tell the portal how a voucher claim ended so
 	// the client sees "accepted"/"rejected" instead of a silent drop.
 	ClaimResults []PortalClaimResult  `json:"claimResults"`
@@ -284,6 +285,7 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 	}
 	m.portalHTML = config.HTML
 	m.portalClientApp = config.ClientApp
+	m.portalAdminApp = config.AdminApp
 	credentialsChanged := m.adminConfig.Username != config.Admin.Username ||
 		m.adminConfig.PasswordHash != config.Admin.PasswordHash ||
 		m.adminConfig.Enabled != config.Admin.Enabled
@@ -1697,87 +1699,52 @@ func (m *TrafficManager) serveChatProxy(
 }
 
 func (m *TrafficManager) serveClientAppDownload(conn net.Conn, request *http.Request) {
-	m.mu.Lock()
-	app := m.portalClientApp
-	m.mu.Unlock()
+    m.mu.Lock()
+    cameraApp := m.portalClientApp
+    adminApp := m.portalAdminApp
+    m.mu.Unlock()
 
-	requestPath := "/shizzi-plus.apk"
-	if request.URL != nil && strings.TrimSpace(request.URL.Path) != "" {
-		requestPath = request.URL.Path
-	}
-	adminDownload := isAdminAppDownloadPath(requestPath)
-	backendPath := "/shizzi-plus.apk"
-	appLabel := "Shizzi+"
-	if adminDownload {
-		backendPath = "/shizzi-admin.apk"
-		appLabel = "Shizzi Admin"
-	}
+    requestPath := "/shizzi-plus.apk"
+    if request.URL != nil && request.URL.Path != "" { requestPath = request.URL.Path }
+    isAdmin := isAdminAppDownloadPath(requestPath)
+    app := cameraApp
+    backendPath := "/shizzi-plus.apk"
+    label := "Shizzi+"
+    if isAdmin {
+        app = adminApp
+        backendPath = "/shizzi-admin.apk"
+        label = "Shizzi Admin"
+    }
 
-	if !app.Available {
-		body := []byte(appLabel + " indisponible")
-		header := fmt.Sprintf(
-			"HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
-			len(body),
-		)
-		_, _ = conn.Write([]byte(header))
-		if request.Method != http.MethodHead {
-			_, _ = conn.Write(body)
-		}
-		return
-	}
-	if request.URL != nil {
-		if requested := request.URL.Query().Get("sha256"); requested != "" && !strings.EqualFold(requested, app.SHA256) {
-			body := []byte("Ce téléchargement Shizzi+ a changé. Rechargez le portail.")
-			_, _ = fmt.Fprintf(conn, "HTTP/1.1 410 Gone\r\nCache-Control: no-store\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", len(body))
-			if request.Method != http.MethodHead { _, _ = conn.Write(body) }
-			return
-		}
-	}
-	if !adminDownload && app.BridgePort > 0 {
-		m.serveVerifiedClientAppDownload(conn, request, app)
-		return
-	}
+    // Never use a fixed, possibly stale 8091 port nor blindly copy the response
+    // from a loopback server: an error page can otherwise be saved as a .apk.
+    if !app.Available || app.BridgePort <= 0 || app.SizeBytes <= 0 || app.SHA256 == "" {
+        writeClientDownloadFailure(conn, request.Method, "503 Service Unavailable",
+            label+" indisponible sur ce routeur. Rechargez le portail ou redémarrez Shizzi.")
+        return
+    }
+    if request.URL != nil {
+        if requested := request.URL.Query().Get("sha256"); requested != "" &&
+            !strings.EqualFold(requested,app.SHA256) {
+            writeClientDownloadFailure(conn, request.Method, "410 Gone",
+                "La version de "+label+" a changé. Rechargez le portail Shizzi.")
+            return
+        }
+    }
+    m.serveVerifiedClientAppDownload(conn,request,app,backendPath)
+}
 
-	_ = conn.SetDeadline(time.Now().Add(2 * time.Minute))
-	address := clientAppBridgeAddress
-	if app.BridgePort > 0 {
-		address = net.JoinHostPort("127.0.0.1", strconv.Itoa(app.BridgePort))
-	}
-	local, err := net.DialTimeout("tcp", address, 3*time.Second)
-	if err != nil {
-		body := []byte("Téléchargement Shizzi+ momentanément indisponible.")
-		header := fmt.Sprintf(
-			"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
-			len(body),
-		)
-		_, _ = conn.Write([]byte(header))
-		if request.Method != http.MethodHead {
-			_, _ = conn.Write(body)
-		}
-		return
-	}
-	defer local.Close()
-	_ = local.SetDeadline(time.Now().Add(2 * time.Minute))
-
-	if _, err := fmt.Fprintf(
-		local,
-		"%s %s HTTP/1.1\r\nHost: localhost\r\n",
-		request.Method,
-		backendPath,
-	); err != nil {
-		return
-	}
-	for _, name := range []string{"Range", "If-Range", "User-Agent"} {
-		if value := request.Header.Get(name); value != "" {
-			if _, err := fmt.Fprintf(local, "%s: %s\r\n", name, value); err != nil {
-				return
-			}
-		}
-	}
-	if _, err := io.WriteString(local, "Connection: close\r\n\r\n"); err != nil {
-		return
-	}
-	_, _ = io.Copy(conn, local)
+// Never give error responses APK headers, an APK filename or a download
+// attachment disposition. The portal checks HEAD before navigating.
+func writeClientDownloadFailure(conn net.Conn, method, status, message string) {
+    body:=[]byte(message)
+    _,_=fmt.Fprintf(conn,
+        "HTTP/1.1 %s\r\nContent-Type: text/plain; charset=utf-8\r\n"+
+        "Content-Disposition: inline; filename=\"shizzi-download-error.txt\"\r\n"+
+        "X-Shizzi-Download-Error: true\r\nX-Content-Type-Options: nosniff\r\n"+
+        "Cache-Control: no-store\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
+        status,len(body))
+    if method!=http.MethodHead {_,_=conn.Write(body)}
 }
 
 func (m *TrafficManager) writePortalStatusJSON(conn net.Conn, ip string) {

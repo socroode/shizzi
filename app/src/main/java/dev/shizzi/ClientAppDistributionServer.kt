@@ -246,7 +246,7 @@ class ClientAppDistributionServer(
 
 /** The privileged process publishes the identity and port of its own live server.
  * Never retain an app-process announcement referring to a different installed APK/server. */
-internal fun portalConfigWithDistribution(configJson: String, info: ClientAppDistributionInfo, port: Int): String =
+internal fun portalConfigWithDistribution(configJson: String, info: ClientAppDistributionInfo, adminInfo: ClientAppDistributionInfo, port: Int): String =
     JSONObject(configJson.ifBlank { "{}" }).apply {
         put("clientApp", JSONObject().apply {
             put("available", info.available && port in 1..65535)
@@ -254,6 +254,14 @@ internal fun portalConfigWithDistribution(configJson: String, info: ClientAppDis
             put("fileName", info.fileName)
             put("sizeBytes", info.sizeBytes)
             put("sha256", info.sha256)
+            put("bridgePort", port)
+        })
+        put("adminApp", JSONObject().apply {
+            put("available", adminInfo.available && port in 1..65535)
+            put("version", adminInfo.version)
+            put("fileName", adminInfo.fileName)
+            put("sizeBytes", adminInfo.sizeBytes)
+            put("sha256", adminInfo.sha256)
             put("bridgePort", port)
         })
     }.toString()
