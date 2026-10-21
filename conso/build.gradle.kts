@@ -13,8 +13,8 @@ android {
         applicationId = "dev.shizzi.conso"
         minSdk = 30
         targetSdk = 35
-        versionCode = 20
-        versionName = "0.3.2.1-cam-av"
+        versionCode = 21
+        versionName = "0.3.2.2-cam-av"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

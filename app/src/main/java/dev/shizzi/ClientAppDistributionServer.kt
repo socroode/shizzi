@@ -235,8 +235,8 @@ class ClientAppDistributionServer(
 
     companion object {
         const val LOOPBACK_HOST = "127.0.0.1"
-        const val CLIENT_VERSION = "0.3.2.1-cam-av"
-        const val CLIENT_FILE_NAME = "Shizzi-PlusCam-0.3.2.1.apk"
+        const val CLIENT_VERSION = "0.3.2.2-cam-av"
+        const val CLIENT_FILE_NAME = "Shizzi-PlusCam-0.3.2.2.apk"
         const val ASSET_PATH = "shizzi/Shizzi-Plus.apk"
         const val ADMIN_VERSION = "0.3.0-universal"
         const val ADMIN_FILE_NAME = "Shizzi-Admin-0.3.0-universal.apk"
