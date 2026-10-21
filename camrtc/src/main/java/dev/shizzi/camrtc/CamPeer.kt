@@ -62,6 +62,11 @@ class CamPeer(
             }
         }
         factory = PeerConnectionFactory.builder()
+            // LAN-only media: prevent ICE from selecting cellular or VPN interfaces.
+            .setOptions(PeerConnectionFactory.Options().apply {
+                networkIgnoreMask = PeerConnectionFactory.Options.ADAPTER_TYPE_CELLULAR or
+                    PeerConnectionFactory.Options.ADAPTER_TYPE_VPN
+            })
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(egl.eglBaseContext,true,true))
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(egl.eglBaseContext))
             .createPeerConnectionFactory()
