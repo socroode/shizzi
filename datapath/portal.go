@@ -2024,7 +2024,7 @@ func (m *TrafficManager) writePortalHTML(
 <p>Installez Shizzi+ directement depuis ce Wi-Fi. Aucun Internet ni quota Data n'est utilisé.</p>
 <a class="download-button" href="%s">Télécharger Shizzi+</a>
 <div id="shizzi-download-status" class="app-note" aria-live="polite"></div>
-<div class="app-meta">%s · SHA-256 %s…</div>
+<div class="app-meta">%s · %s · SHA-256 %s…</div>
 <div class="app-note">Lien direct : %s</div>
 <div class="app-note">Android peut demander d'autoriser l'installation depuis cette source.</div></section>
 <section class="app-download"><div class="eyebrow">APPLICATION ADMIN</div>
@@ -2037,6 +2037,7 @@ func (m *TrafficManager) writePortalHTML(
 			html.EscapeString(clientApp.Version),
 			html.EscapeString(downloadURL),
 			html.EscapeString(formatPortalFileSize(clientApp.SizeBytes)),
+			html.EscapeString(clientApp.FileName),
 			html.EscapeString(shortSHA),
 			html.EscapeString(downloadURL),
 		)
