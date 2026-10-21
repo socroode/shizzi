@@ -1865,6 +1865,7 @@ func (m *TrafficManager) writePortalHTML(
 	subtitle := m.portalMessage
 	custom := m.portalHTML
 	clientApp := m.portalClientApp
+	adminApp := m.portalAdminApp
 	m.mu.Unlock()
 
 	alert := ""
@@ -1978,37 +1979,38 @@ func (m *TrafficManager) writePortalHTML(
 <a class="speedtest-button" href="/speedtest/">Tester le débit local</a>
 <div class="speedtest-note">Navigateur uniquement · aucun Termux nécessaire</div></section>`
 
-	if clientApp.Available {
-		downloadURL := "http://192.0.2.1/shizzi-plus.apk"
-		if clientApp.BridgePort > 0 { downloadURL += "?sha256=" + clientApp.SHA256 }
-		shortSHA := clientApp.SHA256
-		if len(shortSHA) > 12 {
-			shortSHA = shortSHA[:12]
-		}
-		content += fmt.Sprintf(
-			`<section class="app-download"><div class="eyebrow">APPLICATION CLIENT</div>
+	if clientApp.Available && clientApp.BridgePort > 0 {
+        downloadURL := "http://192.0.2.1/shizzi-plus.apk?sha256=" + clientApp.SHA256
+        shortSHA := clientApp.SHA256
+        if len(shortSHA)>12 {shortSHA=shortSHA[:12]}
+        content += fmt.Sprintf(`<section class="app-download"><div class="eyebrow">APPLICATION CLIENT</div>
 <strong>Shizzi+ %s</strong>
-<p>Installez Shizzi+ directement depuis ce Wi-Fi. Aucun Internet ni quota Data n'est utilisé.</p>
-<a class="download-button" href="%s">Télécharger Shizzi+</a>
-<div id="shizzi-download-status" class="app-note" aria-live="polite"></div>
+<p>Téléchargement local sécurisé, sans Internet ni quota Data.</p>
+<a class="download-button" data-size="%d" data-sha256="%s" href="%s">Télécharger Shizzi+</a>
+<div id="shizzi-download-status" class="app-note" aria-live="polite">Vérification de l'APK avant téléchargement.</div>
 <div class="app-meta">%s · %s · SHA-256 %s…</div>
-<div class="app-note">Lien direct : %s</div>
-<div class="app-note">Android peut demander d'autoriser l'installation depuis cette source.</div></section>
-<section class="app-download"><div class="eyebrow">APPLICATION ADMIN</div>
-<strong>Shizzi Admin</strong>
-<p>Installez l'application d'administration compatible directement depuis ce Wi-Fi Shizzi.</p>
-<a class="download-button" href="http://192.0.2.1/shizzi-admin.apk" download="Shizzi-Admin.apk">Télécharger Shizzi Admin</a>
-<div id="shizzi-admin-download-status" class="app-note" aria-live="polite"></div>
-<div class="app-note">Lien direct : http://192.0.2.1/shizzi-admin.apk</div>
-<div class="app-note">Téléchargement local · aucun Internet ni quota Data utilisé.</div></section>`,
-			html.EscapeString(clientApp.Version),
-			html.EscapeString(downloadURL),
-			html.EscapeString(formatPortalFileSize(clientApp.SizeBytes)),
-			html.EscapeString(clientApp.FileName),
-			html.EscapeString(shortSHA),
-			html.EscapeString(downloadURL),
-		)
-	}
+<div class="app-note">Lien direct : %s</div></section>`,
+            html.EscapeString(clientApp.Version),clientApp.SizeBytes,
+            html.EscapeString(clientApp.SHA256),html.EscapeString(downloadURL),
+            html.EscapeString(formatPortalFileSize(clientApp.SizeBytes)),
+            html.EscapeString(clientApp.FileName),html.EscapeString(shortSHA),
+            html.EscapeString(downloadURL))
+    }
+    if adminApp.Available && adminApp.BridgePort > 0 {
+        downloadURL := "http://192.0.2.1/shizzi-admin.apk?sha256=" + adminApp.SHA256
+        shortSHA := adminApp.SHA256
+        if len(shortSHA)>12 {shortSHA=shortSHA[:12]}
+        content += fmt.Sprintf(`<section class="app-download"><div class="eyebrow">APPLICATION ADMIN</div>
+<strong>Shizzi Admin %s</strong>
+<p>Application d'administration locale compatible avec le routeur.</p>
+<a class="download-button" data-size="%d" data-sha256="%s" href="%s">Télécharger Shizzi Admin</a>
+<div id="shizzi-admin-download-status" class="app-note" aria-live="polite">Vérification de l'APK avant téléchargement.</div>
+<div class="app-meta">%s · %s · SHA-256 %s…</div></section>`,
+            html.EscapeString(adminApp.Version),adminApp.SizeBytes,
+            html.EscapeString(adminApp.SHA256),html.EscapeString(downloadURL),
+            html.EscapeString(formatPortalFileSize(adminApp.SizeBytes)),
+            html.EscapeString(adminApp.FileName),html.EscapeString(shortSHA))
+    }
 
 	refresh := ""
 	if status.ClaimPending {
@@ -2107,21 +2109,48 @@ func injectClientAppDownload(page string) string {
 	// navigation intact so the browser starts streaming from Shizzi immediately.
 	script := `<script>
 (function(){
-  function wire(selector,statusId,defaultLabel){
+  function wire(selector,statusId){
     var link=document.querySelector(selector);
     if(!link || link.dataset.shizziNativeDownload==="1") return;
     link.dataset.shizziNativeDownload="1";
     var status=document.getElementById(statusId);
-    link.addEventListener("click",function(){
-      link.textContent="Téléchargement lancé…";
-      if(status) status.textContent="Téléchargement direct depuis le routeur Shizzi…";
-      setTimeout(function(){ link.textContent=defaultLabel; },1500);
+    var expected=Number(link.getAttribute("data-size")||0);
+    var sha=(link.getAttribute("data-sha256")||"").toLowerCase();
+    var valid=false;
+    var busy=false;
+    function note(message){if(status)status.textContent=message;}
+    link.addEventListener("click",function(event){
+      if(valid){valid=false;note("Téléchargement direct depuis le routeur Shizzi…");return;}
+      event.preventDefault();
+      if(busy)return;
+      if(expected<=0 || !/^[0-9a-f]{64}$/.test(sha)){
+        note("Erreur : informations de l'APK absentes. Rechargez le portail.");
+        return;
+      }
+      busy=true;
+      note("Vérification de la taille et de la signature annoncées par le routeur…");
+      fetch(link.href,{method:"HEAD",cache:"no-store"})
+        .then(function(response){
+          var bytes=Number(response.headers.get("Content-Length")||0);
+          var got=(response.headers.get("X-Shizzi-SHA256")||"").toLowerCase();
+          var mime=(response.headers.get("Content-Type")||"").toLowerCase();
+          if(!response.ok || bytes!==expected || got!==sha ||
+             mime.indexOf("application/vnd.android.package-archive")!==0)
+             throw new Error("APK indisponible ou non conforme");
+          valid=true;
+          note("APK vérifiée ("+(bytes/1048576).toFixed(1)+" Mio). Appuyez à nouveau pour télécharger.");
+        })
+        .catch(function(err){
+          valid=false;
+          note("Téléchargement bloqué : "+err.message+". Réessayez ou relancez Shizzi.");
+        })
+        .finally(function(){busy=false;});
     });
   }
-  wire('a.download-button[href*="shizzi-plus.apk"]',"shizzi-download-status","Télécharger Shizzi+");
-  wire('a.download-button[href*="shizzi-admin.apk"]',"shizzi-admin-download-status","Télécharger Shizzi Admin");
+  wire('a.download-button[href*="shizzi-plus.apk"]',"shizzi-download-status");
+  wire('a.download-button[href*="shizzi-admin.apk"]',"shizzi-admin-download-status");
 })();
-</script>`
+</script>`;
 
 	lower := strings.ToLower(page)
 	if index := strings.LastIndex(lower, "</body>"); index >= 0 {
