@@ -204,7 +204,12 @@ class MainActivity : Activity() {
                 setPadding(0, dp(14), 0, dp(8))
             })
 
-            addView(sectionLabel("SHIZZICAM"))\n            addView(primaryButton("Mode caméra IP Shizzi+Cam") {\n                startActivity(Intent(this@MainActivity, CamActivity::class.java))\n            })\n\n            addView(sectionLabel("RÉCEPTION DES APPELS"))
+            addView(sectionLabel("SHIZZICAM"))
+            addView(primaryButton("Mode caméra IP Shizzi+Cam") {
+                startActivity(Intent(this@MainActivity, CamActivity::class.java))
+            })
+
+            addView(sectionLabel("RÉCEPTION DES APPELS"))
             receptionStatus = TextView(this@MainActivity).apply {
                 textSize = 13f
                 setTextColor(Color.rgb(148, 163, 184))
