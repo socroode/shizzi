@@ -132,3 +132,27 @@ func TestVerifiedDownloadRejectsObsoleteFingerprintURL(t *testing.T) {
 	response, _ := verifiedDownloadRequest(t, manager, "GET", "", "http://192.0.2.1/shizzi-plus.apk?sha256=old-fingerprint")
 	if response.StatusCode != 410 { t.Fatalf("obsolete download URL returned %d", response.StatusCode) }
 }
+
+
+func TestVerifiedDownloadAcceptsLargeWebRTCAPK(t *testing.T) {
+ // The real signed Shizzi+Cam is ~48 MB. The historical 32 MiB limit
+ // made the browser save a 61-byte error as an APK file.
+ data := bytes.Repeat([]byte{0x5a}, 48_216_718)
+ backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+  w.Header().Set("Content-Length",strconv.Itoa(len(data)))
+  _,_ = w.Write(data)
+ }))
+ defer backend.Close()
+ _, p, _ := net.SplitHostPort(backend.Listener.Addr().String())
+ port, _ := strconv.Atoi(p)
+ m := newTrafficManager()
+ m.portalClientApp = verifiedAnnouncement(data,port)
+ response, bytes := verifiedDownloadRequest(t,m,http.MethodHead,"")
+ if response.StatusCode != 200 || len(bytes) != 0 {
+  t.Fatalf("large verified APK HEAD failed: status=%d body=%q",response.StatusCode,bytes)
+ }
+ if response.ContentLength != int64(len(data)) ||
+    response.Header.Get("X-Shizzi-SHA256") != m.portalClientApp.SHA256 {
+  t.Fatalf("large APK metadata wrong: size=%d header=%v",response.ContentLength,response.Header)
+ }
+}

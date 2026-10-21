@@ -2,108 +2,165 @@ package dev.shizzi.conso
 
 import android.Manifest
 import android.app.Activity
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
 import android.view.Gravity
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.Spinner
 import android.widget.TextView
+import org.webrtc.SurfaceViewRenderer
 import java.nio.charset.StandardCharsets
-import org.json.JSONObject
 import kotlin.concurrent.thread
 
-/** Shizzi+ features are unchanged on the 0.4.3.5.11 router: camera is feature-gated. */
+/** Optional camera feature. Legacy Shizzi 0.4.3.5.11 login/chat/media remain available. */
 class CamActivity:Activity() {
     private lateinit var status:TextView
     private lateinit var quality:Spinner
+    private lateinit var preview:SurfaceViewRenderer
     @Volatile private var busy=false
-
-    override fun onCreate(savedInstanceState:Bundle?) {
+    private var service:CameraCaptureService?=null
+    private var bound=false
+    private val handler=Handler(Looper.getMainLooper())
+    private val statusRefresh=object:Runnable{
+        override fun run(){
+            service?.let{status.text=it.captureStatus}
+            if(!isFinishing)handler.postDelayed(this,900)
+        }
+    }
+    private val serviceConnection=object:ServiceConnection{
+        override fun onServiceConnected(name:ComponentName,binder:IBinder){
+            val local=binder as? CameraCaptureService.LocalBinder ?:return
+            service=local.service()
+            service?.attachPreview(preview)
+            status.text=service?.captureStatus ?: "Caméra indisponible"
+        }
+        override fun onServiceDisconnected(name:ComponentName){service=null}
+    }
+    override fun onCreate(savedInstanceState:Bundle?){
         super.onCreate(savedInstanceState)
-        val root=LinearLayout(this).apply {
+        val root=LinearLayout(this).apply{
             orientation=LinearLayout.VERTICAL
             gravity=Gravity.CENTER_HORIZONTAL
-            setPadding(36,48,36,24)
+            setPadding(24,32,24,20)
         }
-        root.addView(TextView(this).apply{text="Shizzi+Cam";textSize=27f})
-        root.addView(TextView(this).apply {
-            text="Caméra locale avec vidéo H.264 et son Opus. Connecte ton compte Shizzi avec le portail avant de démarrer. Shizzi 0.4.3.5.11 reste compatible pour les fonctions habituelles, mais ne gère pas la vidéosurveillance."
-            textSize=15f
-            setPadding(0,24,0,24)
+        root.addView(TextView(this).apply{text="Shizzi+Cam";textSize=26f})
+        root.addView(TextView(this).apply{
+            text="Aperçu local, vidéo H.264 et audio Opus. Le compte doit être connecté sur ShizziCam Hotspot. Sur Shizzi 0.4.3.5.11, les fonctions Shizzi+ restent disponibles mais pas la caméra."
+            textSize=14f
         })
-        quality=Spinner(this)
-        quality.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item, listOf("Auto","360p","480p","720p"))
+        preview=SurfaceViewRenderer(this).apply{
+            layoutParams=LinearLayout.LayoutParams(-1,resources.displayMetrics.widthPixels*9/16)
+            setBackgroundColor(android.graphics.Color.BLACK)
+        }
+        root.addView(preview)
+        quality=Spinner(this).apply{
+            adapter=ArrayAdapter(this@CamActivity,android.R.layout.simple_spinner_dropdown_item,
+                listOf("Auto","360p","480p","720p"))
+        }
         root.addView(quality)
-        status=TextView(this).apply {text="Caméra désactivée";textSize=15f}
+        status=TextView(this).apply{text="Caméra désactivée";textSize=15f;setPadding(0,14,0,14)}
         root.addView(status)
-        root.addView(Button(this).apply {
+        root.addView(Button(this).apply{
             text="Activer caméra + microphone"
-            setOnClickListener {ensurePermissions()}
+            setOnClickListener{ensurePermissions()}
         })
-        root.addView(Button(this).apply {
-            text="Arrêter la caméra"
-            setOnClickListener {
-                startService(Intent(this@CamActivity,CameraCaptureService::class.java).setAction(CameraCaptureService.ACTION_STOP))
-                status.text="Caméra et microphone arrêtés"
+        root.addView(Button(this).apply{
+            text="Arrêter caméra + microphone"
+            setOnClickListener{
+                startService(Intent(this@CamActivity,CameraCaptureService::class.java)
+                    .setAction(CameraCaptureService.ACTION_STOP))
+                status.text="Arrêt demandé"
             }
         })
-        setContentView(root)
+        setContentView(android.widget.ScrollView(this).apply{addView(root)})
     }
-    private fun wifi():Network? {
+    override fun onStart(){
+        super.onStart()
+        bindExisting()
+        handler.post(statusRefresh)
+    }
+    override fun onStop(){
+        handler.removeCallbacks(statusRefresh)
+        if(bound){
+            service?.detachPreview(preview)
+            unbindService(serviceConnection)
+            service=null
+            bound=false
+        }
+        super.onStop()
+    }
+    private fun bindExisting(){
+        if(bound)return
+        bound=bindService(Intent(this,CameraCaptureService::class.java),serviceConnection,0)
+    }
+    private fun bindStarted(){
+        if(bound)return
+        bound=bindService(Intent(this,CameraCaptureService::class.java),
+            serviceConnection,Context.BIND_AUTO_CREATE)
+    }
+    private fun wifi():Network?{
         val cm=getSystemService(ConnectivityManager::class.java)
-        return cm.allNetworks.firstOrNull {
+        return cm.allNetworks.firstOrNull{
             cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)==true
         }
     }
-    private fun ensurePermissions() {
-        if (busy) return
-        val wanted=mutableListOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO)
-        if(Build.VERSION.SDK_INT>=33) wanted.add(Manifest.permission.POST_NOTIFICATIONS)
-        val missing=wanted.filter{checkSelfPermission(it)!=PackageManager.PERMISSION_GRANTED}
+    private fun ensurePermissions(){
+        if(busy)return
+        // Notification permission is optional on Android 13+: do not block FGS/camera
+        // for vendor-specific notification behavior.
+        val needed=listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO)
+        val missing=needed.filter{checkSelfPermission(it)!=PackageManager.PERMISSION_GRANTED}
         if(missing.isNotEmpty())requestPermissions(missing.toTypedArray(),713)
         else pairAndStart()
     }
-    override fun onRequestPermissionsResult(code:Int,permissions:Array<out String>,grants:IntArray) {
+    override fun onRequestPermissionsResult(code:Int,permissions:Array<out String>,grants:IntArray){
         super.onRequestPermissionsResult(code,permissions,grants)
-        if (code==713) {
-            if(grants.size>=2 && grants.all{it==PackageManager.PERMISSION_GRANTED}) pairAndStart()
-            else status.text="La caméra et le microphone nécessitent ton autorisation."
+        if(code==713){
+            if(grants.size==permissions.size && grants.all{it==PackageManager.PERMISSION_GRANTED})pairAndStart()
+            else status.text="Autorise la caméra et le microphone dans les paramètres Android."
         }
     }
-    private fun pairAndStart() {
+    private fun pairAndStart(){
         if(busy)return
         busy=true
-        val q=listOf("auto","360p","480p","720p")[quality.selectedItemPosition]
-        status.text="Vérification de la compatibilité du routeur…"
-        thread(name="shizzicam-check") {
+        val requested=listOf("auto","360p","480p","720p")[quality.selectedItemPosition]
+        status.text="Contrôle de la compatibilité du routeur…"
+        thread(name="shizzicam-compat"){
             try {
-                val net=wifi() ?: error("Connecte le Wi-Fi du routeur Shizzi.")
-                val pin=RouterTls.pair(this,net)
-                val conn=RouterTls.connection("https://192.0.2.1/api/v1/cam/capabilities",pin,net)
-                val supported=try {
-                    conn.connectTimeout=3500
-                    conn.readTimeout=3500
-                    conn.responseCode==200 && CamCapability.supports(200,conn.inputStream.bufferedReader(StandardCharsets.UTF_8).use{it.readText()})
-                }finally {conn.disconnect()}
-                if(!supported)error("Shizzi Hotspot 0.4.3.5.11 : fonctions habituelles disponibles, mais mode caméra IP non pris en charge.")
-                runOnUiThread {
-                    if(!isFinishing) {
+                val network=wifi() ?:error("Connecte-toi au Wi-Fi Shizzi.")
+                val pin=RouterTls.pair(this,network)
+                val c=RouterTls.connection("https://192.0.2.1/api/v1/cam/capabilities",pin,network)
+                val supported=try{
+                    c.connectTimeout=5000;c.readTimeout=5000
+                    val httpStatus=c.responseCode
+                    CamCapability.supports(httpStatus,if(httpStatus==200)c.inputStream.bufferedReader(StandardCharsets.UTF_8).use{it.readText()} else "")
+                }finally{c.disconnect()}
+                if(!supported)error("Mode caméra indisponible sur ce routeur. Shizzi+ continue de fonctionner normalement.")
+                runOnUiThread{
+                    if(!isFinishing){
                         startForegroundService(Intent(this,CameraCaptureService::class.java)
                             .putExtra(CameraCaptureService.EXTRA_PIN,pin)
-                            .putExtra(CameraCaptureService.EXTRA_QUALITY,q))
-                        status.text="Caméra et microphone en démarrage. Notification active."
+                            .putExtra(CameraCaptureService.EXTRA_QUALITY,requested))
+                        bindStarted()
+                        status.text="Démarrage caméra + microphone demandé"
                     }
                 }
-            } catch(e:Exception) {
-                runOnUiThread {status.text=e.message ?: "Caméra indisponible"}
-            } finally {busy=false}
+            }catch(e:Exception){
+                runOnUiThread{status.text=e.message ?: "Caméra indisponible"}
+            }finally{busy=false}
         }
     }
 }

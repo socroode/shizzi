@@ -2022,7 +2022,7 @@ func (m *TrafficManager) writePortalHTML(
 			`<section class="app-download"><div class="eyebrow">APPLICATION CLIENT</div>
 <strong>Shizzi+ %s</strong>
 <p>Installez Shizzi+ directement depuis ce Wi-Fi. Aucun Internet ni quota Data n'est utilisé.</p>
-<a class="download-button" href="%s" download="%s">Télécharger Shizzi+</a>
+<a class="download-button" href="%s">Télécharger Shizzi+</a>
 <div id="shizzi-download-status" class="app-note" aria-live="polite"></div>
 <div class="app-meta">%s · SHA-256 %s…</div>
 <div class="app-note">Lien direct : %s</div>
@@ -2036,7 +2036,6 @@ func (m *TrafficManager) writePortalHTML(
 <div class="app-note">Téléchargement local · aucun Internet ni quota Data utilisé.</div></section>`,
 			html.EscapeString(clientApp.Version),
 			html.EscapeString(downloadURL),
-			html.EscapeString(clientApp.FileName),
 			html.EscapeString(formatPortalFileSize(clientApp.SizeBytes)),
 			html.EscapeString(shortSHA),
 			html.EscapeString(downloadURL),

@@ -15,6 +15,10 @@ import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
+import android.os.Binder
+import android.os.Handler
+import android.os.Looper
+import org.webrtc.SurfaceViewRenderer
 import dev.shizzi.camrtc.CamPeer
 import org.json.JSONObject
 import java.net.URLEncoder
@@ -36,6 +40,20 @@ class CameraCaptureService:Service() {
     private var failures=0
     private var currentSession=""
     private lateinit var notifications:NotificationManager
+    private val main=Handler(Looper.getMainLooper())
+    @Volatile private var preview:SurfaceViewRenderer?=null
+    @Volatile var captureStatus:String="Caméra inactive"
+        private set
+    inner class LocalBinder:Binder() {fun service():CameraCaptureService=this@CameraCaptureService}
+    private val localBinder=LocalBinder()
+    fun attachPreview(renderer:SurfaceViewRenderer) {
+        preview=renderer
+        peer?.attachLocalPreview(renderer)
+    }
+    fun detachPreview(renderer:SurfaceViewRenderer) {
+        if(preview===renderer)preview=null
+        peer?.detachLocalPreview(renderer)
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -43,7 +61,7 @@ class CameraCaptureService:Service() {
         notifications=getSystemService(NotificationManager::class.java)
         notifications.createNotificationChannel(NotificationChannel("shizzicam_av","ShizziCam vidéo + son",NotificationManager.IMPORTANCE_LOW))
     }
-    override fun onBind(intent:Intent?):IBinder?=null
+    override fun onBind(intent:Intent?):IBinder=localBinder
     override fun onStartCommand(intent:Intent?,flags:Int,startId:Int):Int {
         if(intent?.action==ACTION_STOP){stopSelf();return START_NOT_STICKY}
         if(running)return START_NOT_STICKY
@@ -68,13 +86,20 @@ class CameraCaptureService:Service() {
             else startForeground(8421,note)
         }catch(_:Exception){stopSelf();return START_NOT_STICKY}
         running=true
+        captureStatus="Ouverture caméra et microphone…"
         worker.execute {
             try {
                 network=wifi() ?: error("Pas de Wi-Fi Shizzi")
-                peer=CamPeer(this,null,signal={ send(it) },status={state->android.util.Log.i("ShizziCam",state)})
+                peer=CamPeer(this,null,signal={ send(it) },status={state->
+                    captureStatus=state
+                    android.util.Log.i("ShizziCam",state)
+                })
                 peer?.prepareSender()
+                captureStatus="Capture caméra + son actifs, en attente de visionneuse"
+                main.post {preview?.let {peer?.attachLocalPreview(it)}}
                 worker.scheduleWithFixedDelay({tick()},0,650,TimeUnit.MILLISECONDS)
             }catch(e:Exception) {
+                captureStatus="Échec capture : "+(e.message ?: e.javaClass.simpleName)
                 android.util.Log.e("ShizziCam","Capture impossible",e)
                 stopSelf()
             }
@@ -141,6 +166,7 @@ class CameraCaptureService:Service() {
         }
     }
     override fun onDestroy() {
+        captureStatus="Caméra et microphone arrêtés"
         running=false
         worker.shutdownNow()
         sending.shutdownNow()

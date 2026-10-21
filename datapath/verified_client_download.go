@@ -13,14 +13,15 @@ import (
 	"time"
 )
 
-const maxVerifiedClientAPKBytes = 32 * 1024 * 1024
+// Allow WebRTC APKs above 32 MiB; bound memory used by verified download.
+const maxVerifiedClientAPKBytes = 128 * 1024 * 1024
 
 // Validate the entire APK before sending any APK bytes to a client. A stale
 // loopback server, a mismatched announcement or a truncated response must fail.
 func (m *TrafficManager) serveVerifiedClientAppDownload(conn net.Conn, request *http.Request, app portalClientApp) {
 	fail := func(status, message string) {
 		body := []byte(message)
-		_, _ = fmt.Fprintf(conn, "HTTP/1.1 %s\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", status, len(body))
+		_, _ = fmt.Fprintf(conn, "HTTP/1.1 %s\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: inline\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", status, len(body))
 		if request.Method != http.MethodHead {
 			_, _ = conn.Write(body)
 		}

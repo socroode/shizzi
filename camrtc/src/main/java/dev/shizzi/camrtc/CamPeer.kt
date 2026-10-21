@@ -43,6 +43,7 @@ class CamPeer(
     private var videoSource: VideoSource? = null
     private var audioSource: AudioSource? = null
     private var localVideo: VideoTrack? = null
+    private var localPreview: SurfaceViewRenderer? = null
     private var localAudio: AudioTrack? = null
     private var session = ""
     private var isSender = false
@@ -90,6 +91,7 @@ class CamPeer(
         cam.initialize(captureHelper!!,context.applicationContext,videoSource!!.capturerObserver)
         cam.startCapture(854,480,20)
         localVideo = factory.createVideoTrack("shizzicam-video",videoSource!!)
+        localPreview?.let {localVideo?.addSink(it)}
         audioSource = factory.createAudioSource(MediaConstraints())
         localAudio = factory.createAudioTrack("shizzicam-audio",audioSource!!)
         localAudio?.setEnabled(true)
@@ -265,7 +267,24 @@ class CamPeer(
         })
     }
 
+    /** Preview of actual captured frames on the CAMERA telephone, not a dummy image. */
+    fun attachLocalPreview(renderer: SurfaceViewRenderer) {
+        if (localPreview === renderer) return
+        localPreview?.let {detachLocalPreview(it)}
+        renderer.init(egl.eglBaseContext,null)
+        renderer.setEnableHardwareScaler(true)
+        localPreview=renderer
+        localVideo?.addSink(renderer)
+    }
+    fun detachLocalPreview(renderer: SurfaceViewRenderer) {
+        if (localPreview !== renderer) return
+        localVideo?.removeSink(renderer)
+        localPreview=null
+        renderer.release()
+    }
+
     fun close() {
+        localPreview?.let {detachLocalPreview(it)}
         session=""
         pc?.close();pc?.dispose();pc=null
         try{capturer?.stopCapture()}catch (_:InterruptedException){}
