@@ -37,6 +37,7 @@ class CamPeer(
     private val egl: EglBase = EglBase.create()
     private val factory: PeerConnectionFactory
     private var pc: PeerConnection? = null
+    private val remoteIcePending = mutableListOf<IceCandidate>()
     private var capturer: CameraVideoCapturer? = null
     private var captureHelper: SurfaceTextureHelper? = null
     private var videoSource: VideoSource? = null
@@ -110,6 +111,7 @@ class CamPeer(
     }
 
     private fun createPeer() {
+        synchronized(remoteIcePending) { remoteIcePending.clear() }
         pc?.close()
         pc?.dispose()
         val config=PeerConnection.RTCConfiguration(emptyList()).apply {
@@ -181,17 +183,31 @@ class CamPeer(
             "offer" -> if (!isSender) {
                 val desc=SessionDescription(SessionDescription.Type.OFFER,event.getString("sdp"))
                 pc?.setRemoteDescription(observer(onSet={
+                    flushRemoteIce()
                     pc?.createAnswer(answerObserver(),MediaConstraints())
                 }),desc)
             }
             "answer" -> if (isSender) {
                 val desc=SessionDescription(SessionDescription.Type.ANSWER,event.getString("sdp"))
-                pc?.setRemoteDescription(observer(),desc)
+                pc?.setRemoteDescription(observer(onSet={flushRemoteIce()}),desc)
             }
-            "ice" -> pc?.addIceCandidate(IceCandidate(event.optString("mid"),
-                event.optInt("mline"),event.optString("candidate")))
+            "ice" -> {
+                val candidate=IceCandidate(event.optString("mid"),
+                    event.optInt("mline"),event.optString("candidate"))
+                synchronized(remoteIcePending) {
+                    if (pc?.remoteDescription == null) remoteIcePending.add(candidate)
+                    else pc?.addIceCandidate(candidate)
+                }
+            }
             "quality" -> if (isSender) setQuality(event.optString("quality"))
             "stop" -> {pc?.close();status("Surveillance terminée")}
+        }
+    }
+
+    private fun flushRemoteIce() {
+        synchronized(remoteIcePending) {
+            for (candidate in remoteIcePending) pc?.addIceCandidate(candidate)
+            remoteIcePending.clear()
         }
     }
 
