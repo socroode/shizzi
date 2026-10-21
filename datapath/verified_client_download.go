@@ -16,20 +16,28 @@ import (
 // Allow WebRTC APKs above 32 MiB; bound memory used by verified download.
 const maxVerifiedClientAPKBytes = 128 * 1024 * 1024
 
+// Validate the advertised file before offering a download link. Bad metadata
+// used to return a 61-byte text error to Android's APK download manager.
+func validVerifiedClientAPKMetadata(app portalClientApp) bool {
+    digest, err := hex.DecodeString(app.SHA256)
+    return app.Available && err == nil && len(digest) == sha256.Size &&
+        app.SizeBytes > 0 && app.SizeBytes <= maxVerifiedClientAPKBytes &&
+        app.BridgePort > 0 && app.BridgePort <= 65535
+}
+
 // Validate the entire APK before sending any APK bytes to a client. A stale
 // loopback server, a mismatched announcement or a truncated response must fail.
 func (m *TrafficManager) serveVerifiedClientAppDownload(conn net.Conn, request *http.Request, app portalClientApp) {
 	fail := func(status, message string) {
 		body := []byte(message)
-		_, _ = fmt.Fprintf(conn, "HTTP/1.1 %s\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: inline\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", status, len(body))
+		_, _ = fmt.Fprintf(conn, "HTTP/1.1 %s\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Disposition: inline\r\nX-Shizzi-Download-Error: 1\r\nRetry-After: 3\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", status, len(body))
 		if request.Method != http.MethodHead {
 			_, _ = conn.Write(body)
 		}
 	}
 	// Signed 48MB APKs can take over 30 seconds on a busy 2.4GHz hotspot.
 	_ = conn.SetDeadline(time.Now().Add(4 * time.Minute))
-	digest, err := hex.DecodeString(app.SHA256)
-	if err != nil || len(digest) != sha256.Size || app.SizeBytes <= 0 || app.SizeBytes > maxVerifiedClientAPKBytes || app.BridgePort < 1 || app.BridgePort > 65535 {
+	if !validVerifiedClientAPKMetadata(app) {
 		fail("503 Service Unavailable", "Métadonnées Shizzi+ indisponibles. Relancez Shizzi Hotspot.")
 		return
 	}
