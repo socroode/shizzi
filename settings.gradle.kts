@@ -19,3 +19,5 @@ if (providers.gradleProperty("shizziClientsOnly").orNull != "true") include(":ap
 include(":conso")
 include(":admin")
 include(":camadmin")
+
+include(":camrtc")

@@ -13,8 +13,8 @@ android {
         applicationId = "dev.shizzi.conso"
         minSdk = 30
         targetSdk = 35
-        versionCode = 18
-        versionName = "0.3.1-cam"
+        versionCode = 19
+        versionName = "0.3.2-cam-av"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -63,6 +63,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":camrtc"))
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250107")
     androidTestImplementation("androidx.test:runner:1.6.2")
