@@ -156,3 +156,23 @@ func TestVerifiedDownloadAcceptsLargeWebRTCAPK(t *testing.T) {
   t.Fatalf("large APK metadata wrong: size=%d header=%v",response.ContentLength,response.Header)
  }
 }
+
+func TestInvalidVerifiedAPKMetadataIsNeverPresentedAsAnAPK(t *testing.T) {
+ m:=newTrafficManager()
+ m.portalClientApp=portalClientApp{
+  Available:true,Version:"0.3.3.0-test",FileName:"Shizzi-PlusCam.apk",
+  SizeBytes:48000000,SHA256:"",BridgePort:8097,
+ }
+ if validVerifiedClientAPKMetadata(m.portalClientApp) {t.Fatal("invalid SHA accepted")}
+ for _,method:=range []string{http.MethodHead,http.MethodGet} {
+  response,body:=verifiedDownloadRequest(t,m,method,"")
+  if response.StatusCode!=http.StatusServiceUnavailable {t.Fatalf("%s status=%d",method,response.StatusCode)}
+  if strings.Contains(response.Header.Get("Content-Type"),"application/vnd.android.package-archive") ||
+     response.Header.Get("Content-Disposition")!="inline" ||
+     response.Header.Get("X-Shizzi-Download-Error")!="1" {
+    t.Fatalf("%s error incorrectly advertised as APK: %v",method,response.Header)
+  }
+  if method==http.MethodGet && len(body)!=61 {t.Fatalf("expected historical error text of 61 bytes; got %d",len(body))}
+  if method==http.MethodHead && len(body)!=0 {t.Fatal("HEAD returned unexpected body")}
+ }
+}
