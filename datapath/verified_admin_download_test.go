@@ -43,6 +43,7 @@ func TestVerifiedAdminAPKNeverDeliversTinyErrorAsAPK(t *testing.T) {
    if advertised=="" {sum:=sha256.Sum256(tc.body);advertised=hex.EncodeToString(sum[:])}
    backend:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
      w.Header().Set("Content-Type","application/vnd.android.package-archive")
+   w.Header().Set("Content-Length",strconv.Itoa(len(tc.body)))
      w.Header().Set("Content-Disposition",`attachment; filename="Shizzi-Admin-0.3.0-universal.apk"`)
      w.Header().Set("X-Shizzi-Version","0.3.0-universal")
      w.Header().Set("X-Shizzi-SHA256",advertised)
@@ -75,6 +76,7 @@ func TestVerifiedAdminAPKSupportsNativeHeadAndRange(t *testing.T) {
  sum:=sha256.Sum256(data)
  backend:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
   w.Header().Set("Content-Type","application/vnd.android.package-archive")
+   w.Header().Set("Content-Length",strconv.Itoa(len(data)))
   w.Header().Set("Content-Disposition",`attachment; filename="Shizzi-Admin-0.3.0-universal.apk"`)
   w.Header().Set("X-Shizzi-SHA256",hex.EncodeToString(sum[:]))
   _,_=w.Write(data)
