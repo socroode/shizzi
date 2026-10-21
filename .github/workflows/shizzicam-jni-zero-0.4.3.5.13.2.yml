@@ -91,7 +91,7 @@ jobs:
             grep -q "name='$pkg'" <<< "$badging"
             grep -q "versionName='$version'" <<< "$badging"
             grep -q "versionCode='$code'" <<< "$badging"
-            grep -q "sdkVersion:'30'" <<< "$badging"
+            grep -q "minSdkVersion:'30'" <<< "$badging"
             cert=$("$BUILD_TOOLS/apksigner" verify --print-certs "$apk" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
             test "$cert" = "$EXPECTED_CERT"
           done
