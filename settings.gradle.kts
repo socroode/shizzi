@@ -18,3 +18,4 @@ rootProject.name = "Shizzi"
 if (providers.gradleProperty("shizziClientsOnly").orNull != "true") include(":app")
 include(":conso")
 include(":admin")
+include(":camadmin")
