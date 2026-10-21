@@ -23,7 +23,7 @@ jobs:
       - name: Format and test datapath
         run: |
           cd datapath
-          gofmt -w portal.go traffic.go verified_client_download.go verified_client_download_test.go client_app_download_test.go client_app_download_e2e_test.go shizzicam.go shizzicam_rtc.go shizzicam_audio.go shizzicam_test.go shizzicam_rtc_test.go shizzicam_audio_test.go verified_client_download.go verified_client_download_test.go
+          gofmt -w portal.go traffic.go verified_client_download.go verified_client_download_test.go client_app_download_test.go client_app_download_e2e_test.go shizzicam.go shizzicam_rtc.go shizzicam_audio.go shizzicam_test.go shizzicam_rtc_test.go shizzicam_audio_test.go
           go vet ./...
           go test -count=1 -timeout=10m ./...
 
