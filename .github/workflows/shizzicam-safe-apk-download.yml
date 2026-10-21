@@ -1,0 +1,28 @@
+name: ShizziCam safe local APK downloads
+on:
+  push:
+    branches: [fix/shizzicam-safe-apk-download-next]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk-download-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: datapath/go.mod
+          cache-dependency-path: datapath/go.sum
+      - name: Check formatting of modified Go files
+        run: |
+          cd datapath
+          bad=$(gofmt -l apk_download_error.go verified_admin_download.go verified_admin_download_test.go portal.go verified_client_download.go)
+          if [ -n "$bad" ]; then echo "$bad"; exit 1; fi
+      - name: Full Go regression tests
+        run: |
+          cd datapath
+          go vet ./...
+          go test -count=1 -timeout=10m ./...
