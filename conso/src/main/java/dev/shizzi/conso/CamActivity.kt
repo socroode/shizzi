@@ -90,10 +90,7 @@ class CamActivity:Activity() {
                 val supported=try {
                     conn.connectTimeout=3500
                     conn.readTimeout=3500
-                    conn.responseCode==200 && runCatching {
-                        JSONObject(conn.inputStream.bufferedReader(StandardCharsets.UTF_8).use{it.readText()})
-                            .optString("protocol")=="shizzicam-webrtc-v1"
-                    }.getOrDefault(false)
+                    conn.responseCode==200 && CamCapability.supports(200,conn.inputStream.bufferedReader(StandardCharsets.UTF_8).use{it.readText()})
                 }finally {conn.disconnect()}
                 if(!supported)error("Shizzi Hotspot 0.4.3.5.11 : fonctions habituelles disponibles, mais mode caméra IP non pris en charge.")
                 runOnUiThread {

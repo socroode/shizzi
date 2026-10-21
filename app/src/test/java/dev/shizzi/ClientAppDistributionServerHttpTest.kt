@@ -40,9 +40,9 @@ class ClientAppDistributionServerHttpTest {
                 try {
                     assertEquals(200, connection.responseCode)
                     assertArrayEquals(plus, connection.inputStream.use { it.readBytes() })
-                    assertEquals("0.3.0-background-calls", connection.getHeaderField("X-Shizzi-Version"))
+                    assertEquals("0.3.2-cam-av", connection.getHeaderField("X-Shizzi-Version"))
                     assertEquals(server.info.sha256, connection.getHeaderField("X-Shizzi-SHA256"))
-                    assertTrue(connection.getHeaderField("Content-Disposition").contains("Shizzi-Plus-0.3.0-background-calls.apk"))
+                    assertTrue(connection.getHeaderField("Content-Disposition").contains("Shizzi-Plus-0.3.2-cam-av.apk"))
                 } finally { connection.disconnect() }
                 if (System.getenv("SHIZZI_VERIFY_PORTAL") == "true") {
                     val expected = File(root, "release-output/expected-portal-plus.apk").apply { parentFile.mkdirs(); writeBytes(plus) }
@@ -70,7 +70,7 @@ class ClientAppDistributionServerHttpTest {
         val current = JSONObject(portalConfigWithDistribution(stale, info, 12345))
         assertTrue(current.has("accounts"))
         val app = current.getJSONObject("clientApp")
-        assertEquals("0.3.0-background-calls", app.getString("version"))
+        assertEquals("0.3.2-cam-av", app.getString("version"))
         assertEquals(info.sha256, app.getString("sha256"))
         assertEquals(12345, app.getInt("bridgePort"))
         assertTrue(app.getBoolean("available"))
