@@ -156,3 +156,32 @@ func TestVerifiedDownloadAcceptsLargeWebRTCAPK(t *testing.T) {
   t.Fatalf("large APK metadata wrong: size=%d header=%v",response.ContentLength,response.Header)
  }
 }
+
+func TestTinyServerErrorNeverBecomesAPKOnEitherDownload(t *testing.T) {
+    upstream:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+        w.WriteHeader(http.StatusServiceUnavailable)
+        _,_=w.Write(bytes.Repeat([]byte("x"),61))
+    }))
+    defer upstream.Close()
+    _,p,_:=net.SplitHostPort(upstream.Listener.Addr().String())
+    port,_:=strconv.Atoi(p)
+    expected:=bytes.Repeat([]byte("P"),4096)
+    manager:=newTrafficManager()
+    manager.portalClientApp=verifiedAnnouncement(expected,port)
+    manager.portalAdminApp=verifiedAnnouncement(expected,port)
+    manager.portalAdminApp.FileName="Shizzi-Admin-real.apk"
+    for _,path:=range []string{"/shizzi-plus.apk","/shizzi-admin.apk"} {
+        for _,method:=range []string{"GET","HEAD"} {
+            response,body:=verifiedDownloadRequest(t,manager,method,"","http://192.0.2.1"+path)
+            if response.StatusCode!=502 || strings.Contains(response.Header.Get("Content-Type"),"package-archive") ||
+                strings.Contains(response.Header.Get("Content-Disposition"),"attachment") ||
+                response.Header.Get("X-Shizzi-Download-Error")!="true" {
+                t.Fatalf("%s %s delivered bad APK: status=%d headers=%v",method,path,response.StatusCode,response.Header)
+            }
+            if method=="HEAD" && len(body)!=0 {t.Fatalf("HEAD %s returned a body",path)}
+            if method=="GET" && bytes.Equal(body,bytes.Repeat([]byte("x"),61)) {
+                t.Fatalf("download error masqueraded as APK: %s",path)
+            }
+        }
+    }
+}

@@ -74,6 +74,10 @@ class ClientAppDistributionServerHttpTest {
         assertEquals(info.sha256, app.getString("sha256"))
         assertEquals(12345, app.getInt("bridgePort"))
         assertTrue(app.getBoolean("available"))
+        val adminApp=current.getJSONObject("adminApp")
+        assertTrue(adminApp.getBoolean("available"))
+        assertEquals(info.sha256,adminApp.getString("sha256"))
+        assertEquals(12345,adminApp.getInt("bridgePort"))
         assertFalse(JSONObject(portalConfigWithDistribution(stale, info, info, 0)).getJSONObject("clientApp").getBoolean("available"))
     }
 }
