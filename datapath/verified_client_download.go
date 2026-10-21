@@ -26,7 +26,8 @@ func (m *TrafficManager) serveVerifiedClientAppDownload(conn net.Conn, request *
 			_, _ = conn.Write(body)
 		}
 	}
-	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+	// Signed 48MB APKs can take over 30 seconds on a busy 2.4GHz hotspot.
+	_ = conn.SetDeadline(time.Now().Add(4 * time.Minute))
 	digest, err := hex.DecodeString(app.SHA256)
 	if err != nil || len(digest) != sha256.Size || app.SizeBytes <= 0 || app.SizeBytes > maxVerifiedClientAPKBytes || app.BridgePort < 1 || app.BridgePort > 65535 {
 		fail("503 Service Unavailable", "Métadonnées Shizzi+ indisponibles. Relancez Shizzi Hotspot.")
@@ -65,7 +66,15 @@ func (m *TrafficManager) serveVerifiedClientAppDownload(conn net.Conn, request *
 	}
 	_, _ = io.WriteString(conn, "\r\n")
 	if request.Method != http.MethodHead {
-		_, _ = conn.Write(data[first : last+1])
+		// Avoid a single huge net.Conn.Write: Android TUN transports may short-write
+		// on backpressure. Preserve exact Content-Length over arbitrarily many writes.
+		for offset := first; offset <= last; {
+			end := offset + 64*1024
+			if end > last+1 { end = last+1 }
+			written, writeErr := conn.Write(data[offset:end])
+			if written <= 0 || writeErr != nil { return }
+			offset += int64(written)
+		}
 	}
 }
 
