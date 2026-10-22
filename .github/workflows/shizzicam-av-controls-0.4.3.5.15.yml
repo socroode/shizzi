@@ -113,7 +113,9 @@ jobs:
           SHIZZI_SIGNED_VIEWER_APK: ${{ github.workspace }}/camadmin/build/outputs/apk/release/camadmin-release.apk
         run: |
           cd datapath
-          go test -count=1 -timeout=10m -run '^TestSignedCameraAndViewerDownloads
+          go test -count=1 -timeout=10m -run '^TestSignedCameraAndViewerDownloads$' -v .
+
+      - name: Verify exact signed viewer APK embedded in router
         run: |
           set -euo pipefail
           unzip -p app/build/outputs/apk/release/app-release.apk assets/shizzi/ShizziCam-Admin.apk > /tmp/shizzicam-embedded-viewer.apk
@@ -121,6 +123,7 @@ jobs:
           unzip -l app/build/outputs/apk/release/app-release.apk | grep -F 'assets/shizzi/Shizzi-Admin.apk'
           unzip -l app/build/outputs/apk/release/app-release.apk | grep -F 'assets/shizzi/ShizziCam-Admin.apk'
           unzip -l app/build/outputs/apk/release/app-release.apk | grep -F 'assets/shizzi/Shizzi-Plus.apk'
+
       - name: Verify release WebRTC JNI class retention and Android 11 minimum
         run: |
           python3 - <<'PY'
