@@ -15,6 +15,7 @@ import android.view.Gravity
 import android.widget.*
 import org.json.JSONObject
 import java.net.URLEncoder
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -37,6 +38,9 @@ class CamAdminActivity : Activity() {
     private val poll = Executors.newSingleThreadScheduledExecutor()
     private val frames = Executors.newFixedThreadPool(4)
     private val commands = Executors.newSingleThreadExecutor()
+    private val eventPoll = Executors.newSingleThreadScheduledExecutor()
+    private val eventCursors = mutableMapOf<String,Long>()
+    private val pendingCommands = ConcurrentHashMap<String,String>()
     private val audioExecutor = Executors.newSingleThreadExecutor()
     @Volatile private var selected = ""
     @Volatile private var audioSelected = ""
@@ -57,6 +61,7 @@ class CamAdminActivity : Activity() {
         loginScreen()
         poll.scheduleWithFixedDelay({ updateTiles() }, 750, 300, TimeUnit.MILLISECONDS)
         audioExecutor.execute { playSelectedAudio() }
+        eventPoll.scheduleWithFixedDelay({ pollCommandStatus() }, 1, 1, TimeUnit.SECONDS)
     }
     private fun selectWifi(): Network? {
         val cm = getSystemService(ConnectivityManager::class.java)
@@ -79,7 +84,8 @@ class CamAdminActivity : Activity() {
         audioSelected = ""
         cameras.clear()
         tileImages.clear()
-        sessions.clear()
+        synchronized(sessions){sessions.clear();eventCursors.clear()}
+        pendingCommands.clear()
         root.removeAllViews()
         root.addView(label("ShizziCam · Visionneuse",25f))
         root.addView(label("Caméras indépendantes · Mosaïque en relais local HTTPS"))
@@ -198,8 +204,8 @@ class CamAdminActivity : Activity() {
         })
         root.addView(adjust)
         val sound=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
-        sound.addView(button("Écouter caméra"){audioSelected=selected})
-        sound.addView(button("Couper écoute"){audioSelected=""})
+        sound.addView(button("Écouter caméra"){audioSelected=selected;status.text="Écoute de la caméra $selected demandée"})
+        sound.addView(button("Couper écoute"){audioSelected="";status.text="Écoute coupée"})
         sound.addView(button("Micro caméra"){
             micOn=!micOn
             sendControl("mic",if(micOn)"on" else "off")
@@ -232,6 +238,7 @@ class CamAdminActivity : Activity() {
                     cameras.putAll(available)
                     if(selected !in cameras) selected=""
                     renderGrid()
+                    if(selected.isEmpty() && cameras.isNotEmpty()) selectCam(cameras.keys.first())
                     status.text="Caméras en ligne : ${available.size} · vue ${if(fullScreen) 1 else gridCount}"
                 }
             }catch(e:Exception){runOnUiThread{status.text=e.message ?: "Liste indisponible"}}
@@ -277,37 +284,81 @@ class CamAdminActivity : Activity() {
     }
 
     private fun selectCam(account:String){
+        if(account !in cameras) return
         selected=account
+        // Select the first camera's microphone automatically. Only one is audible.
+        if(audioSelected.isEmpty()) audioSelected=account
         status.text="Caméra $account sélectionnée · association…"
         renderGrid()
         commands.execute {
             try {
-                val sid=api("POST","/api/v1/cam/watch?side=viewer",
-                    JSONObject().put("account",account)).getString("session")
-                synchronized(sessions){sessions[account]=sid}
-                runOnUiThread{status.text="Caméra $account sélectionnée · commandes via le routeur"}
+                ensureSession(account)
+                runOnUiThread {if(selected==account)status.text="Caméra $account prête · commandes disponibles"}
             }catch(e:Exception){
-                runOnUiThread{status.text="Association : "+(e.message ?: "erreur")}
+                runOnUiThread {status.text="Association : "+(e.message ?: "erreur")}
             }
         }
     }
+    private fun ensureSession(account:String):String {
+        synchronized(sessions){sessions[account]?.let{return it}}
+        val sid=api("POST","/api/v1/cam/watch?side=viewer",
+            JSONObject().put("account",account)).getString("session")
+        synchronized(sessions){
+            sessions[account]=sid
+            eventCursors[account]=0L
+        }
+        return sid
+    }
     private fun sendControl(command:String,value:String) {
         val account=selected
-        if(account.isEmpty()) {status.text="Sélectionne une caméra";return}
+        if(account.isEmpty()) {status.text="Aucune caméra sélectionnée";return}
+        status.text="Commande $command en cours sur caméra $account…"
         commands.execute {
-            val sid=synchronized(sessions){sessions[account]}
-            if(sid==null){
-                runOnUiThread{status.text="Sélectionne à nouveau la caméra pour l'associer"}
-                return@execute
-            }
             try {
+                val sid=ensureSession(account)
+                val requestId=UUID.randomUUID().toString()
+                pendingCommands[requestId]=command
                 api("POST","/api/v1/cam/events?side=viewer",
                     JSONObject().put("account",account).put("session",sid)
-                        .put("type","control").put("command",command).put("value",value))
-                runOnUiThread{status.text="Commande $command transmise au routeur (exécution à vérifier)"}
+                        .put("type","control").put("command",command)
+                        .put("value",value).put("requestId",requestId))
+                runOnUiThread {
+                    status.text="Commande $command envoyée · attente confirmation de la caméra…"
+                }
             }catch(e:Exception){
-                runOnUiThread{status.text="Commande refusée : "+(e.message ?: "erreur")}
+                runOnUiThread {status.text="Commande refusée : "+(e.message ?: "erreur")}
             }
+        }
+    }
+    private fun pollCommandStatus(){
+        if(admin==null||!alive)return
+        val active=selected
+        if(active.isEmpty())return
+        val sid= synchronized(sessions){sessions[active]} ?:return
+        try {
+            val after=synchronized(sessions){eventCursors[active] ?:0L}
+            val events=api("GET","/api/v1/cam/events?side=viewer&account="+
+                URLEncoder.encode(active,"UTF-8")+"&session="+URLEncoder.encode(sid,"UTF-8")+
+                "&after="+after).optJSONArray("events") ?:return
+            for(i in 0 until events.length()){
+                val e=events.getJSONObject(i)
+                val id=e.optLong("id")
+                synchronized(sessions){eventCursors[active]=maxOf(eventCursors[active] ?:0,id)}
+                if(e.optString("type")=="status"){
+                    val command=e.optString("command")
+                    val requestId=e.optString("requestId")
+                    if(pendingCommands.remove(requestId)!=null){
+                        val success=e.optBoolean("success")
+                        val detail=e.optString("detail")
+                        runOnUiThread {
+                            status.text=if(success) "Caméra $active : $detail"
+                                else "Échec $command sur $active : $detail"
+                        }
+                    }
+                }
+            }
+        }catch(e:Exception){
+            android.util.Log.w("ShizziCam","Command acknowledgement unavailable",e)
         }
     }
 
@@ -360,7 +411,7 @@ class CamAdminActivity : Activity() {
                     continue
                 }
                 if(name!=previous){
-                    player.pause()
+                    if(previous.isNotEmpty()) player.pause()
                     player.flush()
                     after=0
                     previous=name
@@ -375,14 +426,18 @@ class CamAdminActivity : Activity() {
                             val bytes=c.inputStream.use{it.readBytes()}
                             if(seq>after && bytes.isNotEmpty() && bytes.size<=16384) {
                                 after=seq
-                                player.write(bytes,0,bytes.size)
+                                val wrote=player.write(bytes,0,bytes.size)
+                                if(wrote<0)android.util.Log.e("ShizziCam","AudioTrack error $wrote")
                             }
+                        } else if(c.responseCode!=204) {
+                            android.util.Log.w("ShizziCam","Audio HTTP "+c.responseCode)
+                            if(c.responseCode==401 || c.responseCode==403)runOnUiThread {status.text="Son : accès refusé (HTTP "+c.responseCode+")"}
                         }
                     }finally{c.disconnect()}
                 }catch(e:Exception){
                     android.util.Log.w("ShizziCam","Audio relay read failed",e)
                 }
-                Thread.sleep(90)
+                Thread.sleep(25)
             }
         }catch(_:InterruptedException){}finally{
             try{player.pause();player.flush();player.release()}catch(_:Exception){}
@@ -394,6 +449,7 @@ class CamAdminActivity : Activity() {
         poll.shutdownNow()
         frames.shutdownNow()
         commands.shutdownNow()
+        eventPoll.shutdownNow()
         audioExecutor.shutdownNow()
         super.onDestroy()
     }
