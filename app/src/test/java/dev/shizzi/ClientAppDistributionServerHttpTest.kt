@@ -19,16 +19,19 @@ class ClientAppDistributionServerHttpTest {
         }
         val payloads = if (routerPath != null) {
             ZipFile(routerPath).use { zip ->
-                zip.getInputStream(zip.getEntry("assets/shizzi/Shizzi-Plus.apk")).use { it.readBytes() } to
-                    zip.getInputStream(zip.getEntry("assets/shizzi/Shizzi-Admin.apk")).use { it.readBytes() }
+                Triple(
+                    zip.getInputStream(zip.getEntry("assets/shizzi/Shizzi-Plus.apk")).use { it.readBytes() },
+                    zip.getInputStream(zip.getEntry("assets/shizzi/Shizzi-Admin.apk")).use { it.readBytes() },
+                    zip.getInputStream(zip.getEntry("assets/shizzi/ShizziCam-Admin.apk")).use { it.readBytes() },
+                )
             }
         } else {
-            "new-client-fixture".toByteArray() to "admin-fixture".toByteArray()
+            Triple("new-client-fixture".toByteArray(),"admin-fixture".toByteArray(),"viewer-fixture".toByteArray())
         }
-        val (plus, admin) = payloads
+        val (plus, admin, viewer) = payloads
         ServerSocket(8091, 8, InetAddress.getByName("127.0.0.1")).use { legacy ->
             legacy.soTimeout = 100
-            val server = ClientAppDistributionServer(plus, admin, admin)
+            val server = ClientAppDistributionServer(plus, admin, viewer)
             try {
                 assertTrue(server.start())
                 assertTrue(server.port in 1..65535)
@@ -40,13 +43,21 @@ class ClientAppDistributionServerHttpTest {
                 try {
                     assertEquals(200, connection.responseCode)
                     assertArrayEquals(plus, connection.inputStream.use { it.readBytes() })
-                    assertEquals("0.3.3.0-relay-test", connection.getHeaderField("X-Shizzi-Version"))
+                    assertEquals("0.3.4.0-relay-controls", connection.getHeaderField("X-Shizzi-Version"))
                     assertEquals(server.info.sha256, connection.getHeaderField("X-Shizzi-SHA256"))
-                    assertTrue(connection.getHeaderField("Content-Disposition").contains("Shizzi-PlusCam-0.3.3.0.apk"))
+                    assertTrue(connection.getHeaderField("Content-Disposition").contains("Shizzi-PlusCam-0.3.4.0.apk"))
                 } finally { connection.disconnect() }
+                val viewerConn = URL("http://127.0.0.1:${server.port}/shizzicam-admin.apk")
+                    .openConnection() as HttpURLConnection
+                try {
+                    assertEquals(200,viewerConn.responseCode)
+                    assertArrayEquals(viewer,viewerConn.inputStream.use{it.readBytes()})
+                    assertEquals(server.camAdminInfo.sha256,viewerConn.getHeaderField("X-Shizzi-SHA256"))
+                    assertEquals("0.3.1-relay-controls",viewerConn.getHeaderField("X-Shizzi-Version"))
+                } finally { viewerConn.disconnect() }
                 if (System.getenv("SHIZZI_VERIFY_PORTAL") == "true") {
                     val expected = File(root, "release-output/expected-portal-plus.apk").apply { parentFile.mkdirs(); writeBytes(plus) }
-                    val downloaded = File(root, "release-output/Shizzi-PlusCam-0.3.3.0-from-portal.apk")
+                    val downloaded = File(root, "release-output/Shizzi-PlusCam-0.3.4.0-from-portal.apk")
                     val process = ProcessBuilder("go", "test", "-count=1", "-run", "^TestReleasePortalDownload$", "-v", ".")
                         .directory(File(root, "datapath")).redirectErrorStream(true)
                     process.environment()["SHIZZI_DISTRIBUTION_PORT"] = server.port.toString()
@@ -70,7 +81,7 @@ class ClientAppDistributionServerHttpTest {
         val current = JSONObject(portalConfigWithDistribution(stale, info, info, info, 12345))
         assertTrue(current.has("accounts"))
         val app = current.getJSONObject("clientApp")
-        assertEquals("0.3.3.0-relay-test", app.getString("version"))
+        assertEquals("0.3.4.0-relay-controls", app.getString("version"))
         assertEquals(info.sha256, app.getString("sha256"))
         assertEquals(12345, app.getInt("bridgePort"))
         assertTrue(app.getBoolean("available"))
@@ -78,6 +89,8 @@ class ClientAppDistributionServerHttpTest {
         assertTrue(adminApp.getBoolean("available"))
         assertEquals(info.sha256,adminApp.getString("sha256"))
         assertEquals(12345,adminApp.getInt("bridgePort"))
+        assertEquals(info.sha256,current.getJSONObject("camAdminApp").getString("sha256"))
+        assertEquals(12345,current.getJSONObject("camAdminApp").getInt("bridgePort"))
         assertFalse(JSONObject(portalConfigWithDistribution(stale, info, info, info, 0)).getJSONObject("clientApp").getBoolean("available"))
     }
 }

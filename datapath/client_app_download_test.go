@@ -227,3 +227,23 @@ func TestDirectShizziAdminAliasStreamsResponse(t *testing.T) {
     }
 }
 
+
+func TestViewerAPKDownloadAndPortalLink(t *testing.T) {
+ data:=[]byte("verified-visionneuse-apk")
+ upstream:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+  if r.URL.Path!="/shizzicam-admin.apk" {w.WriteHeader(404);return}
+  _,_=w.Write(data)
+ }))
+ defer upstream.Close()
+ _,p,_:=net.SplitHostPort(upstream.Listener.Addr().String())
+ port,_:=strconv.Atoi(p)
+ m:=newTrafficManager()
+ m.portalCamAdminApp=verifiedAnnouncement(data,port)
+ m.portalCamAdminApp.Version="0.3.1-relay-controls"
+ m.portalCamAdminApp.FileName="ShizziCam-Admin-0.3.1.apk"
+ response,body:=verifiedDownloadRequest(t,m,"GET","","http://192.0.2.1/shizzicam-admin.apk")
+ if response.StatusCode!=200 || string(body)!=string(data) || response.Header.Get("X-Shizzi-SHA256")!=m.portalCamAdminApp.SHA256 {
+  t.Fatalf("viewer verified APK download failed: %d %q",response.StatusCode,body)
+ }
+ if !isCamAdminAppDownloadPath("/download/shizzicam-admin.apk") {t.Fatal("viewer alias missing")}
+}

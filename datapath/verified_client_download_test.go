@@ -185,3 +185,22 @@ func TestTinyServerErrorNeverBecomesAPKOnEitherDownload(t *testing.T) {
         }
     }
 }
+
+func TestTinyServerErrorNeverBecomesViewerAPK(t *testing.T) {
+ upstream:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+  w.WriteHeader(503)
+  _,_=w.Write(bytes.Repeat([]byte("x"),61))
+ }))
+ defer upstream.Close()
+ _,p,_:=net.SplitHostPort(upstream.Listener.Addr().String())
+ port,_:=strconv.Atoi(p)
+ m:=newTrafficManager()
+ m.portalCamAdminApp=verifiedAnnouncement(bytes.Repeat([]byte("Z"),8192),port)
+ m.portalCamAdminApp.FileName="ShizziCam-Admin.apk"
+ response,body:=verifiedDownloadRequest(t,m,"GET","","http://192.0.2.1/shizzicam-admin.apk")
+ if response.StatusCode!=502 || strings.Contains(response.Header.Get("Content-Disposition"),"attachment") ||
+   response.Header.Get("X-Shizzi-Download-Error")!="true" {
+  t.Fatalf("viewer error masqueraded as APK: status=%d headers=%v",response.StatusCode,response.Header)
+ }
+ if bytes.Equal(body,bytes.Repeat([]byte("x"),61)) {t.Fatal("returned fake viewer APK")}
+}
