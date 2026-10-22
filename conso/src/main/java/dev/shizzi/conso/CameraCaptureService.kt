@@ -24,6 +24,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.widget.ImageView
 import org.json.JSONObject
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -43,6 +44,12 @@ class CameraCaptureService : Service() {
     private val frames = Executors.newSingleThreadExecutor()
     private val audioWorker = Executors.newSingleThreadExecutor()
     private val audioSender = Executors.newSingleThreadExecutor()
+    private val controlSender = Executors.newSingleThreadExecutor()
+    private val audioQueue = ArrayBlockingQueue<ByteArray>(16)
+    @Volatile private var sentAudioPackets = 0L
+    @Volatile private var capturedAudioPackets = 0L
+    @Volatile var audioStatus = "Microphone en attente"
+        private set
     private val frameBusy = AtomicBoolean(false)
     private val audioBusy = AtomicBoolean(false)
     private var cursor = 0L
@@ -62,11 +69,18 @@ class CameraCaptureService : Service() {
         relay?.detach(image)
         if (preview === image) preview = null
     }
-    fun controlLocal(command: String, value: String) {
-        if (command == "mic") {
-            micEnabled = value == "on"
-            captureStatus = if (micEnabled) "Microphone activé" else "Microphone coupé"
-        } else relay?.control(command,value)
+    fun controlLocal(command: String, value: String, done: (Boolean,String) -> Unit = { _,_ -> }) {
+        if (command=="mic") {
+            if (value!="on" && value!="off") {done(false,"Valeur microphone incorrecte");return}
+            micEnabled = value=="on"
+            val message=if (micEnabled) "Microphone activé" else "Microphone coupé"
+            audioStatus=message
+            done(true,message)
+        } else {
+            val device = relay
+            if (device==null) done(false,"Caméra non initialisée")
+            else device.control(command,value,done)
+        }
     }
 
     override fun onCreate() {
@@ -124,6 +138,7 @@ class CameraCaptureService : Service() {
                 relay = camera
                 main.post { preview?.let { camera.attach(it) } }
                 camera.start(quality)
+                audioSender.execute { sendAudioLoop() }
                 audioWorker.execute { audioLoop() }
                 worker.scheduleWithFixedDelay({ tick() }, 0, 650, TimeUnit.MILLISECONDS)
             } catch (e: Exception) {
@@ -163,52 +178,73 @@ class CameraCaptureService : Service() {
         }
     }
 
+    /** Isolate microphone reads from Wi-Fi/HTTPS delays. Bounded queue prevents memory growth. */
     private fun uploadAudio(bytes: ByteArray) {
-        if (!running || !audioBusy.compareAndSet(false,true)) return
-        audioSender.execute {
+        capturedAudioPackets++
+        if (!audioQueue.offer(bytes)) {
+            audioQueue.poll()
+            audioQueue.offer(bytes)
+            audioStatus="Son : réseau lent, quelques paquets perdus"
+        }
+    }
+    private fun sendAudioLoop() {
+        while (running && !Thread.currentThread().isInterrupted) {
             try {
-                val c = connection("/api/v1/cam/audio")
+                val bytes = audioQueue.poll(300,TimeUnit.MILLISECONDS) ?: continue
+                val c=connection("/api/v1/cam/audio")
                 try {
-                    c.requestMethod = "POST"
-                    c.doOutput = true
+                    c.requestMethod="POST"
+                    c.doOutput=true
                     c.setRequestProperty("Content-Type","application/octet-stream")
                     c.setFixedLengthStreamingMode(bytes.size)
                     c.outputStream.use { it.write(bytes) }
-                    if (c.responseCode != 200) error("Relais audio HTTP " + c.responseCode)
-                } finally { c.disconnect() }
+                    if (c.responseCode!=200) error("Relais audio HTTP "+c.responseCode)
+                    sentAudioPackets++
+                    if (sentAudioPackets==1L) audioStatus="Microphone transmis au routeur"
+                } finally {c.disconnect()}
+            } catch (_: InterruptedException) {
+                break
             } catch (e: Exception) {
+                audioStatus="Audio non transmis : "+(e.message ?: "réseau indisponible")
                 android.util.Log.w("ShizziCam","Audio relay failed",e)
-            } finally { audioBusy.set(false) }
+            }
         }
     }
 
     private fun audioLoop() {
         val rate = 16000
-        val size = maxOf(6400,AudioRecord.getMinBufferSize(rate,
+        val size = maxOf(3200,AudioRecord.getMinBufferSize(rate,
             AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT))
-        if (size <= 0) { android.util.Log.e("ShizziCam","AudioRecord unsupported"); return }
+        if (size <= 0) { audioStatus="Enregistrement audio non pris en charge"; android.util.Log.e("ShizziCam","AudioRecord unsupported"); return }
         val record = try {
             AudioRecord(MediaRecorder.AudioSource.MIC,rate,AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,size*2)
         } catch (e: Exception) {
             android.util.Log.e("ShizziCam","Microphone unavailable",e)
+            audioStatus="Microphone indisponible : "+(e.message ?: "erreur")
+            return
+        }
+        if (record.state!=AudioRecord.STATE_INITIALIZED) {
+            audioStatus="Échec initialisation du microphone"
+            record.release()
             return
         }
         var active = false
         try {
-            val data = ByteArray(6400) // 200ms mono PCM16
+            val data = ByteArray(3200) // 100ms mono PCM16
             while (running) {
                 if (!micEnabled) {
                     if (active) { record.stop(); active = false }
                     Thread.sleep(150)
                     continue
                 }
-                if (!active) { record.startRecording(); active = true }
+                if (!active) { record.startRecording(); active = true; audioStatus="Microphone actif" }
                 val length = record.read(data,0,data.size)
                 if (length > 0 && length % 2 == 0) uploadAudio(data.copyOf(length))
                 else if (length < 0) Thread.sleep(100)
             }
         } catch (e: Exception) {
+            audioStatus="Capture audio arrêtée : "+(e.message ?: "erreur")
             android.util.Log.w("ShizziCam","Audio capture ended",e)
         } finally {
             if (active) try { record.stop() } catch (_: Exception) {}
@@ -249,10 +285,24 @@ class CameraCaptureService : Service() {
                 when (event.optString("type")) {
                     "watch" -> session = event.optString("session")
                     "control" -> if (event.optString("session") == session) {
-                        val command = event.optString("command")
-                        val value = event.optString("value")
-                        controlLocal(command,value)
-                        if (command == "quality") quality = value
+                        val command=event.optString("command")
+                        val value=event.optString("value")
+                        val requestId=event.optString("requestId")
+                        val expectedSession=session
+                        controlLocal(command,value) { success,detail ->
+                            if (requestId.isNotEmpty()) controlSender.execute {
+                                try {
+                                    json("POST","/api/v1/cam/events?side=camera",
+                                        JSONObject().put("session",expectedSession).put("type","status")
+                                            .put("command",command).put("value",value)
+                                            .put("requestId",requestId).put("success",success)
+                                            .put("detail",detail.take(250)))
+                                } catch (e: Exception) {
+                                    android.util.Log.w("ShizziCam","Camera command ACK failed",e)
+                                }
+                            }
+                        }
+                        if (command=="quality") quality=value
                     }
                 }
             }
@@ -270,6 +320,8 @@ class CameraCaptureService : Service() {
         worker.shutdownNow()
         frames.shutdownNow()
         audioSender.shutdownNow()
+        controlSender.shutdownNow()
+        audioQueue.clear()
         audioWorker.shutdownNow()
         relay?.stop()
         relay = null
