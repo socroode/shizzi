@@ -199,6 +199,7 @@ class CamActivity:Activity() {
                             .putExtra(CameraCaptureService.EXTRA_QUALITY,requested))
                         bindStarted()
                         status.text="Démarrage caméra + microphone demandé"
+                        checkLocalUpdate()
                     }
                 }
             }catch(e:Exception){

@@ -242,6 +242,7 @@ class CamAdminActivity : Activity() {
             sendControl("quality",qualities[qualitySpinner.selectedItemPosition])
         })
         refresh()
+        checkLocalUpdate()
     }
 
     private fun refresh() {

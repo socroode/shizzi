@@ -29,7 +29,7 @@ internal object LocalCamUpdater {
     ) {
         if(!busy.compareAndSet(false,true)) return
         try {
-            val c=RouterTls.connection("https://192.0.2.1/api/v1/cam/updates",pin,network)
+            val c=RouterTls.connection("https://192.0.2.1/api/v1/cam/updates?side=camera",pin,network)
             val manifest=try {
                 c.connectTimeout=5000
                 c.readTimeout=5000
