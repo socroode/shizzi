@@ -28,6 +28,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.LinkedBlockingDeque
 
 /** Camera JPEG video and PCM16 audio are always uploaded to the router over pinned HTTPS.
  * No direct media connection to any viewer is created.
@@ -44,7 +45,9 @@ class CameraCaptureService : Service() {
     private val audioWorker = Executors.newSingleThreadExecutor()
     private val audioSender = Executors.newSingleThreadExecutor()
     private val frameBusy = AtomicBoolean(false)
-    private val audioBusy = AtomicBoolean(false)
+    private val audioQueue = LinkedBlockingDeque<ByteArray>(24)
+    @Volatile private var audioSent = 0L
+    @Volatile private var audioErrors = 0
     private var cursor = 0L
     private var count = 0
     private var failures = 0
@@ -62,11 +65,17 @@ class CameraCaptureService : Service() {
         relay?.detach(image)
         if (preview === image) preview = null
     }
-    fun controlLocal(command: String, value: String) {
+    fun controlLocal(command: String, value: String, callback: (Boolean, String) -> Unit = { _, _ -> }) {
         if (command == "mic") {
+            if (value != "on" && value != "off") { callback(false,"Microphone invalide"); return }
             micEnabled = value == "on"
             captureStatus = if (micEnabled) "Microphone activé" else "Microphone coupé"
-        } else relay?.control(command,value)
+            callback(true,"")
+        } else {
+            val cam = relay
+            if (cam == null) callback(false, "Caméra non démarrée")
+            else cam.control(command,value,callback)
+        }
     }
 
     override fun onCreate() {
@@ -124,6 +133,7 @@ class CameraCaptureService : Service() {
                 relay = camera
                 main.post { preview?.let { camera.attach(it) } }
                 camera.start(quality)
+                audioSender.execute { audioUploadLoop() }
                 audioWorker.execute { audioLoop() }
                 worker.scheduleWithFixedDelay({ tick() }, 0, 650, TimeUnit.MILLISECONDS)
             } catch (e: Exception) {
@@ -164,8 +174,17 @@ class CameraCaptureService : Service() {
     }
 
     private fun uploadAudio(bytes: ByteArray) {
-        if (!running || !audioBusy.compareAndSet(false,true)) return
-        audioSender.execute {
+        if (!running || !micEnabled) return
+        if (!audioQueue.offerLast(bytes)) {
+            audioQueue.pollFirst()
+            audioQueue.offerLast(bytes)
+        }
+    }
+
+    private fun audioUploadLoop() {
+        while (running) {
+            val bytes = try { audioQueue.pollFirst(800, TimeUnit.MILLISECONDS) }
+                        catch (_: InterruptedException) { return } ?: continue
             try {
                 val c = connection("/api/v1/cam/audio")
                 try {
@@ -175,10 +194,17 @@ class CameraCaptureService : Service() {
                     c.setFixedLengthStreamingMode(bytes.size)
                     c.outputStream.use { it.write(bytes) }
                     if (c.responseCode != 200) error("Relais audio HTTP " + c.responseCode)
+                    audioSent++
+                    audioErrors = 0
+                    if (audioSent == 1L) android.util.Log.i("ShizziCam","Premier paquet audio envoyé au routeur")
                 } finally { c.disconnect() }
             } catch (e: Exception) {
+                audioErrors++
+                if (audioErrors == 3) {
+                    captureStatus = "Microphone actif mais relais audio inaccessible : " + (e.message ?: "erreur")
+                }
                 android.util.Log.w("ShizziCam","Audio relay failed",e)
-            } finally { audioBusy.set(false) }
+            }
         }
     }
 
@@ -194,6 +220,12 @@ class CameraCaptureService : Service() {
             android.util.Log.e("ShizziCam","Microphone unavailable",e)
             return
         }
+        if (record.state != AudioRecord.STATE_INITIALIZED) {
+            android.util.Log.e("ShizziCam","Microphone non initialisé")
+            captureStatus = "Microphone Android non initialisé"
+            record.release()
+            return
+        }
         var active = false
         try {
             val data = ByteArray(6400) // 200ms mono PCM16
@@ -206,7 +238,10 @@ class CameraCaptureService : Service() {
                 if (!active) { record.startRecording(); active = true }
                 val length = record.read(data,0,data.size)
                 if (length > 0 && length % 2 == 0) uploadAudio(data.copyOf(length))
-                else if (length < 0) Thread.sleep(100)
+                else if (length < 0) {
+                    captureStatus = "Erreur microphone Android : $length"
+                    Thread.sleep(100)
+                }
             }
         } catch (e: Exception) {
             android.util.Log.w("ShizziCam","Audio capture ended",e)
@@ -251,8 +286,28 @@ class CameraCaptureService : Service() {
                     "control" -> if (event.optString("session") == session) {
                         val command = event.optString("command")
                         val value = event.optString("value")
-                        controlLocal(command,value)
-                        if (command == "quality") quality = value
+                        val requestID = event.optString("commandId")
+                        val activeSession = session
+                        if (requestID.isNotEmpty()) {
+                            controlLocal(command,value) { accepted, reason ->
+                                worker.execute {
+                                    if (!running || session != activeSession) return@execute
+                                    try {
+                                        json("POST","/api/v1/cam/events?side=camera",
+                                            JSONObject().put("session",activeSession)
+                                                .put("type","status")
+                                                .put("command",command)
+                                                .put("value",value)
+                                                .put("commandId",requestID)
+                                                .put("accepted",accepted)
+                                                .put("reason",reason.take(120)))
+                                        if (accepted && command == "quality") quality = value
+                                    } catch (e: Exception) {
+                                        android.util.Log.w("ShizziCam","Command acknowledgement failed",e)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

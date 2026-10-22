@@ -55,7 +55,7 @@ internal class RelayCamera(
         quality = requested
         handler.post { open() }
     }
-    private fun open() {
+    private fun open(): Boolean {
         try {
             camera?.setPreviewCallbackWithBuffer(null)
             camera?.stopPreview()
@@ -140,47 +140,76 @@ internal class RelayCamera(
             cam.startPreview()
             state = "Ouverture de la caméra $side ($width × $height)…"
             onStatus(state)
+            return true
         } catch (e: Exception) {
             state = "Échec caméra : " + (e.message ?: e.javaClass.simpleName)
             onStatus(state)
             try { camera?.release() } catch (_: Exception) {}
             camera = null
+            return false
         }
     }
-    fun control(command: String, value: String) {
+    fun control(command: String, value: String, callback: (Boolean, String) -> Unit = { _, _ -> }) {
         handler.post {
             try {
+                check(camera != null) { "Caméra non démarrée" }
                 when (command) {
-                    "camera" -> if (value == "front" || value == "back") {
-                        if (side != value) { side = value; open() }
+                    "camera" -> {
+                        check(value == "front" || value == "back") { "Objectif invalide" }
+                        if (side != value) {
+                            val oldSide = side
+                            side = value
+                            if (!open()) {
+                                side = oldSide
+                                open()
+                                error("Caméra $value indisponible")
+                            }
+                        }
                     }
                     "zoom" -> {
-                        val amount = value.toFloatOrNull() ?: return@post
-                        zoom = amount.coerceIn(1f, 8f)
-                        camera?.let { c ->
-                            val p = c.parameters
-                            if (p.isZoomSupported) {
-                                p.zoom = ((zoom - 1f) / 7f * p.maxZoom).toInt().coerceIn(0, p.maxZoom)
-                                c.parameters = p
-                            } else onStatus("Zoom non disponible sur cette caméra")
+                        val amount = value.toFloatOrNull() ?: error("Zoom invalide")
+                        check(amount in 1f..8f) { "Zoom hors limites" }
+                        val cam = camera ?: error("Caméra non démarrée")
+                        val params = cam.parameters
+                        check(params.isZoomSupported || amount == 1f) { "Zoom indisponible" }
+                        if (params.isZoomSupported) {
+                            params.zoom = ((amount - 1f) / 7f * params.maxZoom).toInt()
+                                .coerceIn(0, params.maxZoom)
+                            cam.parameters = params
                         }
+                        zoom = amount
                     }
                     "torch" -> {
+                        check(value == "on" || value == "off") { "Commande flash invalide" }
+                        val cam = camera ?: error("Caméra non démarrée")
+                        val params = cam.parameters
+                        check(Camera.Parameters.FLASH_MODE_TORCH in (params.supportedFlashModes ?: emptyList())) {
+                            "Flash indisponible sur cet objectif"
+                        }
+                        params.flashMode = if (value == "on") Camera.Parameters.FLASH_MODE_TORCH
+                                           else Camera.Parameters.FLASH_MODE_OFF
+                        cam.parameters = params
                         torch = value == "on"
-                        camera?.let { c ->
-                            val p = c.parameters
-                            if (Camera.Parameters.FLASH_MODE_TORCH in (p.supportedFlashModes ?: emptyList())) {
-                                p.flashMode = if (torch) Camera.Parameters.FLASH_MODE_TORCH else Camera.Parameters.FLASH_MODE_OFF
-                                c.parameters = p
-                            } else onStatus("Flash indisponible sur cette caméra")
+                    }
+                    "quality" -> {
+                        check(value in listOf("auto","360p","480p","720p")) { "Qualité inconnue" }
+                        val old = quality
+                        quality = value
+                        if (!open()) {
+                            quality = old
+                            open()
+                            error("Changement de qualité impossible")
                         }
                     }
-                    "quality" -> if (value in listOf("auto","360p","480p","720p")) {
-                        quality = value
-                        open()
-                    }
+                    else -> error("Commande inconnue")
                 }
-            } catch (e: Exception) { onStatus("Commande $command : " + (e.message ?: "erreur")) }
+                onStatus("Commande appliquée : $command → $value")
+                callback(true, "")
+            } catch (e: Exception) {
+                val why = e.message ?: e.javaClass.simpleName
+                onStatus("Commande $command refusée : $why")
+                callback(false, why)
+            }
         }
     }
     fun stop() {
