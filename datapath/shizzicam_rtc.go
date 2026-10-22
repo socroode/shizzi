@@ -25,6 +25,9 @@ type camRtcMessage struct {
  Quality string `json:"quality,omitempty"`
  Command string `json:"command,omitempty"`
  Value string `json:"value,omitempty"`
+ RefID uint64 `json:"refId,omitempty"`
+ OK *bool `json:"ok,omitempty"`
+ Error string `json:"error,omitempty"`
 }
 type camRtcSession struct {
  LastSeen time.Time
@@ -116,6 +119,9 @@ func (m *TrafficManager) serveCameraRTC(conn net.Conn, r *http.Request, clientIP
   Quality string `json:"quality"`
   Command string `json:"command"`
   Value string `json:"value"`
+  RefID uint64 `json:"refId"`
+  OK *bool `json:"ok"`
+  Error string `json:"error"`
  }
  if r.Method==http.MethodPost {
   if r.ContentLength<0||r.ContentLength>16*1024 {writeJSONStatus(conn,"413 Content Too Large",map[string]any{"ok":false});return true}
@@ -187,12 +193,15 @@ func (m *TrafficManager) serveCameraRTC(conn net.Conn, r *http.Request, clientIP
   case "control":
    if isCamera || !camRtcValidControl(req.Command,req.Value) {writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true}
   case "status":
-   if !isCamera || !camRtcValidControl(req.Command,req.Value) {writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true}
+   if !isCamera || req.RefID==0 || req.OK==nil ||
+      !camRtcValidControl(req.Command,req.Value) || len(req.Error)>256 {
+      writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true
+   }
   case "stop": // either side can stop its peer session
   default: writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true
   }
-  camRtcPostMessage(state,isCamera,camRtcMessage{Type:req.Type,Session:state.ViewerSession,SDP:req.SDP,Mid:req.Mid,MLine:req.MLine,Candidate:req.Candidate,Quality:req.Quality,Command:req.Command,Value:req.Value})
-  writeJSONStatus(conn,"200 OK",map[string]any{"ok":true})
+  camRtcPostMessage(state,isCamera,camRtcMessage{Type:req.Type,Session:state.ViewerSession,SDP:req.SDP,Mid:req.Mid,MLine:req.MLine,Candidate:req.Candidate,Quality:req.Quality,Command:req.Command,Value:req.Value,RefID:req.RefID,OK:req.OK,Error:req.Error})
+  writeJSONStatus(conn,"200 OK",map[string]any{"ok":true,"eventId":state.Counter})
   return true
  default:
   writeJSONStatus(conn,"405 Method Not Allowed",map[string]any{"ok":false})

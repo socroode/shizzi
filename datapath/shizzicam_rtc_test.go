@@ -14,3 +14,14 @@ func TestCamRtcQueueAndQuality(t *testing.T){
  camRtc.Unlock()
  if exists {t.Fatal("camera not expired")}
 }
+
+func TestCamRemoteControlStatusRouting(t *testing.T) {
+ s:=&camRtcSession{}
+ camRtcPostMessage(s,false,camRtcMessage{Type:"control",Session:"one",Command:"camera",Value:"front"})
+ if len(s.ToCamera)!=1 || s.ToCamera[0].ID==0 {t.Fatal("command not queued to camera")}
+ ok:=true
+ camRtcPostMessage(s,true,camRtcMessage{Type:"status",Session:"one",Command:"camera",Value:"front",RefID:s.ToCamera[0].ID,OK:&ok})
+ if len(s.ToViewer)!=1 || s.ToViewer[0].RefID!=s.ToCamera[0].ID || s.ToViewer[0].OK==nil || !*s.ToViewer[0].OK {
+    t.Fatal("camera command acknowledgement not routed to viewer")
+ }
+}

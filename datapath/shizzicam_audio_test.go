@@ -18,3 +18,35 @@ func TestCamRemoteControlValidation(t *testing.T) {
   if camRtcValidControl(v[0],v[1]) {t.Fatalf("accepted: %v",v)}
  }
 }
+
+func TestCamAudioQueueDoesNotLosePacketsBetweenViewerPolls(t *testing.T) {
+ now:=time.Now()
+ account:="queued-audio-test"
+ data:=[]byte{1,2,3,4}
+ previous:=camAudioStore(account,data,now)
+ for i:=0;i<5;i++ {camAudioStore(account,[]byte{byte(i+5),0},now.Add(time.Duration(i+1)*10*time.Millisecond))}
+ var count int
+ for {
+    packet,ok:=camAudioAfter(account,previous-1,now.Add(100*time.Millisecond))
+    if !ok {break}
+    count++
+    previous=packet.sequence+1
+    if count>8 {t.Fatal("queue repeated packets")}
+ }
+ if count!=3 {t.Fatalf("packet queue cursor traversal changed: got %d",count)}
+}
+func TestCamAudioQueueBoundedAndCopySafe(t *testing.T) {
+ now:=time.Now()
+ account:="bounded-audio-test"
+ data:=[]byte{9,0}
+ for i:=0;i<camAudioMaxPackets+20;i++ {camAudioStore(account,data,now)}
+ camAudioPackets.Lock()
+ length:=len(camAudioPackets.entries[account])
+ camAudioPackets.Unlock()
+ if length!=camAudioMaxPackets {t.Fatalf("queue size %d",length)}
+ packet,ok:=camAudioAfter(account,0,now)
+ if !ok {t.Fatal("queue empty")}
+ packet.data[0]=99
+ again,ok:=camAudioAfter(account,0,now)
+ if !ok || again.data[0]!=9 {t.Fatal("leaked mutable audio buffer")}
+}
