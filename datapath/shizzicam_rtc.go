@@ -24,6 +24,9 @@ type camRtcMessage struct {
  Candidate string `json:"candidate,omitempty"`
  Quality string `json:"quality,omitempty"`
  Command string `json:"command,omitempty"`
+ CommandID string `json:"commandId,omitempty"`
+ Accepted bool `json:"accepted,omitempty"`
+ Reason string `json:"reason,omitempty"`
  Value string `json:"value,omitempty"`
 }
 type camRtcSession struct {
@@ -73,7 +76,7 @@ func camRtcAllowedQuality(value string) bool {
 
 func (m *TrafficManager) serveCameraRTC(conn net.Conn, r *http.Request, clientIP string) bool {
  p:=r.URL.Path
- if p!="/api/v1/cam/capabilities"&&p!="/api/v1/cam/hello"&&p!="/api/v1/cam/watch"&&p!="/api/v1/cam/events" {return false}
+ if p!="/api/v1/cam/updates"&&p!="/api/v1/cam/capabilities"&&p!="/api/v1/cam/hello"&&p!="/api/v1/cam/watch"&&p!="/api/v1/cam/events" {return false}
  if r.TLS==nil || !samePortalOrigin(r.Host) {
   writeJSONStatus(conn,"403 Forbidden",map[string]any{"ok":false,"error":"HTTPS required"})
   return true
@@ -103,6 +106,21 @@ func (m *TrafficManager) serveCameraRTC(conn net.Conn, r *http.Request, clientIP
   if !valid {writeJSONStatus(conn,"401 Unauthorized",map[string]any{"ok":false,"error":"Shizzi admin login required"});return true}
   account=strings.TrimSpace(r.URL.Query().Get("account"))
  }
+ if p=="/api/v1/cam/updates" && r.Method==http.MethodGet {
+  m.mu.Lock()
+  _,viewerOK:=m.requireAdminTokenLocked(r,clientIP)
+  m.mu.Unlock()
+  cameraOK,_:=m.mediaAccountIdentity(clientIP)
+  if !viewerOK&&!cameraOK {
+   writeJSONStatus(conn,"401 Unauthorized",map[string]any{"ok":false});return true
+  }
+  m.mu.Lock()
+  clientApp:=m.portalClientApp
+  cameraViewer:=m.portalCamAdminApp
+  m.mu.Unlock()
+  writeJSONStatus(conn,"200 OK",map[string]any{"ok":true,"client":clientApp,"viewer":cameraViewer})
+  return true
+ }
  var req struct {
   Account string `json:"account"`
   Session string `json:"session"`
@@ -115,6 +133,9 @@ func (m *TrafficManager) serveCameraRTC(conn net.Conn, r *http.Request, clientIP
   Audio bool `json:"audio"`
   Quality string `json:"quality"`
   Command string `json:"command"`
+  CommandID string `json:"commandId"`
+  Accepted bool `json:"accepted"`
+  Reason string `json:"reason"`
   Value string `json:"value"`
  }
  if r.Method==http.MethodPost {
@@ -185,13 +206,13 @@ func (m *TrafficManager) serveCameraRTC(conn net.Conn, r *http.Request, clientIP
   case "quality":
    if isCamera || !camRtcAllowedQuality(req.Quality) {writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true}
   case "control":
-   if isCamera || !camRtcValidControl(req.Command,req.Value) {writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true}
+   if isCamera || len(req.CommandID)==0 || len(req.CommandID)>96 || !camRtcValidControl(req.Command,req.Value) {writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true}
   case "status":
-   if !isCamera || !camRtcValidControl(req.Command,req.Value) {writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true}
+   if !isCamera || len(req.CommandID)==0 || len(req.CommandID)>96 || !camRtcValidControl(req.Command,req.Value) {writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true}
   case "stop": // either side can stop its peer session
   default: writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true
   }
-  camRtcPostMessage(state,isCamera,camRtcMessage{Type:req.Type,Session:state.ViewerSession,SDP:req.SDP,Mid:req.Mid,MLine:req.MLine,Candidate:req.Candidate,Quality:req.Quality,Command:req.Command,Value:req.Value})
+  camRtcPostMessage(state,isCamera,camRtcMessage{Type:req.Type,Session:state.ViewerSession,SDP:req.SDP,Mid:req.Mid,MLine:req.MLine,Candidate:req.Candidate,Quality:req.Quality,Command:req.Command,Value:req.Value,CommandID:req.CommandID,Accepted:req.Accepted,Reason:strings.TrimSpace(req.Reason)})
   writeJSONStatus(conn,"200 OK",map[string]any{"ok":true})
   return true
  default:

@@ -14,3 +14,11 @@ func TestCamRtcQueueAndQuality(t *testing.T){
  camRtc.Unlock()
  if exists {t.Fatal("camera not expired")}
 }
+
+func TestCamControlAckCommandID(t *testing.T) {
+ session:=&camRtcSession{}
+ camRtcPostMessage(session,false,camRtcMessage{Type:"control",Command:"camera",Value:"front",CommandID:"req-24"})
+ camRtcPostMessage(session,true,camRtcMessage{Type:"status",Command:"camera",Value:"front",CommandID:"req-24",Accepted:true})
+ if len(session.ToCamera)!=1||session.ToCamera[0].CommandID!="req-24" {t.Fatal("command lost request ID")}
+ if len(session.ToViewer)!=1||session.ToViewer[0].CommandID!="req-24"||!session.ToViewer[0].Accepted {t.Fatal("camera acknowledgement lost")}
+}
