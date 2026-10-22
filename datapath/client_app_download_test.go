@@ -227,3 +227,28 @@ func TestDirectShizziAdminAliasStreamsResponse(t *testing.T) {
     }
 }
 
+
+// Exact native download routes: classic Admin and mosaics Admin are different packages.
+func TestShizziCamAdminDownloadPathDoesNotAliasClassicAdmin(t *testing.T) {
+ if !isCamAdminAppDownloadPath("/shizzicam-admin.apk") ||
+    !isCamAdminAppDownloadPath("/download/shizzicam-admin.apk") ||
+     isCamAdminAppDownloadPath("/shizzi-admin.apk") ||
+     isAdminAppDownloadPath("/shizzicam-admin.apk") {
+    t.Fatal("mosaic Admin must have its own download endpoint")
+ }
+ manager:=newTrafficManager()
+ manager.portalCamAdminApp=portalClientApp{Available:true,Version:"0.3.1",FileName:"viewer.apk",
+     SizeBytes:123456,SHA256:strings.Repeat("a",64),BridgePort:8099}
+ pageServer,pageClient:=net.Pipe()
+ done:=make(chan struct{})
+ go func(){defer close(done);manager.servePortal(pageServer,"192.168.7.66")}()
+ _=pageClient.SetDeadline(time.Now().Add(5*time.Second))
+ _,_=fmt.Fprint(pageClient,"GET / HTTP/1.1\r\nHost: 192.0.2.1\r\nConnection: close\r\n\r\n")
+ page,_:=io.ReadAll(pageClient)
+ _=pageClient.Close()
+ <-done
+ if !strings.Contains(string(page),"shizzicam-admin.apk?sha256=") ||
+    !strings.Contains(string(page),"ShizziCam Admin") {
+    t.Fatal("mosaic viewer download not advertised separately")
+ }
+}

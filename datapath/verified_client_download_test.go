@@ -185,3 +185,26 @@ func TestTinyServerErrorNeverBecomesAPKOnEitherDownload(t *testing.T) {
         }
     }
 }
+
+// The distributed mosaics APK must never be a tiny error page or a stale APK.
+// Reuse the existing browser-facing error policy even if loopback is down.
+func TestCamAdminDownloadRejectsTinyErrorFile(t *testing.T) {
+  upstream:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request) {
+    if r.URL.Path!="/shizzicam-admin.apk" {t.Errorf("wrong backend path: %s",r.URL.Path)}
+    w.WriteHeader(http.StatusServiceUnavailable)
+    _,_=w.Write([]byte("61-byte response masquerading as a signed Android APK"))
+  }))
+  defer upstream.Close()
+  _,portRaw,_:=net.SplitHostPort(upstream.Listener.Addr().String())
+  port,_:=strconv.Atoi(portRaw)
+  data:=bytes.Repeat([]byte{7},48*1024)
+  manager:=newTrafficManager()
+  manager.portalCamAdminApp=verifiedAnnouncement(data,port)
+  manager.portalCamAdminApp.FileName="ShizziCam-Admin-test.apk"
+  response,body:=verifiedDownloadRequest(t,manager,"GET","","http://192.0.2.1/shizzicam-admin.apk")
+  if response.StatusCode!=502 || len(body)==0 ||
+    strings.Contains(response.Header.Get("Content-Type"),"package-archive") ||
+    strings.Contains(response.Header.Get("Content-Disposition"),"attachment") {
+     t.Fatalf("bad viewer APK incorrectly served: %d headers=%v",response.StatusCode,response.Header)
+  }
+}
