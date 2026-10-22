@@ -148,39 +148,63 @@ internal class RelayCamera(
         }
     }
     fun control(command: String, value: String) {
+        controlWithResult(command,value) { ok,message -> if(!ok)onStatus(message) }
+    }
+
+    /**
+     * Returns the hardware result from the camera thread, not merely network receipt.
+     * For torch/zoom unsupported by the handset, report failure instead of success.
+     */
+    fun controlWithResult(command: String, value: String, result: (Boolean,String)->Unit) {
         handler.post {
             try {
-                when (command) {
-                    "camera" -> if (value == "front" || value == "back") {
-                        if (side != value) { side = value; open() }
+                when(command) {
+                    "camera" -> {
+                        if(value!="front" && value!="back") error("Position de caméra invalide")
+                        if(side!=value) {
+                            side=value
+                            open()
+                        }
+                        if(camera==null) error("Caméra $value indisponible")
+                        result(true,"Caméra $value active")
                     }
                     "zoom" -> {
-                        val amount = value.toFloatOrNull() ?: return@post
-                        zoom = amount.coerceIn(1f, 8f)
-                        camera?.let { c ->
-                            val p = c.parameters
-                            if (p.isZoomSupported) {
-                                p.zoom = ((zoom - 1f) / 7f * p.maxZoom).toInt().coerceIn(0, p.maxZoom)
-                                c.parameters = p
-                            } else onStatus("Zoom non disponible sur cette caméra")
-                        }
+                        val amount=value.toFloatOrNull() ?: error("Zoom invalide")
+                        if(amount !in 1f..8f) error("Zoom hors limites")
+                        val c=camera ?: error("Caméra arrêtée")
+                        val p=c.parameters
+                        if(!p.isZoomSupported) error("Zoom non disponible sur cet appareil")
+                        zoom=amount
+                        p.zoom=((zoom-1f)/7f*p.maxZoom).toInt().coerceIn(0,p.maxZoom)
+                        c.parameters=p
+                        result(true,"Zoom demandé %.1f×".format(zoom))
                     }
                     "torch" -> {
-                        torch = value == "on"
-                        camera?.let { c ->
-                            val p = c.parameters
-                            if (Camera.Parameters.FLASH_MODE_TORCH in (p.supportedFlashModes ?: emptyList())) {
-                                p.flashMode = if (torch) Camera.Parameters.FLASH_MODE_TORCH else Camera.Parameters.FLASH_MODE_OFF
-                                c.parameters = p
-                            } else onStatus("Flash indisponible sur cette caméra")
+                        val c=camera ?: error("Caméra arrêtée")
+                        val p=c.parameters
+                        if(Camera.Parameters.FLASH_MODE_TORCH !in (p.supportedFlashModes ?: emptyList())) {
+                            error("Flash indisponible sur cette caméra")
                         }
+                        if(value!="on" && value!="off") error("Commande flash invalide")
+                        torch=value=="on"
+                        p.flashMode=if(torch) Camera.Parameters.FLASH_MODE_TORCH else Camera.Parameters.FLASH_MODE_OFF
+                        c.parameters=p
+                        result(true,if(torch)"Flash allumé" else "Flash éteint")
                     }
-                    "quality" -> if (value in listOf("auto","360p","480p","720p")) {
-                        quality = value
+                    "quality" -> {
+                        if(value !in listOf("auto","360p","480p","720p")) error("Qualité invalide")
+                        quality=value
                         open()
+                        if(camera==null) error("Impossible d'appliquer $value")
+                        result(true,"Qualité $value active")
                     }
+                    else -> error("Commande non reconnue")
                 }
-            } catch (e: Exception) { onStatus("Commande $command : " + (e.message ?: "erreur")) }
+            }catch(e:Exception){
+                val message=e.message ?: e.javaClass.simpleName
+                onStatus("Commande $command : $message")
+                result(false,message)
+            }
         }
     }
     fun stop() {

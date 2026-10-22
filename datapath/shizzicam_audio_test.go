@@ -22,19 +22,22 @@ func TestCamRemoteControlValidation(t *testing.T) {
 func TestCamAudioQueueDoesNotLosePacketsBetweenViewerPolls(t *testing.T) {
  now:=time.Now()
  account:="queued-audio-test"
- data:=[]byte{1,2,3,4}
- previous:=camAudioStore(account,data,now)
+ after:=uint64(0)
+ first:=camAudioStore(account,[]byte{1,2,3,4},now)
+ if first==0 {t.Fatal("missing sequence")}
  for i:=0;i<5;i++ {camAudioStore(account,[]byte{byte(i+5),0},now.Add(time.Duration(i+1)*10*time.Millisecond))}
- var count int
+ count:=0
  for {
-    packet,ok:=camAudioAfter(account,previous-1,now.Add(100*time.Millisecond))
+    packet,ok:=camAudioAfter(account,after,now.Add(100*time.Millisecond))
     if !ok {break}
+    if packet.sequence<=after {t.Fatal("duplicate or reversed sequence")}
     count++
-    previous=packet.sequence+1
-    if count>8 {t.Fatal("queue repeated packets")}
+    after=packet.sequence
+    if count>7 {t.Fatal("queue repeated packets")}
  }
- if count!=3 {t.Fatalf("packet queue cursor traversal changed: got %d",count)}
+ if count!=6 {t.Fatalf("audio packet queue lost data: got %d, expected 6",count)}
 }
+
 func TestCamAudioQueueBoundedAndCopySafe(t *testing.T) {
  now:=time.Now()
  account:="bounded-audio-test"

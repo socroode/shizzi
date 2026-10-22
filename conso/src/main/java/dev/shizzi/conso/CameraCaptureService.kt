@@ -177,6 +177,7 @@ class CameraCaptureService : Service() {
                     if (c.responseCode != 200) error("Relais audio HTTP " + c.responseCode)
                 } finally { c.disconnect() }
             } catch (e: Exception) {
+                captureStatus="Audio vers routeur : "+(e.message ?: e.javaClass.simpleName)
                 android.util.Log.w("ShizziCam","Audio relay failed",e)
             } finally { audioBusy.set(false) }
         }
@@ -184,14 +185,24 @@ class CameraCaptureService : Service() {
 
     private fun audioLoop() {
         val rate = 16000
-        val size = maxOf(6400,AudioRecord.getMinBufferSize(rate,
-            AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT))
-        if (size <= 0) { android.util.Log.e("ShizziCam","AudioRecord unsupported"); return }
+        val minimum=AudioRecord.getMinBufferSize(rate,
+            AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT)
+        if (minimum <= 0) {
+            captureStatus="Microphone PCM16 indisponible ($minimum)"
+            android.util.Log.e("ShizziCam",captureStatus)
+            return
+        }
+        val size = maxOf(6400,minimum)
         val record = try {
             AudioRecord(MediaRecorder.AudioSource.MIC,rate,AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,size*2)
         } catch (e: Exception) {
             android.util.Log.e("ShizziCam","Microphone unavailable",e)
+            return
+        }
+        if (record.state!=AudioRecord.STATE_INITIALIZED) {
+            captureStatus="Microphone non initialisé"
+            record.release()
             return
         }
         var active = false
@@ -203,12 +214,17 @@ class CameraCaptureService : Service() {
                     Thread.sleep(150)
                     continue
                 }
-                if (!active) { record.startRecording(); active = true }
+                if (!active) {
+                    record.startRecording()
+                    if(record.recordingState!=AudioRecord.RECORDSTATE_RECORDING) error("Microphone non actif")
+                    active = true
+                }
                 val length = record.read(data,0,data.size)
                 if (length > 0 && length % 2 == 0) uploadAudio(data.copyOf(length))
                 else if (length < 0) Thread.sleep(100)
             }
         } catch (e: Exception) {
+            captureStatus="Échec microphone : "+(e.message ?: e.javaClass.simpleName)
             android.util.Log.w("ShizziCam","Audio capture ended",e)
         } finally {
             if (active) try { record.stop() } catch (_: Exception) {}
@@ -251,8 +267,33 @@ class CameraCaptureService : Service() {
                     "control" -> if (event.optString("session") == session) {
                         val command = event.optString("command")
                         val value = event.optString("value")
-                        controlLocal(command,value)
-                        if (command == "quality") quality = value
+                        val eventId=event.optLong("id")
+                        val activeSession=session
+                        val callback: (Boolean,String)->Unit={ok,message ->
+                            if(running && eventId>0) worker.execute {
+                                try {
+                                    json("POST","/api/v1/cam/events?side=camera",
+                                        JSONObject().put("session",activeSession)
+                                            .put("type","status").put("refId",eventId)
+                                            .put("command",command).put("value",value)
+                                            .put("ok",ok).put("error",if(ok) "" else message.take(200)))
+                                } catch(e:Exception) {
+                                    android.util.Log.w("ShizziCam","Camera command acknowledgement failed",e)
+                                }
+                            }
+                        }
+                        if(command=="mic") {
+                            val allowed=value=="on" || value=="off"
+                            if(allowed)micEnabled=value=="on"
+                            callback(allowed,if(allowed)"Micro modifié" else "État micro invalide")
+                        } else {
+                            val camera=relay
+                            if(camera==null) callback(false,"Capture caméra inactive")
+                            else camera.controlWithResult(command,value) {ok,message ->
+                                if(ok && command=="quality") quality=value
+                                callback(ok,message)
+                            }
+                        }
                     }
                 }
             }
