@@ -13,8 +13,8 @@ android {
         applicationId = "dev.shizzi.conso"
         minSdk = 30
         targetSdk = 35
-        versionCode = 22
-        versionName = "0.3.3.0-relay-test"
+        versionCode = 23
+        versionName = "0.3.4.0-relay-controls"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -64,6 +64,7 @@ android {
 
 dependencies {
     implementation(project(":camrtc"))
+    implementation("androidx.core:core:1.13.1")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250107")
     androidTestImplementation("androidx.test:runner:1.6.2")

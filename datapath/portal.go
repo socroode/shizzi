@@ -140,6 +140,7 @@ type portalClientApp struct {
 	SizeBytes  int64  `json:"sizeBytes"`
 	SHA256     string `json:"sha256"`
 	BridgePort int    `json:"bridgePort,omitempty"`
+	VersionCode int64 `json:"versionCode,omitempty"`
 }
 
 type MediaDiagnostic struct {

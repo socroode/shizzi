@@ -150,6 +150,21 @@ class CamAdminActivity : Activity() {
         } finally {c.disconnect()}
     }
 
+    private fun checkLocalUpdate() {
+        val checkedPin=pin
+        val checkedWifi=wifi
+        if(checkedPin.isEmpty() || checkedWifi==null){
+            status.text="Connecte-toi d'abord à ShizziCam"
+            return
+        }
+        Thread {
+            try {
+                LocalCamUpdater.checkAndOffer(this,"viewer",checkedPin,checkedWifi,admin?.token.orEmpty()) {
+                    msg -> runOnUiThread { status.text=msg }
+                }
+            }catch(e:Exception){runOnUiThread{status.text="Mise à jour : "+(e.message ?: "indisponible")}}
+        }.start()
+    }
     private fun mosaicScreen() {
         root.removeAllViews()
         root.addView(label("ShizziCam · Mosaïque",25f))

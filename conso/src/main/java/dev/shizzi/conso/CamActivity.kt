@@ -97,6 +97,10 @@ class CamActivity:Activity() {
                 listOf("Auto","360p","480p","720p"))
         }
         root.addView(quality)
+        root.addView(Button(this).apply {
+            text="Vérifier les mises à jour locales"
+            setOnClickListener { checkLocalUpdate() }
+        })
         status=TextView(this).apply{text="Caméra désactivée";textSize=15f;setPadding(0,14,0,14)}
         root.addView(status)
         root.addView(Button(this).apply{
@@ -157,6 +161,19 @@ class CamActivity:Activity() {
         if(code==713){
             if(grants.size==permissions.size && grants.all{it==PackageManager.PERMISSION_GRANTED})pairAndStart()
             else status.text="Autorise la caméra et le microphone dans les paramètres Android."
+        }
+    }
+    private fun checkLocalUpdate() {
+        thread(name="shizzicam-check-update") {
+            try {
+                val network=wifi() ?: error("Connexion Wi-Fi Shizzi requise")
+                val cert=RouterTls.pair(this,network)
+                LocalCamUpdater.checkAndOffer(this,"client",cert,network){ msg ->
+                    runOnUiThread { status.text=msg }
+                }
+            } catch(e:Exception){
+                runOnUiThread{status.text="Mise à jour : "+(e.message ?: "indisponible")}
+            }
         }
     }
     private fun pairAndStart(){

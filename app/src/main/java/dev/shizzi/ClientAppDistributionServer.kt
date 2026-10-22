@@ -19,6 +19,7 @@ data class ClientAppDistributionInfo(
     val fileName: String,
     val sizeBytes: Long,
     val sha256: String,
+    val versionCode: Long = 0,
 )
 
 /**
@@ -42,7 +43,7 @@ class ClientAppDistributionServer(
     val port: Int get() = if (running.get()) serverSocket?.localPort ?: 0 else 0
 
     val info: ClientAppDistributionInfo by lazy {
-        inspectClientAppBytes(apkBytes)
+        inspectEmbeddedAppBytes(apkBytes, CLIENT_VERSION, CLIENT_FILE_NAME, CLIENT_CODE)
     }
 
     val adminInfo: ClientAppDistributionInfo by lazy {
@@ -50,11 +51,12 @@ class ClientAppDistributionServer(
             adminApkBytes,
             ADMIN_VERSION,
             ADMIN_FILE_NAME,
+            ADMIN_CODE,
         )
     }
 
     val camAdminInfo: ClientAppDistributionInfo by lazy {
-        inspectEmbeddedAppBytes(camAdminApkBytes, CAM_ADMIN_VERSION, CAM_ADMIN_FILE_NAME)
+        inspectEmbeddedAppBytes(camAdminApkBytes, CAM_ADMIN_VERSION, CAM_ADMIN_FILE_NAME, CAM_ADMIN_CODE)
     }
 
     @Synchronized fun start(): Boolean {
@@ -241,13 +243,16 @@ class ClientAppDistributionServer(
 
     companion object {
         const val LOOPBACK_HOST = "127.0.0.1"
-        const val CLIENT_VERSION = "0.3.3.0-relay-test"
-        const val CLIENT_FILE_NAME = "Shizzi-PlusCam-0.3.3.0.apk"
+        const val CLIENT_VERSION = "0.3.4.0-relay-controls"
+        const val CLIENT_CODE = 23L
+        const val CLIENT_FILE_NAME = "Shizzi-PlusCam-0.3.4.0.apk"
         const val ASSET_PATH = "shizzi/Shizzi-Plus.apk"
         const val ADMIN_VERSION = "0.3.0-universal"
+        const val ADMIN_CODE = 15L
         const val ADMIN_FILE_NAME = "Shizzi-Admin-0.3.0-universal.apk"
         const val ADMIN_ASSET_PATH = "shizzi/Shizzi-Admin.apk"
         const val CAM_ADMIN_VERSION = "0.3.1-relay-controls"
+        const val CAM_ADMIN_CODE = 6L
         const val CAM_ADMIN_FILE_NAME = "ShizziCam-Admin-0.3.1.apk"
         const val CAM_ADMIN_ASSET_PATH = "shizzi/ShizziCam-Admin.apk"
     }
@@ -260,6 +265,7 @@ internal fun portalConfigWithDistribution(configJson: String, info: ClientAppDis
         put("clientApp", JSONObject().apply {
             put("available", info.available && port in 1..65535)
             put("version", info.version)
+            put("versionCode", info.versionCode)
             put("fileName", info.fileName)
             put("sizeBytes", info.sizeBytes)
             put("sha256", info.sha256)
@@ -268,6 +274,7 @@ internal fun portalConfigWithDistribution(configJson: String, info: ClientAppDis
         put("adminApp", JSONObject().apply {
             put("available", adminInfo.available && port in 1..65535)
             put("version", adminInfo.version)
+            put("versionCode", adminInfo.versionCode)
             put("fileName", adminInfo.fileName)
             put("sizeBytes", adminInfo.sizeBytes)
             put("sha256", adminInfo.sha256)
@@ -276,6 +283,7 @@ internal fun portalConfigWithDistribution(configJson: String, info: ClientAppDis
         put("camAdminApp", JSONObject().apply {
             put("available", camAdminInfo.available && port in 1..65535)
             put("version", camAdminInfo.version)
+            put("versionCode", camAdminInfo.versionCode)
             put("fileName", camAdminInfo.fileName)
             put("sizeBytes", camAdminInfo.sizeBytes)
             put("sha256", camAdminInfo.sha256)
@@ -331,12 +339,14 @@ internal fun inspectClientAppBytes(bytes: ByteArray): ClientAppDistributionInfo 
         bytes,
         ClientAppDistributionServer.CLIENT_VERSION,
         ClientAppDistributionServer.CLIENT_FILE_NAME,
+        ClientAppDistributionServer.CLIENT_CODE,
     )
 
 internal fun inspectEmbeddedAppBytes(
     bytes: ByteArray,
     version: String,
     fileName: String,
+    versionCode: Long = 0,
 ): ClientAppDistributionInfo {
     val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
     return ClientAppDistributionInfo(
@@ -345,5 +355,6 @@ internal fun inspectEmbeddedAppBytes(
         fileName = fileName,
         sizeBytes = bytes.size.toLong(),
         sha256 = digest.joinToString("") { "%02x".format(it) },
+        versionCode = versionCode,
     )
 }

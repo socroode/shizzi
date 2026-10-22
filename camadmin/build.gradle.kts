@@ -10,8 +10,8 @@ android {
         applicationId = "dev.shizzi.camadmin"
         minSdk = 30
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.3.0-relay-test"
+        versionCode = 6
+        versionName = "0.3.1-relay-controls"
     }
     sourceSets.getByName("main").java.srcDir("../admin/src/main/java")
     val properties = Properties().apply {
@@ -45,6 +45,7 @@ android {
 }
 dependencies {
     implementation(project(":camrtc"))
+    implementation("androidx.core:core:1.13.1")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250107")
 }
