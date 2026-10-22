@@ -28,7 +28,7 @@ class ClientAppDistributionServerHttpTest {
         val (plus, admin) = payloads
         ServerSocket(8091, 8, InetAddress.getByName("127.0.0.1")).use { legacy ->
             legacy.soTimeout = 100
-            val server = ClientAppDistributionServer(plus, admin)
+            val server = ClientAppDistributionServer(plus, admin, admin)
             try {
                 assertTrue(server.start())
                 assertTrue(server.port in 1..65535)
@@ -67,7 +67,7 @@ class ClientAppDistributionServerHttpTest {
     @Test fun privilegedAnnouncementOverridesStaleUIInfoAndDisablesMissingServer() {
         val info = inspectClientAppBytes("current-apk".toByteArray())
         val stale = """{"clientApp":{"available":true,"version":"0.2.12-candidate","sha256":"old"},"accounts":[]}"""
-        val current = JSONObject(portalConfigWithDistribution(stale, info, info, 12345))
+        val current = JSONObject(portalConfigWithDistribution(stale, info, info, info, 12345))
         assertTrue(current.has("accounts"))
         val app = current.getJSONObject("clientApp")
         assertEquals("0.3.3.0-relay-test", app.getString("version"))
@@ -78,6 +78,6 @@ class ClientAppDistributionServerHttpTest {
         assertTrue(adminApp.getBoolean("available"))
         assertEquals(info.sha256,adminApp.getString("sha256"))
         assertEquals(12345,adminApp.getInt("bridgePort"))
-        assertFalse(JSONObject(portalConfigWithDistribution(stale, info, info, 0)).getJSONObject("clientApp").getBoolean("available"))
+        assertFalse(JSONObject(portalConfigWithDistribution(stale, info, info, info, 0)).getJSONObject("clientApp").getBoolean("available"))
     }
 }

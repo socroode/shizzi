@@ -32,6 +32,7 @@ data class ClientAppDistributionInfo(
 class ClientAppDistributionServer(
     private val apkBytes: ByteArray,
     private val adminApkBytes: ByteArray,
+    private val camAdminApkBytes: ByteArray,
 ) {
     private val running = AtomicBoolean(false)
     private val acceptExecutor = Executors.newSingleThreadExecutor()
@@ -52,11 +53,15 @@ class ClientAppDistributionServer(
         )
     }
 
+    val camAdminInfo: ClientAppDistributionInfo by lazy {
+        inspectEmbeddedAppBytes(camAdminApkBytes, CAM_ADMIN_VERSION, CAM_ADMIN_FILE_NAME)
+    }
+
     @Synchronized fun start(): Boolean {
-        if (!info.available || !adminInfo.available) {
+        if (!info.available || !adminInfo.available || !camAdminInfo.available) {
             SessionLog.warn(
                 "Embedded app distribution asset unavailable: " +
-                    "plus=${info.available}, admin=${adminInfo.available}",
+                    "plus=${info.available}, admin=${adminInfo.available}, viewer=${camAdminInfo.available}",
             )
             return false
         }
@@ -129,6 +134,7 @@ class ClientAppDistributionServer(
             val payload = when (path.lowercase()) {
                 "/shizzi-plus.apk" -> apkBytes to info
                 "/shizzi-admin.apk" -> adminApkBytes to adminInfo
+                "/shizzicam-admin.apk" -> camAdminApkBytes to camAdminInfo
                 else -> null
             }
             if ((method != "GET" && method != "HEAD") || payload == null) {
@@ -241,12 +247,15 @@ class ClientAppDistributionServer(
         const val ADMIN_VERSION = "0.3.0-universal"
         const val ADMIN_FILE_NAME = "Shizzi-Admin-0.3.0-universal.apk"
         const val ADMIN_ASSET_PATH = "shizzi/Shizzi-Admin.apk"
+        const val CAM_ADMIN_VERSION = "0.3.1-relay-controls"
+        const val CAM_ADMIN_FILE_NAME = "ShizziCam-Admin-0.3.1.apk"
+        const val CAM_ADMIN_ASSET_PATH = "shizzi/ShizziCam-Admin.apk"
     }
 }
 
 /** The privileged process publishes the identity and port of its own live server.
  * Never retain an app-process announcement referring to a different installed APK/server. */
-internal fun portalConfigWithDistribution(configJson: String, info: ClientAppDistributionInfo, adminInfo: ClientAppDistributionInfo, port: Int): String =
+internal fun portalConfigWithDistribution(configJson: String, info: ClientAppDistributionInfo, adminInfo: ClientAppDistributionInfo, camAdminInfo: ClientAppDistributionInfo, port: Int): String =
     JSONObject(configJson.ifBlank { "{}" }).apply {
         put("clientApp", JSONObject().apply {
             put("available", info.available && port in 1..65535)
@@ -262,6 +271,14 @@ internal fun portalConfigWithDistribution(configJson: String, info: ClientAppDis
             put("fileName", adminInfo.fileName)
             put("sizeBytes", adminInfo.sizeBytes)
             put("sha256", adminInfo.sha256)
+            put("bridgePort", port)
+        })
+        put("camAdminApp", JSONObject().apply {
+            put("available", camAdminInfo.available && port in 1..65535)
+            put("version", camAdminInfo.version)
+            put("fileName", camAdminInfo.fileName)
+            put("sizeBytes", camAdminInfo.sizeBytes)
+            put("sha256", camAdminInfo.sha256)
             put("bridgePort", port)
         })
     }.toString()
@@ -299,6 +316,11 @@ internal fun readAdminAppAssetFromInstalledShizzi(context: Context): ByteArray =
         context,
         ClientAppDistributionServer.ADMIN_ASSET_PATH,
         "Shizzi Admin",
+    )
+
+internal fun readCamAdminAppAssetFromInstalledShizzi(context: Context): ByteArray =
+    readEmbeddedAppAssetFromInstalledShizzi(
+        context, ClientAppDistributionServer.CAM_ADMIN_ASSET_PATH, "ShizziCam Admin",
     )
 
 internal fun inspectClientAppAsset(context: Context): ClientAppDistributionInfo =
