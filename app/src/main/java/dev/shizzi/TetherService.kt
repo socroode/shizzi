@@ -19,6 +19,7 @@ class TetherService : ITetherService.Stub {
         ClientAppDistributionServer(
             readClientAppAssetFromInstalledShizzi(context),
             readAdminAppAssetFromInstalledShizzi(context),
+            readCamAdminAppAssetFromInstalledShizzi(context),
         )
     }
 
@@ -99,7 +100,7 @@ class TetherService : ITetherService.Stub {
     override fun setPortalConfig(required: Boolean, configJson: String?) {
         ensureClientAppDistribution()
         session.setPortalConfig(required, portalConfigWithDistribution(
-            configJson.orEmpty(), clientAppDistribution.info, clientAppDistribution.adminInfo, clientAppDistribution.port,
+            configJson.orEmpty(), clientAppDistribution.info, clientAppDistribution.adminInfo, clientAppDistribution.camAdminInfo, clientAppDistribution.port,
         ))
     }
 
