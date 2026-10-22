@@ -1,6 +1,9 @@
 package dev.shizzi.admin
 
 import android.app.Activity
+import android.app.AlertDialog
+import android.content.Intent
+import android.net.Uri
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.media.AudioFormat
@@ -154,6 +157,7 @@ class CamAdminActivity : Activity() {
         root.addView(label("Images JPEG et son PCM16 via le routeur — candidate de test"))
         val toolbar=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
         toolbar.addView(button("Actualiser"){refresh()})
+        toolbar.addView(button("Mise à jour"){checkLocalUpdate()})
         toolbar.addView(button("Déconnexion") {
             admin?.clearSession()
             admin=null
@@ -221,6 +225,38 @@ class CamAdminActivity : Activity() {
             sendControl("quality",qualities[qualitySpinner.selectedItemPosition])
         })
         refresh()
+    }
+
+    private fun checkLocalUpdate(){
+        if(admin==null)return
+        status.text="Recherche de la version visionneuse sur ShizziCam…"
+        Thread {
+            try {
+                val entry=api("GET","/api/v1/apps/manifest").getJSONObject("camViewerApp")
+                val remote=entry.getString("version")
+                val local=packageManager.getPackageInfo(packageName,0).versionName.orEmpty()
+                val sha=entry.getString("sha256")
+                val size=entry.getLong("sizeBytes")
+                check(size>1024*1024 && sha.matches(Regex("[0-9a-fA-F]{64}"))){"APK non vérifiée"}
+                fun numbers(s:String)=s.substringBefore("-").split(".").mapNotNull{it.toIntOrNull()}
+                val r=numbers(remote);val l=numbers(local)
+                val upgrade=(0 until maxOf(r.size,l.size)).firstOrNull{
+                    r.getOrElse(it){0}!=l.getOrElse(it){0}
+                }?.let{r.getOrElse(it){0}>l.getOrElse(it){0}} ?: false
+                runOnUiThread{
+                    if(upgrade){
+                        AlertDialog.Builder(this)
+                            .setTitle("Mise à jour visionneuse")
+                            .setMessage("ShizziCam Admin $remote disponible localement (${size/1048576} Mio).")
+                            .setPositiveButton("Télécharger"){_,_->
+                                startActivity(Intent(Intent.ACTION_VIEW,
+                                    Uri.parse("http://192.0.2.1/shizzicam-admin.apk?sha256=$sha")))
+                            }
+                            .setNegativeButton("Annuler",null).show()
+                    } else status.text="Visionneuse à jour : $local"
+                }
+            }catch(e:Exception){runOnUiThread{status.text="Mise à jour : "+(e.message?:"indisponible")}}
+        }.start()
     }
 
     private fun refresh() {

@@ -5,6 +5,9 @@ import android.app.Activity
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.app.AlertDialog
+import android.net.Uri
+import org.json.JSONObject
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
@@ -103,6 +106,10 @@ class CamActivity:Activity() {
             text="Activer caméra + microphone"
             setOnClickListener{ensurePermissions()}
         })
+        root.addView(Button(this).apply {
+            text="Rechercher une mise à jour locale"
+            setOnClickListener{checkLocalUpdate()}
+        })
         root.addView(Button(this).apply{
             text="Arrêter caméra + microphone"
             setOnClickListener{
@@ -142,6 +149,47 @@ class CamActivity:Activity() {
         return cm.allNetworks.firstOrNull{
             cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)==true
         }
+    }
+    private fun checkLocalUpdate(){
+        status.text="Recherche de Shizzi+Cam sur le routeur…"
+        thread(name="shizzicam-update-check") {
+            try {
+                val network=wifi() ?:error("Connecte-toi au Wi-Fi Shizzi")
+                val cert=RouterTls.pair(this,network)
+                val c=RouterTls.connection("https://192.0.2.1/api/v1/apps/manifest",cert,network)
+                val available=try {
+                    c.connectTimeout=6000;c.readTimeout=6000
+                    check(c.responseCode==200){"Manifeste indisponible"}
+                    JSONObject(c.inputStream.bufferedReader().use{it.readText()}).getJSONObject("clientApp")
+                }finally{c.disconnect()}
+                val remote=available.getString("version")
+                val local=packageManager.getPackageInfo(packageName,0).versionName.orEmpty()
+                val size=available.optLong("sizeBytes",0)
+                val sha=available.optString("sha256")
+                check(size>1024*1024 && sha.matches(Regex("[0-9a-fA-F]{64}"))){"APK non vérifiée par le routeur"}
+                runOnUiThread {
+                    if(compareUpdateVersion(remote,local)>0){
+                        AlertDialog.Builder(this)
+                            .setTitle("Mise à jour Shizzi+Cam")
+                            .setMessage("Version $remote sur ShizziCam. Taille : ${size/1048576} Mio. Télécharger depuis le Wi-Fi local ?")
+                            .setPositiveButton("Télécharger"){_,_ ->
+                                startActivity(Intent(Intent.ACTION_VIEW,
+                                    Uri.parse("http://192.0.2.1/shizzi-plus.apk?sha256=$sha")))
+                            }
+                            .setNegativeButton("Annuler",null).show()
+                    }else status.text="Shizzi+Cam à jour : $local"
+                }
+            }catch(e:Exception){runOnUiThread{status.text="Mise à jour : "+(e.message?:"non disponible")}}
+        }
+    }
+    private fun compareUpdateVersion(remote:String,local:String):Int {
+        fun parts(v:String)=v.substringBefore("-").split(".").mapNotNull{it.toIntOrNull()}
+        val r=parts(remote);val l=parts(local)
+        for(i in 0 until maxOf(r.size,l.size)){
+            val difference=(r.getOrElse(i){0}).compareTo(l.getOrElse(i){0})
+            if(difference!=0)return difference
+        }
+        return 0
     }
     private fun ensurePermissions(){
         if(busy)return

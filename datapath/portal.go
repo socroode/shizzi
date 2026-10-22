@@ -1188,8 +1188,10 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 		m.serveMediaProxy(conn, request, clientIP, localAccount)
 	case isChatRequest:
 		m.serveChatProxy(conn, request, localAccount)
-	case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
-		(isClientAppDownloadPath(path) || isAdminAppDownloadPath(path) || isCamViewerDownloadPath(path)):
+	case request.Method == http.MethodGet && path == "/api/v1/apps/manifest":
+        m.serveCamUpdateManifest(conn)
+    case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
+        (isClientAppDownloadPath(path) || isAdminAppDownloadPath(path) || isCamViewerDownloadPath(path)):
 		m.serveClientAppDownload(conn, request)
 	case request.Method == http.MethodPost && path == "/login":
 		_ = request.ParseForm()
@@ -1707,6 +1709,17 @@ func (m *TrafficManager) serveChatProxy(
 	_, _ = io.Copy(conn, local)
 }
 
+// LAN-only update metadata. It never contains account tokens or credentials.
+// Clients compare version numbers before opening the verified portal APK URL.
+func (m *TrafficManager) serveCamUpdateManifest(conn net.Conn) {
+ m.mu.Lock()
+ client,viewer:=m.portalClientApp,m.portalCamViewerApp
+ m.mu.Unlock()
+ writeJSONStatus(conn,"200 OK",map[string]any{
+  "clientApp":client,
+  "camViewerApp":viewer,
+ })
+}
 func (m *TrafficManager) serveClientAppDownload(conn net.Conn, request *http.Request) {
     m.mu.Lock()
     cameraApp := m.portalClientApp
