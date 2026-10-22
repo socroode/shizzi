@@ -58,6 +58,10 @@ val embeddedShizziAdminDebugDir =
     layout.buildDirectory.dir("generated/shizziAdminAssets/debug")
 val embeddedShizziAdminReleaseDir =
     layout.buildDirectory.dir("generated/shizziAdminAssets/release")
+val embeddedCamViewerDebugDir =
+    layout.buildDirectory.dir("generated/shizziCamViewerAssets/debug")
+val embeddedCamViewerReleaseDir =
+    layout.buildDirectory.dir("generated/shizziCamViewerAssets/release")
 
 val prepareEmbeddedShizziPlusDebug by tasks.registering(Sync::class) {
     dependsOn(":conso:assembleDebug")
@@ -91,6 +95,21 @@ val prepareEmbeddedShizziAdminRelease by tasks.registering(Sync::class) {
     outputs.dir(embeddedShizziAdminReleaseDir)
 }
 
+val prepareEmbeddedCamViewerDebug by tasks.registering(Sync::class) {
+    dependsOn(":camadmin:assembleDebug")
+    from(rootProject.layout.projectDirectory.file("camadmin/build/outputs/apk/debug/camadmin-debug.apk"))
+    into(embeddedCamViewerDebugDir.map { it.dir("shizzi") })
+    rename { "ShizziCam-Admin.apk" }
+    outputs.dir(embeddedCamViewerDebugDir)
+}
+val prepareEmbeddedCamViewerRelease by tasks.registering(Sync::class) {
+    dependsOn(":camadmin:assembleRelease")
+    from(rootProject.layout.projectDirectory.file("camadmin/build/outputs/apk/release/camadmin-release.apk"))
+    into(embeddedCamViewerReleaseDir.map { it.dir("shizzi") })
+    rename { "ShizziCam-Admin.apk" }
+    outputs.dir(embeddedCamViewerReleaseDir)
+}
+
 android {
     namespace = "dev.shizzi"
     compileSdk = 35
@@ -100,8 +119,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 45
-        versionName = "0.4.3.5.14.1"
+        versionCode = 46
+        versionName = "0.4.3.5.15"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 
@@ -130,8 +149,10 @@ android {
     sourceSets {
         getByName("debug").assets.srcDir(embeddedShizziPlusDebugDir)
         getByName("debug").assets.srcDir(embeddedShizziAdminDebugDir)
+        getByName("debug").assets.srcDir(embeddedCamViewerDebugDir)
         getByName("release").assets.srcDir(embeddedShizziPlusReleaseDir)
         getByName("release").assets.srcDir(embeddedShizziAdminReleaseDir)
+        getByName("release").assets.srcDir(embeddedCamViewerReleaseDir)
     }
 
     buildTypes {
@@ -185,16 +206,20 @@ tasks.configureEach {
     when {
         name != "prepareEmbeddedShizziPlusDebug" &&
             name != "prepareEmbeddedShizziAdminDebug" &&
+            name != "prepareEmbeddedCamViewerDebug" &&
             name.contains("Debug", ignoreCase = true) -> {
             dependsOn(prepareEmbeddedShizziPlusDebug)
             dependsOn(prepareEmbeddedShizziAdminDebug)
+            dependsOn(prepareEmbeddedCamViewerDebug)
         }
 
         name != "prepareEmbeddedShizziPlusRelease" &&
             name != "prepareEmbeddedShizziAdminRelease" &&
+            name != "prepareEmbeddedCamViewerRelease" &&
             name.contains("Release", ignoreCase = true) -> {
             dependsOn(prepareEmbeddedShizziPlusRelease)
             dependsOn(prepareEmbeddedShizziAdminRelease)
+            dependsOn(prepareEmbeddedCamViewerRelease)
         }
     }
 }
