@@ -227,3 +227,30 @@ func TestDirectShizziAdminAliasStreamsResponse(t *testing.T) {
     }
 }
 
+
+func TestCamViewerDownloadPathVariants(t *testing.T) {
+ for _,path:=range []string{"/shizzicam-admin.apk","/download/shizzicam-admin.apk/","/SHIZZICAM-ADMIN.APK"} {
+  if !isCamViewerDownloadPath(path) {t.Fatalf("missing viewer route %s",path)}
+ }
+ for _,path:=range []string{"/shizzi-admin.apk","/media/shizzicam-admin.apk","/shizzicam-admin.apk.html"} {
+  if isCamViewerDownloadPath(path) {t.Fatalf("wrong viewer route %s",path)}
+ }
+}
+func TestPortalShowsShizziCamViewerDownload(t *testing.T) {
+ m:=newTrafficManager()
+ m.portalCamViewerApp=portalClientApp{
+   Available:true,Version:"viewer-test",FileName:"ShizziCam-Admin-test.apk",
+   SizeBytes:2000,SHA256:strings.Repeat("a",64),BridgePort:12345,
+ }
+ server,client:=net.Pipe()
+ done:=make(chan struct{})
+ go func(){defer close(done);m.servePortal(server,"192.168.7.4")}()
+ _,_=fmt.Fprint(client,"GET / HTTP/1.1\r\nHost: 192.0.2.1\r\nConnection: close\r\n\r\n")
+ _=client.SetDeadline(time.Now().Add(4*time.Second))
+ response,err:=io.ReadAll(client)
+ _=client.Close()
+ <-done
+ if err!=nil || !strings.Contains(string(response),"shizzicam-admin.apk?sha256="+strings.Repeat("a",64)) {
+  t.Fatalf("viewer link absent: %v",err)
+ }
+}

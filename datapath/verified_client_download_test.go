@@ -185,3 +185,22 @@ func TestTinyServerErrorNeverBecomesAPKOnEitherDownload(t *testing.T) {
         }
     }
 }
+
+func TestViewerVerifiedDownloadRejectsTinyError(t *testing.T) {
+ source:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+   w.WriteHeader(503)
+   _,_=w.Write(bytes.Repeat([]byte("e"),61))
+ }))
+ defer source.Close()
+ _,p,_:=net.SplitHostPort(source.Listener.Addr().String())
+ port,_:=strconv.Atoi(p)
+ m:=newTrafficManager()
+ m.portalCamViewerApp=verifiedAnnouncement(bytes.Repeat([]byte{0x41},3000),port)
+ for _,method:=range []string{"GET","HEAD"} {
+   resp,_:=verifiedDownloadRequest(t,m,method,"","http://192.0.2.1/shizzicam-admin.apk")
+   if resp.StatusCode!=502 || resp.Header.Get("X-Shizzi-Download-Error")!="true" ||
+     strings.Contains(resp.Header.Get("Content-Type"),"package-archive") {
+      t.Fatalf("viewer error saved as apk: %s %d",method,resp.StatusCode)
+   }
+ }
+}
