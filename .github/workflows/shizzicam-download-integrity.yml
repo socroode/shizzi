@@ -90,7 +90,7 @@ jobs:
           set -euo pipefail
           BUILD_TOOLS=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | grep -v -- "-rc" | sort -V | tail -1)
           for row in \
-            "app/build/outputs/apk/release/app-release.apk|dev.shizzi|0.4.3.5.14|44" \
+            "app/build/outputs/apk/release/app-release.apk|dev.shizzi|0.4.3.5.14.1|45" \
             "conso/build/outputs/apk/release/conso-release.apk|dev.shizzi.conso|0.3.3.0-relay-test|22" \
             "camadmin/build/outputs/apk/release/camadmin-release.apk|dev.shizzi.camadmin|0.3.0-relay-test|5"; do
             IFS='|' read -r apk pkg version code <<< "$row"
@@ -133,7 +133,7 @@ jobs:
       - name: Prepare only CI build artifacts (no release/publication)
         run: |
           mkdir -p shizzicam-output
-          cp app/build/outputs/apk/release/app-release.apk shizzicam-output/ShizziCam-Hotspot-0.4.3.5.14.apk
+          cp app/build/outputs/apk/release/app-release.apk shizzicam-output/ShizziCam-Hotspot-0.4.3.5.14.1.apk
           cp conso/build/outputs/apk/release/conso-release.apk shizzicam-output/Shizzi-PlusCam-0.3.3.0.apk
           cp camadmin/build/outputs/apk/release/camadmin-release.apk shizzicam-output/ShizziCam-Admin-0.3.0.apk
           cd shizzicam-output
