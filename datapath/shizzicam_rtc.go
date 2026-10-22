@@ -24,6 +24,9 @@ type camRtcMessage struct {
  Candidate string `json:"candidate,omitempty"`
  Quality string `json:"quality,omitempty"`
  Command string `json:"command,omitempty"`
+ RequestID string `json:"requestId,omitempty"`
+ Success bool `json:"success,omitempty"`
+ Detail string `json:"detail,omitempty"`
  Value string `json:"value,omitempty"`
 }
 type camRtcSession struct {
@@ -115,6 +118,9 @@ func (m *TrafficManager) serveCameraRTC(conn net.Conn, r *http.Request, clientIP
   Audio bool `json:"audio"`
   Quality string `json:"quality"`
   Command string `json:"command"`
+  RequestID string `json:"requestId"`
+  Success bool `json:"success"`
+  Detail string `json:"detail"`
   Value string `json:"value"`
  }
  if r.Method==http.MethodPost {
@@ -185,13 +191,13 @@ func (m *TrafficManager) serveCameraRTC(conn net.Conn, r *http.Request, clientIP
   case "quality":
    if isCamera || !camRtcAllowedQuality(req.Quality) {writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true}
   case "control":
-   if isCamera || !camRtcValidControl(req.Command,req.Value) {writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true}
+   if isCamera || len(req.RequestID)<8 || len(req.RequestID)>64 || !camRtcValidControl(req.Command,req.Value) {writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true}
   case "status":
-   if !isCamera || !camRtcValidControl(req.Command,req.Value) {writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true}
+   if !isCamera || len(req.RequestID)<8 || len(req.RequestID)>64 || len(req.Detail)>256 || !camRtcValidControl(req.Command,req.Value) {writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true}
   case "stop": // either side can stop its peer session
   default: writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true
   }
-  camRtcPostMessage(state,isCamera,camRtcMessage{Type:req.Type,Session:state.ViewerSession,SDP:req.SDP,Mid:req.Mid,MLine:req.MLine,Candidate:req.Candidate,Quality:req.Quality,Command:req.Command,Value:req.Value})
+  camRtcPostMessage(state,isCamera,camRtcMessage{Type:req.Type,Session:state.ViewerSession,SDP:req.SDP,Mid:req.Mid,MLine:req.MLine,Candidate:req.Candidate,Quality:req.Quality,Command:req.Command,Value:req.Value,RequestID:req.RequestID,Success:req.Success,Detail:req.Detail})
   writeJSONStatus(conn,"200 OK",map[string]any{"ok":true})
   return true
  default:

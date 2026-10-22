@@ -14,3 +14,11 @@ func TestCamRtcQueueAndQuality(t *testing.T){
  camRtc.Unlock()
  if exists {t.Fatal("camera not expired")}
 }
+
+func TestCamControlAckFieldsRoundTrip(t *testing.T) {
+ s:=&camRtcSession{}
+ camRtcPostMessage(s,false,camRtcMessage{Type:"control",Session:"sess",Command:"camera",Value:"front",RequestID:"control-123456"})
+ if s.ToCamera[0].RequestID!="control-123456" {t.Fatal("request lost")}
+ camRtcPostMessage(s,true,camRtcMessage{Type:"status",Session:"sess",Command:"camera",Value:"front",RequestID:"control-123456",Success:true,Detail:"ok"})
+ if !s.ToViewer[0].Success || s.ToViewer[0].RequestID!=s.ToCamera[0].RequestID {t.Fatal("ack lost")}
+}

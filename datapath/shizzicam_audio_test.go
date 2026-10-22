@@ -18,3 +18,18 @@ func TestCamRemoteControlValidation(t *testing.T) {
   if camRtcValidControl(v[0],v[1]) {t.Fatalf("accepted: %v",v)}
  }
 }
+
+func TestCamAudioOrderAndPerCameraIsolation(t *testing.T) {
+ now:=time.Now()
+ var ids []uint64
+ for i:=0;i<75;i++ {ids=append(ids,camAudioStore("order-test",[]byte{byte(i),1},now.Add(time.Duration(i)*time.Millisecond)))}
+ if len(camAudioPackets.entries["order-test"])!=camAudioQueueLimit {t.Fatal("audio queue not bounded")}
+ first,ok:=camAudioAfter("order-test",ids[0],now.Add(75*time.Millisecond))
+ if !ok || first.sequence!=ids[11] {t.Fatalf("expected first retained packet %d, got %+v",ids[11],first)}
+ second,ok:=camAudioAfter("order-test",first.sequence,now.Add(75*time.Millisecond))
+ if !ok || second.sequence!=ids[12] {t.Fatal("audio packet skipped")}
+ live,ok:=camAudioAfter("order-test",0,now.Add(75*time.Millisecond))
+ if !ok || live.sequence!=ids[74] {t.Fatal("initial listener not at live edge")}
+ camAudioStore("other-cam",[]byte{8,9},now)
+ if pkt,ok:=camAudioAfter("other-cam",0,now);!ok || !bytes.Equal(pkt.data,[]byte{8,9}) {t.Fatal("cam mixup")}
+}
