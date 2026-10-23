@@ -23,6 +23,14 @@ import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
 import android.widget.*
+import android.view.TextureView
+import android.view.Surface
+import android.graphics.SurfaceTexture
+import android.view.View
+import java.io.DataInputStream
+import java.io.BufferedInputStream
+import java.util.concurrent.atomic.AtomicInteger
+import dev.shizzi.camrtc.CamH264Decoder
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.util.UUID
@@ -47,6 +55,9 @@ class CamAdminActivity : Activity() {
     private val fetching = ConcurrentHashMap.newKeySet<String>()
     private val poll = Executors.newSingleThreadScheduledExecutor()
     private val frames = Executors.newFixedThreadPool(4)
+    private val videoThreads = Executors.newFixedThreadPool(8)
+    private val streamGeneration=AtomicInteger(0)
+    private val tileTextures=mutableMapOf<String,TextureView>()
     private val commands = Executors.newSingleThreadExecutor()
     private val eventPoll = Executors.newSingleThreadScheduledExecutor()
     private val eventCursors = mutableMapOf<String,Long>()
@@ -301,7 +312,9 @@ class CamAdminActivity : Activity() {
     }
 
     private fun renderGrid() {
+        val generation=streamGeneration.incrementAndGet()
         tileImages.clear()
+        tileTextures.clear()
         tileHolder.removeAllViews()
         val names=if(fullScreen && selected.isNotEmpty()) listOf(selected)
             else cameras.keys.take(gridCount)
@@ -327,8 +340,27 @@ class CamAdminActivity : Activity() {
                 scaleType=ImageView.ScaleType.FIT_CENTER
                 setOnClickListener {selectCam(name)}
             }
-            item.addView(image)
+            val layers=FrameLayout(this)
+            layers.addView(image)
+            val texture=TextureView(this).apply {
+                layoutParams=FrameLayout.LayoutParams(width-8,(width-8)*9/16)
+                visibility=View.INVISIBLE
+                isOpaque=true
+            }
+            layers.addView(texture)
+            texture.setOnClickListener{selectCam(name)}
+            item.addView(layers)
             tileImages[name]=image
+            tileTextures[name]=texture
+            texture.surfaceTextureListener=object:TextureView.SurfaceTextureListener{
+                override fun onSurfaceTextureAvailable(st:SurfaceTexture,w:Int,h:Int){
+                    streamVideo(name,texture,generation,st)
+                }
+                override fun onSurfaceTextureSizeChanged(st:SurfaceTexture,w:Int,h:Int){}
+                override fun onSurfaceTextureUpdated(st:SurfaceTexture){}
+                override fun onSurfaceTextureDestroyed(st:SurfaceTexture):Boolean=true
+            }
+            if(texture.isAvailable)texture.surfaceTexture?.let{streamVideo(name,texture,generation,it)}
             grid.addView(item,GridLayout.LayoutParams(
                 GridLayout.spec(index/columns),GridLayout.spec(index%columns)).apply{
                 this.width=width
@@ -336,6 +368,60 @@ class CamAdminActivity : Activity() {
             })
         }
         tileHolder.addView(grid)
+    }
+
+
+    /** Decode H264 stream from hotspot only; never connect to a camera IP. */
+    private fun streamVideo(name:String,texture:TextureView,generation:Int,surfaceTexture:SurfaceTexture){
+        videoThreads.execute {
+            val surface=Surface(surfaceTexture)
+            try {
+                while(alive&&generation==streamGeneration.get()&&!Thread.currentThread().isInterrupted){
+                    var c:HttpsURLConnection?=null
+                    var decoder:CamH264Decoder?=null
+                    try{
+                        c=url("/api/v1/cam/video-stream?account="+URLEncoder.encode(name,"UTF-8"))
+                        c.readTimeout=12000
+                        if(c.responseCode!=200)throw IllegalStateException("H264 HTTP "+c.responseCode)
+                        val stream=DataInputStream(BufferedInputStream(c.inputStream))
+                        while(alive&&generation==streamGeneration.get()){
+                            val length=stream.readInt()
+                            if(length<=0 || length>262144)throw IllegalStateException("H264 packet size")
+                            val w=stream.readUnsignedShort()
+                            val h=stream.readUnsignedShort()
+                            val pts=stream.readLong()
+                            val flags=stream.readUnsignedByte()
+                            if(w<=0||h<=0||w>3840||h>2160)throw IllegalStateException("H264 dimensions")
+                            val data=ByteArray(length)
+                            stream.readFully(data)
+                            if(decoder==null || decoder.width!=w || decoder.height!=h || (flags and 2!=0)){
+                                decoder?.close()
+                                decoder=CamH264Decoder(surface,w,h)
+                            }
+                            val shown=decoder.decode(data,flags,pts)
+                            if(shown)runOnUiThread {
+                                if(generation==streamGeneration.get()&&tileTextures[name]===texture){
+                                    texture.visibility=View.VISIBLE
+                                    tileImages[name]?.visibility=View.GONE
+                                }
+                            }
+                        }
+                    }catch(e:Exception){
+                        android.util.Log.w("ShizziCam","H264 stream $name unavailable",e)
+                        runOnUiThread {
+                            if(generation==streamGeneration.get()&&tileTextures[name]===texture){
+                                texture.visibility=View.INVISIBLE
+                                tileImages[name]?.visibility=View.VISIBLE
+                            }
+                        }
+                        if(alive&&generation==streamGeneration.get())Thread.sleep(800)
+                    }finally{
+                        decoder?.close()
+                        c?.disconnect()
+                    }
+                }
+            }catch(_:InterruptedException){}finally{surface.release()}
+        }
     }
 
     private fun selectCam(account:String){
@@ -574,6 +660,8 @@ class CamAdminActivity : Activity() {
         talkExecutor.shutdownNow()
         poll.shutdownNow()
         frames.shutdownNow()
+        streamGeneration.incrementAndGet()
+        videoThreads.shutdownNow()
         commands.shutdownNow()
         eventPoll.shutdownNow()
         audioExecutor.shutdownNow()
