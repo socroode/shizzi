@@ -236,6 +236,50 @@ func TestCamViewerDownloadPathVariants(t *testing.T) {
   if isCamViewerDownloadPath(path) {t.Fatalf("wrong viewer route %s",path)}
  }
 }
+func TestCamMonitorDownloadPathVariants(t *testing.T) {
+ for _,path:=range []string{"/shizzicam-debit.apk","/download/shizzicam-debit.apk/","/SHIZZICAM-DEBIT.APK"} {
+  if !isCamMonitorDownloadPath(path) {t.Fatalf("missing monitor path %s",path)}
+ }
+ for _,path:=range []string{"/shizzicam-admin.apk","/media/shizzicam-debit.apk","/shizzicam-debit.apk.html"} {
+  if isCamMonitorDownloadPath(path) {t.Fatalf("unwanted monitor path %s",path)}
+ }
+}
+func TestPortalShowsShizziCamMonitorDownload(t *testing.T) {
+ m:=newTrafficManager()
+ m.portalCamMonitorApp=portalClientApp{
+  Available:true,Version:"0.1.0-candidate",FileName:"ShizziCam-Debit-0.1.0.apk",
+  SizeBytes:2000,SHA256:strings.Repeat("b",64),BridgePort:12345,
+ }
+ server,client:=net.Pipe()
+ done:=make(chan struct{})
+ go func(){defer close(done);m.servePortal(server,"192.168.7.4")}()
+ _,_=fmt.Fprint(client,"GET / HTTP/1.1\r\nHost: 192.0.2.1\r\nConnection: close\r\n\r\n")
+ _=client.SetDeadline(time.Now().Add(4*time.Second))
+ response,err:=io.ReadAll(client)
+ _=client.Close()
+ <-done
+ if err!=nil||!strings.Contains(string(response),"shizzicam-debit.apk?sha256="+strings.Repeat("b",64)){
+  t.Fatalf("monitor link absent: %v",err)
+ }
+}
+func TestCamMonitorVerifiedLocalDownload(t *testing.T) {
+ data:=[]byte("shizzicam-monitor-apk")
+ upstream:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request) {
+  if r.URL.Path!="/shizzicam-debit.apk" {w.WriteHeader(404);return}
+  _,_=w.Write(data)
+ }))
+ defer upstream.Close()
+ _,portRaw,_:=net.SplitHostPort(upstream.Listener.Addr().String())
+ port,_:=strconv.Atoi(portRaw)
+ manager:=newTrafficManager()
+ manager.portalCamMonitorApp=verifiedAnnouncement(data,port)
+ manager.portalCamMonitorApp.FileName="ShizziCam-Debit-0.1.0.apk"
+ response,body:=verifiedDownloadRequest(t,manager,"GET","","http://192.0.2.1/shizzicam-debit.apk")
+ if response.StatusCode!=200||string(data)!=string(body) ||
+   response.Header.Get("X-Shizzi-SHA256")!=manager.portalCamMonitorApp.SHA256 {
+  t.Fatalf("monitor download bad: status=%d body=%q",response.StatusCode,body)
+ }
+}
 func TestPortalShowsShizziCamViewerDownload(t *testing.T) {
  m:=newTrafficManager()
  m.portalCamViewerApp=portalClientApp{

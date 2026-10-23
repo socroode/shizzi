@@ -170,6 +170,7 @@ type portalConfig struct {
 	ClientApp          portalClientApp   `json:"clientApp"`
 	AdminApp           portalClientApp   `json:"adminApp"`
 	CamViewerApp      portalClientApp   `json:"camViewerApp"`
+    CamMonitorApp     portalClientApp   `json:"camMonitorApp"`
 	// ClaimResults lets Android tell the portal how a voucher claim ended so
 	// the client sees "accepted"/"rejected" instead of a silent drop.
 	ClaimResults []PortalClaimResult  `json:"claimResults"`
@@ -288,6 +289,7 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 	m.portalClientApp = config.ClientApp
 	m.portalAdminApp = config.AdminApp
 	m.portalCamViewerApp = config.CamViewerApp
+    m.portalCamMonitorApp = config.CamMonitorApp
 	credentialsChanged := m.adminConfig.Username != config.Admin.Username ||
 		m.adminConfig.PasswordHash != config.Admin.PasswordHash ||
 		m.adminConfig.Enabled != config.Admin.Enabled
@@ -1064,6 +1066,13 @@ func isCamViewerDownloadPath(rawPath string) bool {
  return false
 }
 
+func isCamMonitorDownloadPath(rawPath string) bool {
+    switch normalizeEmbeddedAppDownloadPath(rawPath) {
+    case "/shizzicam-debit.apk", "/download/shizzicam-debit.apk": return true
+    }
+    return false
+}
+
 // portalRecoveryNeeded never grants Internet access. It only lets an
 // unidentified, NAT-translated HTTP client reach an isolated explanation
 // instead of a TCP reset. This is restricted to the local portal address
@@ -1191,7 +1200,7 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	case request.Method == http.MethodGet && path == "/api/v1/apps/manifest":
         m.serveCamUpdateManifest(conn)
     case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
-        (isClientAppDownloadPath(path) || isAdminAppDownloadPath(path) || isCamViewerDownloadPath(path)):
+        (isClientAppDownloadPath(path) || isAdminAppDownloadPath(path) || isCamViewerDownloadPath(path) || isCamMonitorDownloadPath(path)):
 		m.serveClientAppDownload(conn, request)
 	case request.Method == http.MethodPost && path == "/login":
 		_ = request.ParseForm()
@@ -1713,11 +1722,13 @@ func (m *TrafficManager) serveChatProxy(
 // Clients compare version numbers before opening the verified portal APK URL.
 func (m *TrafficManager) serveCamUpdateManifest(conn net.Conn) {
  m.mu.Lock()
- client,viewer:=m.portalClientApp,m.portalCamViewerApp
+ client,viewer,monitor,admin:=m.portalClientApp,m.portalCamViewerApp,m.portalCamMonitorApp,m.portalAdminApp
  m.mu.Unlock()
  writeJSONStatus(conn,"200 OK",map[string]any{
   "clientApp":client,
   "camViewerApp":viewer,
+   "camMonitorApp":monitor,
+   "adminApp":admin,
  })
 }
 func (m *TrafficManager) serveClientAppDownload(conn net.Conn, request *http.Request) {
@@ -1725,6 +1736,7 @@ func (m *TrafficManager) serveClientAppDownload(conn net.Conn, request *http.Req
     cameraApp := m.portalClientApp
     adminApp := m.portalAdminApp
     viewerApp := m.portalCamViewerApp
+    monitorApp := m.portalCamMonitorApp
     m.mu.Unlock()
 
     requestPath := "/shizzi-plus.apk"
@@ -1741,6 +1753,10 @@ func (m *TrafficManager) serveClientAppDownload(conn net.Conn, request *http.Req
         app = viewerApp
         backendPath = "/shizzicam-admin.apk"
         label = "ShizziCam Admin"
+    } else if isCamMonitorDownloadPath(requestPath) {
+        app = monitorApp
+        backendPath = "/shizzicam-debit.apk"
+        label = "ShizziCam Débit"
     }
 
     // Never use a fixed, possibly stale 8091 port nor blindly copy the response
@@ -1894,6 +1910,7 @@ func (m *TrafficManager) writePortalHTML(
 	clientApp := m.portalClientApp
 	adminApp := m.portalAdminApp
 	camViewerApp := m.portalCamViewerApp
+    camMonitorApp := m.portalCamMonitorApp
 	m.mu.Unlock()
 
 	alert := ""
@@ -2056,6 +2073,22 @@ func (m *TrafficManager) writePortalHTML(
             html.EscapeString(camViewerApp.FileName),html.EscapeString(shortSHA))
     }
 
+    if camMonitorApp.Available && camMonitorApp.BridgePort > 0 {
+        downloadURL := "http://192.0.2.1/shizzicam-debit.apk?sha256=" + camMonitorApp.SHA256
+        shortSHA := camMonitorApp.SHA256
+        if len(shortSHA)>12 {shortSHA=shortSHA[:12]}
+        content += fmt.Sprintf(`<section class="app-download"><div class="eyebrow">SUPERVISION CAMÉRAS</div>
+<strong>ShizziCam Débit %s</strong>
+<p>Mesure les débits vidéo/audio locaux par caméra, sans Internet ni consommation de voucher.</p>
+<a class="download-button" data-size="%d" data-sha256="%s" href="%s">Télécharger ShizziCam Débit</a>
+<div id="shizzicam-debit-download-status" class="app-note" aria-live="polite">Vérification de l'APK avant téléchargement.</div>
+<div class="app-meta">%s · %s · SHA-256 %s…</div></section>`,
+            html.EscapeString(camMonitorApp.Version),camMonitorApp.SizeBytes,
+            html.EscapeString(camMonitorApp.SHA256),html.EscapeString(downloadURL),
+            html.EscapeString(formatPortalFileSize(camMonitorApp.SizeBytes)),
+            html.EscapeString(camMonitorApp.FileName),html.EscapeString(shortSHA))
+    }
+
 	refresh := ""
 	if status.ClaimPending {
 		refresh = `<meta http-equiv="refresh" content="3;url=/">`
@@ -2144,7 +2177,8 @@ func applyPortalCustomization(
 func injectClientAppDownload(page string) string {
 	if !strings.Contains(page, "shizzi-plus.apk") &&
 		!strings.Contains(page, "shizzi-admin.apk") &&
-        !strings.Contains(page, "shizzicam-admin.apk") {
+        !strings.Contains(page, "shizzicam-admin.apk") &&
+        !strings.Contains(page, "shizzicam-debit.apk") {
 		return page
 	}
 
@@ -2195,6 +2229,7 @@ func injectClientAppDownload(page string) string {
   wire('a.download-button[href*="shizzi-plus.apk"]',"shizzi-download-status");
   wire('a.download-button[href*="shizzi-admin.apk"]',"shizzi-admin-download-status");
   wire('a.download-button[href*="shizzicam-admin.apk"]',"shizzicam-admin-download-status");
+  wire('a.download-button[href*="shizzicam-debit.apk"]',"shizzicam-debit-download-status");
 })();
 </script>`;
 

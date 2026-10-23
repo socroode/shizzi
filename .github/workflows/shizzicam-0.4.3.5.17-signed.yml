@@ -97,6 +97,10 @@ jobs:
           cmp /tmp/shizzicam-embedded-plus.apk conso/build/outputs/apk/release/conso-release.apk
           unzip -p app/build/outputs/apk/release/app-release.apk assets/shizzi/ShizziCam-Admin.apk > /tmp/shizzicam-embedded-viewer.apk
           cmp /tmp/shizzicam-embedded-viewer.apk camadmin/build/outputs/apk/release/camadmin-release.apk
+          unzip -p app/build/outputs/apk/release/app-release.apk assets/shizzi/Shizzi-Admin.apk > /tmp/shizzicam-embedded-admin.apk
+          cmp /tmp/shizzicam-embedded-admin.apk admin/build/outputs/apk/release/admin-release.apk
+          unzip -p app/build/outputs/apk/release/app-release.apk assets/shizzi/ShizziCam-Debit.apk > /tmp/shizzicam-embedded-monitor.apk
+          cmp /tmp/shizzicam-embedded-monitor.apk cammonitor/build/outputs/apk/release/cammonitor-release.apk
       - name: Package signed test candidates without publishing a release
         run: |
           mkdir -p shizzicam-17-test
