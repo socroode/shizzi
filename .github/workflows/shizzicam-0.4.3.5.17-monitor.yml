@@ -25,10 +25,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
       - uses: gradle/actions/setup-gradle@v6
       - name: Compile monitor and run unit tests
-        run: ./gradlew -PshizziClientsOnly=true :cammonitor:testDebugUnitTest :cammonitor:assembleDebug --no-daemon
+        run: ./gradlew -PshizziClientsOnly=true :cammonitor:testDebugUnitTest :cammonitor:assembleDebug :conso:testDebugUnitTest :conso:assembleDebug :camadmin:assembleDebug --no-daemon
       - uses: actions/upload-artifact@v5
         with:
           name: ShizziCam-Debit-DEBUG-UNSIGNED-NOT-FOR-CLIENTS
