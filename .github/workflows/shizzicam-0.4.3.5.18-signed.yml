@@ -1,4 +1,4 @@
-name: ShizziCam 0.4.3.5.18 signed HOTSPOT, camera, viewer and monitor
+name: ShizziCam 0.4.3.5.18.1 signed HOTSPOT and interphone fix
 on:
   push:
     branches:
@@ -69,7 +69,7 @@ jobs:
           EOF
       - name: Verify all camera-side client unit tests and diagnostic APK
         run: |
-          ./gradlew -PshizziClientsOnly=true :camrtc:testDebugUnitTest :cammonitor:testDebugUnitTest :accounts:testDebugUnitTest :conso:testDebugUnitTest :camadmin:assembleDebug --no-daemon
+          ./gradlew -PshizziClientsOnly=true :camrtc:testDebugUnitTest :cammonitor:testDebugUnitTest :accounts:testDebugUnitTest :conso:testDebugUnitTest :camadmin:testDebugUnitTest :camadmin:assembleDebug --no-daemon
       - name: Build signed router and all camera applications
         run: ./gradlew :app:testDebugUnitTest :app:assembleRelease :camadmin:assembleRelease :cammonitor:assembleRelease :accounts:assembleRelease --no-daemon
       - name: Verify identity, code versions, original signing certificate, and embedded APKs
@@ -79,9 +79,9 @@ jobs:
           set -euo pipefail
           BUILD_TOOLS=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | grep -v -- "-rc" | sort -V | tail -1)
           for row in \
-            "app/build/outputs/apk/release/app-release.apk|dev.shizzi|0.4.3.5.18-test|48" \
+            "app/build/outputs/apk/release/app-release.apk|dev.shizzi|0.4.3.5.18.1-test|49" \
             "conso/build/outputs/apk/release/conso-release.apk|dev.shizzi.conso|0.3.5-relay18-test|25" \
-            "camadmin/build/outputs/apk/release/camadmin-release.apk|dev.shizzi.camadmin|0.3.3-relay18-test|8" \
+            "camadmin/build/outputs/apk/release/camadmin-release.apk|dev.shizzi.camadmin|0.3.4-relay18-test|9" \
             "cammonitor/build/outputs/apk/release/cammonitor-release.apk|dev.shizzi.cammonitor|0.1.1-relay18-test|2" \
             "admin/build/outputs/apk/release/admin-release.apk|dev.shizzi.admin|0.3.0-universal|15" \
             "accounts/build/outputs/apk/release/accounts-release.apk|dev.shizzi.accounts|0.1.1|2"; do
@@ -110,9 +110,9 @@ jobs:
       - name: Package signed test candidates without publishing a release
         run: |
           mkdir -p shizzicam-18-test
-          cp app/build/outputs/apk/release/app-release.apk shizzicam-18-test/ShizziCam-HOTSPOT-0.4.3.5.18-test.apk
+          cp app/build/outputs/apk/release/app-release.apk shizzicam-18-test/ShizziCam-HOTSPOT-0.4.3.5.18.1-test.apk
           cp conso/build/outputs/apk/release/conso-release.apk shizzicam-18-test/Shizzi-PlusCam-0.3.5-test.apk
-          cp camadmin/build/outputs/apk/release/camadmin-release.apk shizzicam-18-test/ShizziCam-Visionneuse-0.3.3-test.apk
+          cp camadmin/build/outputs/apk/release/camadmin-release.apk shizzicam-18-test/ShizziCam-Visionneuse-0.3.4-test.apk
           cp cammonitor/build/outputs/apk/release/cammonitor-release.apk shizzicam-18-test/ShizziCam-Debit-0.1.1-test.apk
           cp accounts/build/outputs/apk/release/accounts-release.apk shizzicam-18-test/Shizzi-Comptes-0.1.1-test.apk
           cp shizzicam18-verification.json shizzicam-18-test/
@@ -122,7 +122,7 @@ jobs:
           sha256sum *.apk > SHA256SUMS.txt
       - uses: actions/upload-artifact@v5
         with:
-          name: ShizziCam-0.4.3.5.18-SIGNED-TEST-TEST-APKS-NOT-FOR-CLIENTS
+          name: ShizziCam-0.4.3.5.18.1-SIGNED-TEST-APKS
           path: shizzicam-18-test/
           retention-days: 30
           if-no-files-found: error

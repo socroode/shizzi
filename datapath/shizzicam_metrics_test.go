@@ -51,3 +51,21 @@ func TestCamTelemetryNeverReportsLinkSpeedFromTraffic(t *testing.T) {
 		t.Fatalf("expected measured transport only: %+v", items)
 	}
 }
+func TestCamInterphoneReceiptTimestampTracksOnlyAcceptedIncomingTalk(t *testing.T) {
+	camMeters.Lock()
+	camMeters.records = map[string]*camMeterEntry{}
+	camMeters.Unlock()
+	now := time.Unix(30_000, 0)
+	camMeasure("receipt-camera", camAudioIn, 1000, now)
+	items := camMetricsSnapshot(now)
+	if len(items) != 1 || items[0].IntercomAcceptedRouterUs != 0 {
+		t.Fatalf("ordinary microphone audio must not confirm interphone: %+v", items)
+	}
+	accepted := now.Add(time.Millisecond)
+	camMeasure("receipt-camera", camIntercomIn, 1000, accepted)
+	camMeasure("receipt-camera", camIntercomOut, 1000, now.Add(2*time.Millisecond))
+	items = camMetricsSnapshot(now.Add(time.Second))
+	if items[0].IntercomAcceptedRouterUs != accepted.UnixMicro() {
+		t.Fatalf("expected timestamp of incoming talk, not last unrelated traffic: %+v", items)
+	}
+}

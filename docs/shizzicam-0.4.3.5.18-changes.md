@@ -1,4 +1,4 @@
-# ShizziCam 0.4.3.5.18-test — modifications
+# ShizziCam 0.4.3.5.18.1-test — modifications
 
 Base : `feat/shizzicam-0.4.3.5.17-stream-audio-monitor`, commit `f4549ca970ce3e8cb827880e80b1ae223d113b99`.
 
@@ -18,3 +18,13 @@ Base : `feat/shizzicam-0.4.3.5.17-stream-audio-monitor`, commit `f4549ca970ce3e8
 Les essais sur appareils réels restent nécessaires : son audible, compatibilité des codecs par téléphone, neuf à dix clients Wi-Fi, tenue thermique, 2,4/5 GHz, latence nominale au plus 300 ms, synchronisation au plus 100 ms et surveillance de 1 heure/24 heures. Une construction réussie et une endurance virtuelle ne constituent pas ces validations.
 
 Les APK de livraison doivent porter le certificat permanent attendu, dont l’empreinte SHA-256 est `FADFC5E87FA60351F7DCB75D34F1AB91110824333CD1097A38B3C703F7AF3DB7`. Le rapport JSON joint indique les versions et empreintes des fichiers réellement construits. Les variantes debug locales ne sont pas des mises à jour signées avec ce certificat.
+
+## Correctif interphone 0.4.3.5.18.1-test
+
+- Visionneuse 0.3.4-relay18-test : un appui sur « Parler » maintient la capture jusqu’à « Couper mon micro ». La permission Android accordée reprend la demande en cours, sauf si elle a été annulée.
+- Bouton et texte d’état gris/orange/vert/rouge. L’état rouge persiste après un échec ; l’état vert exige une confirmation récente du relais et ne signifie pas à lui seul que le son est audible.
+- Arrêt, changement de caméra et nouvelle conversation protégés contre les retours tardifs d’un ancien traitement. Les commandes du micro caméra sont explicites et distinctes de celles du micro Visionneuse.
+- Les deux boutons de chaque rangée de la barre interphone partagent la largeur disponible.
+- Le routeur publie la date du dernier paquet interphone montant accepté. La Visionneuse conserve un mode de confirmation compatible avec les routeurs v3 précédents, sans réutiliser le trafic d’une conversation antérieure.
+- HOTSPOT : code Android 49 ; Visionneuse : code Android 9. Les autres annexes conservent leurs versions. La Visionneuse corrigée est intégrée au téléchargement local du HOTSPOT.
+- Des tests logiciels couvrent les transitions, permissions, confirmations, temporisations et changements de conversation ; le son et les couleurs sur appareils réels restent à valider.

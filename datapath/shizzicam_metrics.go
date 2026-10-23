@@ -28,8 +28,9 @@ type camMeterBucket struct {
 	packets [camMetricKinds]uint32
 }
 type camMeterEntry struct {
-	last    time.Time
-	buckets [5]camMeterBucket
+	last          time.Time
+	buckets       [5]camMeterBucket
+	lastDirection [camMetricKinds]time.Time
 }
 
 var camMeters = struct {
@@ -58,6 +59,7 @@ func camMeasure(account string, direction camTrafficDirection, bytes int, at tim
 		camMeters.records[account] = entry
 	}
 	entry.last = at
+	entry.lastDirection[direction] = at
 	bucket := &entry.buckets[int(second%int64(len(entry.buckets)))]
 	if bucket.second != second {
 		*bucket = camMeterBucket{second: second}
@@ -67,35 +69,36 @@ func camMeasure(account string, direction camTrafficDirection, bytes int, at tim
 }
 
 type camMetricItem struct {
-	Account                string   `json:"account"`
-	Battery                int      `json:"battery"`
-	Width                  int      `json:"width"`
-	Height                 int      `json:"height"`
-	Quality                string   `json:"quality"`
-	VideoCodec             string   `json:"videoCodec"`
-	AudioCodec             string   `json:"audioCodec"`
-	CapturedFPS            *float64 `json:"capturedFps"`
-	EncodedFPS             *float64 `json:"encodedFps"`
-	RenderedFPS            *float64 `json:"renderedFps"`
-	LatencyMillis          *float64 `json:"latencyMillis"`
-	ClockUncertaintyMillis *float64 `json:"clockUncertaintyMillis"`
-	Connected              bool     `json:"connected"`
-	VideoDrops             uint64   `json:"videoDrops"`
-	AudioDrops             uint64   `json:"audioDrops"`
-	Interruptions          uint64   `json:"interruptions"`
-	AudioState             string   `json:"audioState"`
-	AudioPlayedSequence    uint64   `json:"audioPlayedSequence"`
-	AudioPlaybackRouterUs  int64    `json:"audioPlaybackRouterUs"`
-	AudioPlaybackVerified  bool     `json:"audioPlaybackVerified"`
-	VideoInMbps            float64  `json:"videoInMbps"`
-	VideoOutMbps           float64  `json:"videoOutMbps"`
-	AudioInKbps            float64  `json:"audioInKbps"`
-	AudioOutKbps           float64  `json:"audioOutKbps"`
-	IntercomInKbps         float64  `json:"intercomInKbps"`
-	IntercomOutKbps        float64  `json:"intercomOutKbps"`
-	VideoInFPS             float64  `json:"videoInFps"`
-	VideoOutFPS            float64  `json:"videoOutFps"`
-	AgeMillis              int64    `json:"ageMillis"`
+	Account                  string   `json:"account"`
+	Battery                  int      `json:"battery"`
+	Width                    int      `json:"width"`
+	Height                   int      `json:"height"`
+	Quality                  string   `json:"quality"`
+	VideoCodec               string   `json:"videoCodec"`
+	AudioCodec               string   `json:"audioCodec"`
+	CapturedFPS              *float64 `json:"capturedFps"`
+	EncodedFPS               *float64 `json:"encodedFps"`
+	RenderedFPS              *float64 `json:"renderedFps"`
+	LatencyMillis            *float64 `json:"latencyMillis"`
+	ClockUncertaintyMillis   *float64 `json:"clockUncertaintyMillis"`
+	Connected                bool     `json:"connected"`
+	VideoDrops               uint64   `json:"videoDrops"`
+	AudioDrops               uint64   `json:"audioDrops"`
+	Interruptions            uint64   `json:"interruptions"`
+	AudioState               string   `json:"audioState"`
+	AudioPlayedSequence      uint64   `json:"audioPlayedSequence"`
+	AudioPlaybackRouterUs    int64    `json:"audioPlaybackRouterUs"`
+	AudioPlaybackVerified    bool     `json:"audioPlaybackVerified"`
+	VideoInMbps              float64  `json:"videoInMbps"`
+	VideoOutMbps             float64  `json:"videoOutMbps"`
+	AudioInKbps              float64  `json:"audioInKbps"`
+	AudioOutKbps             float64  `json:"audioOutKbps"`
+	IntercomInKbps           float64  `json:"intercomInKbps"`
+	IntercomOutKbps          float64  `json:"intercomOutKbps"`
+	IntercomAcceptedRouterUs int64    `json:"intercomAcceptedRouterUs"`
+	VideoInFPS               float64  `json:"videoInFps"`
+	VideoOutFPS              float64  `json:"videoOutFps"`
+	AgeMillis                int64    `json:"ageMillis"`
 }
 
 func camMetricsSnapshot(now time.Time) []camMetricItem {
@@ -120,20 +123,27 @@ func camMetricsSnapshot(now time.Time) []camMetricItem {
 			}
 		}
 		result = append(result, camMetricItem{
-			Account:         account,
-			VideoInMbps:     float64(bytes[camVideoIn]) * 8 / 2_000_000,
-			VideoOutMbps:    float64(bytes[camVideoOut]) * 8 / 2_000_000,
-			AudioInKbps:     float64(bytes[camAudioIn]) * 8 / 2000,
-			AudioOutKbps:    float64(bytes[camAudioOut]) * 8 / 2000,
-			IntercomInKbps:  float64(bytes[camIntercomIn]) * 8 / 2000,
-			IntercomOutKbps: float64(bytes[camIntercomOut]) * 8 / 2000,
-			VideoInFPS:      float64(packets[camVideoIn]) / 2,
-			VideoOutFPS:     float64(packets[camVideoOut]) / 2,
-			AgeMillis:       now.Sub(entry.last).Milliseconds(),
+			Account:                  account,
+			VideoInMbps:              float64(bytes[camVideoIn]) * 8 / 2_000_000,
+			VideoOutMbps:             float64(bytes[camVideoOut]) * 8 / 2_000_000,
+			AudioInKbps:              float64(bytes[camAudioIn]) * 8 / 2000,
+			AudioOutKbps:             float64(bytes[camAudioOut]) * 8 / 2000,
+			IntercomInKbps:           float64(bytes[camIntercomIn]) * 8 / 2000,
+			IntercomOutKbps:          float64(bytes[camIntercomOut]) * 8 / 2000,
+			IntercomAcceptedRouterUs: camDirectionMicroseconds(entry.lastDirection[camIntercomIn]),
+			VideoInFPS:               float64(packets[camVideoIn]) / 2,
+			VideoOutFPS:              float64(packets[camVideoOut]) / 2,
+			AgeMillis:                now.Sub(entry.last).Milliseconds(),
 		})
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Account < result[j].Account })
 	return camEnrichMetrics(result, now)
+}
+func camDirectionMicroseconds(at time.Time) int64 {
+	if at.IsZero() {
+		return 0
+	}
+	return at.UnixMicro()
 }
 func (m *TrafficManager) serveCameraMetrics(conn net.Conn, req *http.Request, clientIP string) bool {
 	if req.URL.Path != "/api/v1/cam/metrics" {

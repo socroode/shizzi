@@ -10,8 +10,8 @@ android {
         applicationId = "dev.shizzi.camadmin"
         minSdk = 30
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.3.3-relay18-test"
+        versionCode = 9
+        versionName = "0.3.4-relay18-test"
     }
     sourceSets.getByName("main").java.srcDir("../admin/src/main/java")
     val properties = Properties().apply {

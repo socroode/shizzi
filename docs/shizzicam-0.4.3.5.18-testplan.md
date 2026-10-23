@@ -1,4 +1,4 @@
-# ShizziCam 0.4.3.5.18-test — validation matérielle
+# ShizziCam 0.4.3.5.18.1-test — validation matérielle
 
 Base : feat/shizzicam-0.4.3.5.17-stream-audio-monitor, commit f4549ca970ce3e8cb827880e80b1ae223d113b99.
 
@@ -16,7 +16,7 @@ Tester successivement 1, 2, 4, 6 et 8 caméras. Vérifier la capacité d’accue
 
 ## Audio et commandes
 
-Vérifier physiquement la présence de son dans les deux sens, les permissions et les volumes Android, le microphone coupé, l’écoute coupée et le retour après interruption. Vérifier les états gris/orange/vert/rouge et l’absence de confirmation de lecture provenant d’une conversation antérieure. Déclencher et arrêter la sirène ; vérifier la limite de dix secondes et la protection contre les répétitions.
+Appuyer une seule fois sur « Parler », relâcher le bouton et vérifier que le micro reste en transmission. Appuyer sur « Couper mon micro » et vérifier l’arrêt. Tester la permission accordée/refusée, une annulation pendant la demande de permission, un changement de caméra et une reprise immédiate après arrêt. Vérifier physiquement la présence de son dans les deux sens, les permissions et les volumes Android, le microphone coupé, l’écoute coupée et le retour après interruption. Vérifier les états gris/orange/vert/rouge et l’absence de confirmation de lecture provenant d’une conversation antérieure. Déclencher et arrêter la sirène ; vérifier la limite de dix secondes et la protection contre les répétitions.
 
 ## Latence et synchronisation
 

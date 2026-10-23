@@ -21,9 +21,9 @@ def main():
  aapt=tools/"aapt2";signer=tools/"apksigner"
  permanent="FADFC5E87FA60351F7DCB75D34F1AB91110824333CD1097A38B3C703F7AF3DB7"
  rows=[
-  ("app","dev.shizzi","0.4.3.5.18-test",48,None),
+  ("app","dev.shizzi","0.4.3.5.18.1-test",49,None),
   ("conso","dev.shizzi.conso","0.3.5-relay18-test",25,"Shizzi-Plus.apk"),
-  ("camadmin","dev.shizzi.camadmin","0.3.3-relay18-test",8,"ShizziCam-Admin.apk"),
+  ("camadmin","dev.shizzi.camadmin","0.3.4-relay18-test",9,"ShizziCam-Admin.apk"),
   ("cammonitor","dev.shizzi.cammonitor","0.1.1-relay18-test",2,"ShizziCam-Debit.apk"),
   ("admin","dev.shizzi.admin","0.3.0-universal",15,"Shizzi-Admin.apk"),
   ("accounts","dev.shizzi.accounts","0.1.1",2,"Shizzi-Comptes.apk")]
