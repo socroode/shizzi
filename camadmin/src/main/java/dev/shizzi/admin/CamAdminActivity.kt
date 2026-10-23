@@ -89,7 +89,7 @@ class CamAdminActivity : Activity() {
             setPadding(18,20,18,24)
         }
         val content=ScrollView(this).apply {
-            fillViewport=true
+            isFillViewport=true
             addView(root)
         }
         val shell=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL}
