@@ -1,0 +1,945 @@
+package dev.shizzi
+
+import android.content.Context
+import android.content.SharedPreferences
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONArray
+import org.json.JSONObject
+import java.security.SecureRandom
+
+internal const val VOUCHER_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+internal fun generateVoucherCode(random: SecureRandom): String =
+    buildString(10) {
+        repeat(10) {
+            append(VOUCHER_ALPHABET[random.nextInt(VOUCHER_ALPHABET.length)])
+        }
+    }
+
+class CybercafeStore internal constructor(private val preferences: SharedPreferences) {
+
+    constructor(context: Context) : this(context.getSharedPreferences("shizzi_cybercafe_v1", Context.MODE_PRIVATE))
+
+    private val mutableState = MutableStateFlow(
+        decodeCybercafeState(preferences.getString(KEY_STATE, null)),
+    )
+
+    val state: StateFlow<CybercafeState> = mutableState.asStateFlow()
+
+    private val mutablePolicyRevision = MutableStateFlow(0L)
+
+    /**
+     * Bumped by every change that affects what the datapath must enforce
+     * (accounts, PINs, recharges, suspensions, offers...). Consumption alone
+     * does NOT bump it: the datapath already counts consumption live, so the
+     * policy is not re-pushed on every traffic tick.
+     */
+    val policyRevision: StateFlow<Long> = mutablePolicyRevision.asStateFlow()
+
+    private var usageCheckpoint = preferences.getString("usage_checkpoint", "{}").orEmpty()
+    private var usageDirty = false
+    private var lastUsageFlushMillis = 0L
+
+    init {
+        val current = mutableState.value
+        val upgraded = current.accounts.mapValues { (_, account) ->
+            if (account.pinKdfIterations == 0 && account.pinHash.matches(Regex("[0-9a-fA-F]{64}"))) {
+                account.copy(pinHash = CybercafeSecurity.stretchVerifier(account.pinSalt, account.pinHash),
+                    pinKdfIterations = CybercafeSecurity.PIN_KDF_ITERATIONS)
+            } else account
+        }
+        val admin = current.remoteAdmin
+        val upgradedAdmin = if (admin.passwordKdfIterations == 0 && admin.passwordHash.matches(Regex("[0-9a-fA-F]{64}"))) {
+            admin.copy(passwordHash = CybercafeSecurity.stretchVerifier(admin.passwordSalt, admin.passwordHash),
+                passwordKdfIterations = CybercafeSecurity.PIN_KDF_ITERATIONS)
+        } else admin
+        if (upgraded != current.accounts || upgradedAdmin != admin) {
+            val next = current.copy(accounts = upgraded, remoteAdmin = upgradedAdmin)
+            check(preferences.edit().putString(KEY_STATE, encodeCybercafeState(next)).commit()) {
+                "Migration des comptes impossible."
+            }
+            mutableState.value = next
+        }
+    }
+
+    @Synchronized
+    fun createAccount(numberRaw: String, pin: String, name: String, nowMillis: Long): RuleOutcome {
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        if (number.isBlank()) return RuleOutcome(state.value, false, "Numéro de compte invalide.")
+        if (pin.length < 4) return RuleOutcome(state.value, false, "Le code doit contenir au moins 4 caractères.")
+        if (state.value.accounts.containsKey(number)) {
+            return RuleOutcome(state.value, false, "Ce compte existe déjà.")
+        }
+
+        val salt = CybercafeSecurity.newSalt()
+        val account = PrepaidAccount(
+            number = number,
+            name = name.trim(),
+            pinSalt = salt,
+            pinHash = CybercafeSecurity.hashPin(salt, pin, CybercafeSecurity.PIN_KDF_ITERATIONS),
+            pinKdfIterations = CybercafeSecurity.PIN_KDF_ITERATIONS,
+            createdAtMillis = nowMillis,
+        )
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(accounts = state.value.accounts + (number to account)),
+                success = true,
+                message = "Compte créé.",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun resetPin(numberRaw: String, newPin: String): RuleOutcome {
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        val account = state.value.accounts[number]
+            ?: return RuleOutcome(state.value, false, "Compte introuvable.")
+        if (newPin.length < 4) {
+            return RuleOutcome(state.value, false, "Le code doit contenir au moins 4 caractères.")
+        }
+
+        val salt = CybercafeSecurity.newSalt()
+        val updated = account.copy(
+            pinSalt = salt,
+            pinHash = CybercafeSecurity.hashPin(salt, newPin, CybercafeSecurity.PIN_KDF_ITERATIONS),
+            pinKdfIterations = CybercafeSecurity.PIN_KDF_ITERATIONS,
+        )
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(accounts = state.value.accounts + (number to updated), cameras = state.value.cameras - number),
+                success = true,
+                message = "Code du compte modifié. Réassociez sa caméra si nécessaire.",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun enrollCamera(numberRaw: String, pin: String, macRaw: String): RuleOutcome {
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        val account = state.value.accounts[number]
+        val mac = macRaw.lowercase()
+        if (account == null || !account.enabled || !CybercafeSecurity.verifyPin(account, pin)) {
+            return RuleOutcome(state.value, false, "Compte ou PIN incorrect.")
+        }
+        if (!mac.matches(Regex("[0-9a-f]{2}(:[0-9a-f]{2}){5}")) || mac == "00:00:00:00:00:00") {
+            return RuleOutcome(state.value, false, "Caméra non identifiée.")
+        }
+        if (state.value.cameras.values.any { it.mac == mac && it.accountNumber != number }) {
+            return RuleOutcome(state.value, false, "Cette caméra possède déjà un compte.")
+        }
+        val profile = CameraProfile(number, mac, java.util.UUID.randomUUID().toString())
+        return commit(RuleOutcome(state.value.copy(cameras = state.value.cameras + (number to profile)),
+            true, "Caméra associée au compte. Son IP peut changer."))
+    }
+
+    @Synchronized
+    fun removeCamera(numberRaw: String): RuleOutcome {
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        return commit(RuleOutcome(state.value.copy(cameras = state.value.cameras - number), true, "Association de la caméra supprimée."))
+    }
+
+    @Synchronized
+    fun setAccountEnabled(numberRaw: String, enabled: Boolean): RuleOutcome {
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        val account = state.value.accounts[number]
+            ?: return RuleOutcome(state.value, false, "Compte introuvable.")
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(
+                    accounts = state.value.accounts + (number to account.copy(enabled = enabled)),
+                ),
+                success = true,
+                message = if (enabled) "Compte activé." else "Compte suspendu.",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun deleteAccount(numberRaw: String): RuleOutcome {
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        if (!state.value.accounts.containsKey(number)) {
+            return RuleOutcome(state.value, false, "Compte introuvable.")
+        }
+        val remainingDevices = state.value.devices.filterValues { it.accountNumber != number }
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(
+                    accounts = state.value.accounts - number,
+                    cameras = state.value.cameras - number,
+                    devices = remainingDevices,
+                ),
+                success = true,
+                message = "Compte supprimé.",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun generateVouchers(offerId: String, count: Int, nowMillis: Long): List<Voucher> {
+        val current = state.value
+        val offer = current.offers[offerId] ?: return emptyList()
+
+        val created = buildList<Voucher> {
+            repeat(count.coerceIn(1, 100)) {
+                var code: String
+                do {
+                    code = newVoucherCode()
+                } while (
+                    current.vouchers.containsKey(code) ||
+                        current.mediaVouchers.containsKey(code) ||
+                        any { it.code == code }
+                )
+                add(
+                    Voucher(
+                        code = code,
+                        offerId = offerId,
+                        createdAtMillis = nowMillis,
+                        snapshotVersion = 1,
+                        snapshotName = offer.name,
+                        snapshotKind = offer.kind,
+                        snapshotDownloadBps = offer.downloadBps,
+                        snapshotUploadBps = offer.uploadBps,
+                        snapshotQuotaBytes = offer.quotaBytes,
+                        snapshotDurationDays = offer.durationDays,
+                        snapshotPriceXpf = offer.priceXpf,
+                    ),
+                )
+            }
+        }
+
+        if (created.isNotEmpty()) {
+            val merged = current.vouchers + created.associateBy(Voucher::code)
+            persist(current.copy(vouchers = merged))
+        }
+        return created
+    }
+
+    @Synchronized
+    fun setVoucherEnabled(codeRaw: String, enabled: Boolean): RuleOutcome {
+        val code = codeRaw.trim().uppercase()
+        val voucher = state.value.vouchers[code]
+            ?: return RuleOutcome(state.value, false, "Voucher introuvable.")
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(
+                    vouchers = state.value.vouchers + (code to voucher.copy(enabled = enabled)),
+                ),
+                success = true,
+                message = if (enabled) "Voucher activé." else "Voucher désactivé.",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun redeemVoucherForAccount(
+        numberRaw: String,
+        codeRaw: String,
+        nowMillis: Long,
+    ): RuleOutcome {
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        return commit(CybercafeRules.redeemAnyVoucher(state.value, number, codeRaw, nowMillis))
+    }
+
+    @Synchronized
+    fun redeemVoucherClaim(id: String, number: String, code: String, nowMillis: Long): RuleOutcome {
+        if (id.isBlank()) return RuleOutcome(state.value, false, "Demande de recharge sans identité.")
+        val receipts = runCatching { JSONArray(preferences.getString("claim_receipts", "[]")) }.getOrElse { JSONArray() }
+        for (i in 0 until receipts.length()) {
+            val old = receipts.optJSONObject(i) ?: continue
+            if (old.optString("id") == id) {
+                if (old.optString("account") != number || old.optString("code") != code) {
+                    return RuleOutcome(state.value, false, "Identité de recharge incohérente.")
+                }
+                return RuleOutcome(state.value, old.optBoolean("success"), old.optString("message"))
+            }
+        }
+        val result = CybercafeRules.redeemAnyVoucher(state.value, number, code, nowMillis)
+        val next = JSONArray()
+        for (i in maxOf(0, receipts.length() - 1023) until receipts.length()) next.put(receipts.get(i))
+        next.put(JSONObject().put("id", id).put("account", number).put("code", code)
+            .put("success", result.success).put("message", result.message))
+        check(preferences.edit().putString(KEY_STATE, encodeCybercafeState(result.state))
+            .putString("claim_receipts", next.toString()).putString("usage_checkpoint", usageCheckpoint).commit()) { "Sauvegarde de la recharge impossible." }
+        mutableState.value = result.state
+        if (result.success) mutablePolicyRevision.value += 1
+        usageDirty = false
+        return result
+    }
+
+    @Synchronized
+    fun redeemVoucher(
+        numberRaw: String,
+        pin: String,
+        codeRaw: String,
+        nowMillis: Long,
+    ): RuleOutcome {
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        val account = state.value.accounts[number]
+            ?: return RuleOutcome(state.value, false, "Compte introuvable.")
+        if (!CybercafeSecurity.verifyPin(account, pin)) {
+            return RuleOutcome(state.value, false, "Code du compte incorrect.")
+        }
+        return commit(CybercafeRules.redeemAnyVoucher(state.value, number, codeRaw, nowMillis))
+    }
+
+    @Synchronized
+    fun authenticate(numberRaw: String, pin: String): PrepaidAccount? {
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        val account = state.value.accounts[number] ?: return null
+        if (!account.enabled) return null
+        return account.takeIf { CybercafeSecurity.verifyPin(it, pin) }
+    }
+
+    @Synchronized
+    fun bindDevice(
+        numberRaw: String,
+        pin: String,
+        deviceKey: String,
+        ip: String,
+        mac: String,
+        nowMillis: Long,
+    ): RuleOutcome {
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        val account = state.value.accounts[number]
+            ?: return RuleOutcome(state.value, false, "Compte introuvable.")
+        if (!CybercafeSecurity.verifyPin(account, pin)) {
+            return RuleOutcome(state.value, false, "Code du compte incorrect.")
+        }
+        return commit(
+            CybercafeRules.bindDevice(
+                state.value,
+                number,
+                deviceKey,
+                ip,
+                mac,
+                nowMillis,
+            ),
+        )
+    }
+
+    @Synchronized
+    fun unbindDevice(deviceKey: String) {
+        persist(CybercafeRules.unbindDevice(state.value, deviceKey))
+    }
+
+    @Synchronized
+    fun recordTraffic(
+        deviceKey: String,
+        uploadBytes: Long,
+        downloadBytes: Long,
+        nowMillis: Long,
+    ) {
+        persist(
+            CybercafeRules.recordTraffic(
+                state.value,
+                deviceKey,
+                uploadBytes,
+                downloadBytes,
+                nowMillis,
+            ),
+        )
+    }
+
+
+    @Synchronized
+    fun renameAccount(numberRaw: String, name: String): RuleOutcome {
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        val account = state.value.accounts[number]
+            ?: return RuleOutcome(state.value, false, "Compte introuvable.")
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(
+                    accounts = state.value.accounts + (number to account.copy(name = name.trim())),
+                ),
+                success = true,
+                message = "Compte modifié.",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun upsertOffer(offer: Offer): RuleOutcome {
+        val id = offer.id.trim().lowercase()
+        if (id.isBlank() || offer.name.isBlank()) {
+            return RuleOutcome(state.value, false, "Nom d'offre invalide.")
+        }
+        if (offer.downloadBps < 0L || offer.uploadBps < 0L || offer.quotaBytes < 0L) {
+            return RuleOutcome(state.value, false, "Valeurs d'offre invalides.")
+        }
+        if (offer.durationDays <= 0 || offer.priceXpf < 0) {
+            return RuleOutcome(state.value, false, "Durée ou prix invalide.")
+        }
+        val normalized = offer.copy(
+            id = id,
+            name = offer.name.trim(),
+            quotaBytes = if (offer.kind == VoucherKind.UNLIMITED) 0L else offer.quotaBytes,
+        )
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(offers = state.value.offers + (id to normalized)),
+                success = true,
+                message = "Offre enregistrée.",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun deleteOffer(offerIdRaw: String): RuleOutcome {
+        val offerId = offerIdRaw.trim().lowercase()
+        if (!state.value.offers.containsKey(offerId)) {
+            return RuleOutcome(state.value, false, "Offre introuvable.")
+        }
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(offers = state.value.offers - offerId),
+                success = true,
+                message = "Offre supprimée.",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun upsertMediaOffer(offer: MediaOffer): RuleOutcome {
+        val id = offer.id.trim().lowercase()
+        if (id.isBlank() || offer.name.isBlank()) {
+            return RuleOutcome(state.value, false, "Nom d'offre Media invalide.")
+        }
+        if (offer.durationMinutes <= 0L || offer.durationMinutes > MAX_MEDIA_DURATION_MINUTES) {
+            return RuleOutcome(state.value, false, "Durée Media invalide.")
+        }
+        if (offer.priceXpf < 0) {
+            return RuleOutcome(state.value, false, "Prix Media invalide.")
+        }
+        val normalized = offer.copy(
+            id = id,
+            name = offer.name.trim(),
+        )
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(
+                    mediaOffers = state.value.mediaOffers + (id to normalized),
+                ),
+                success = true,
+                message = "Offre Media enregistrée.",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun deleteMediaOffer(offerIdRaw: String): RuleOutcome {
+        val offerId = offerIdRaw.trim().lowercase()
+        if (!state.value.mediaOffers.containsKey(offerId)) {
+            return RuleOutcome(state.value, false, "Offre Media introuvable.")
+        }
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(mediaOffers = state.value.mediaOffers - offerId),
+                success = true,
+                message = "Offre Media supprimée.",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun generateMediaVouchers(
+        offerId: String,
+        count: Int,
+        nowMillis: Long,
+    ): List<MediaVoucher> {
+        val current = state.value
+        val offer = current.mediaOffers[offerId] ?: return emptyList()
+
+        val created = buildList<MediaVoucher> {
+            repeat(count.coerceIn(1, 100)) {
+                var code: String
+                do {
+                    code = newVoucherCode()
+                } while (
+                    current.vouchers.containsKey(code) ||
+                        current.mediaVouchers.containsKey(code) ||
+                        any { it.code == code }
+                )
+                add(
+                    MediaVoucher(
+                        code = code,
+                        offerId = offerId,
+                        createdAtMillis = nowMillis,
+                        snapshotVersion = 1,
+                        snapshotName = offer.name,
+                        snapshotDurationMinutes = offer.durationMinutes,
+                        snapshotPriceXpf = offer.priceXpf,
+                    ),
+                )
+            }
+        }
+
+        if (created.isNotEmpty()) {
+            persist(
+                current.copy(
+                    mediaVouchers = current.mediaVouchers +
+                        created.associateBy(MediaVoucher::code),
+                ),
+            )
+        }
+        return created
+    }
+
+    @Synchronized
+    fun setMediaVoucherEnabled(codeRaw: String, enabled: Boolean): RuleOutcome {
+        val code = codeRaw.trim().uppercase()
+        val voucher = state.value.mediaVouchers[code]
+            ?: return RuleOutcome(state.value, false, "Voucher Media introuvable.")
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(
+                    mediaVouchers = state.value.mediaVouchers +
+                        (code to voucher.copy(enabled = enabled)),
+                ),
+                success = true,
+                message = if (enabled) "Voucher Media activé." else "Voucher Media désactivé.",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun setRemoteAdmin(
+        enabled: Boolean,
+        usernameRaw: String,
+        passwordRaw: String,
+    ): RuleOutcome {
+        val current = state.value.remoteAdmin
+        val username = usernameRaw.trim().take(64)
+        if (username.length < 3) {
+            return RuleOutcome(state.value, false, "Identifiant admin trop court.")
+        }
+        if (enabled && current.passwordHash.isBlank() && passwordRaw.isBlank()) {
+            return RuleOutcome(state.value, false, "Définissez d'abord un mot de passe admin.")
+        }
+        if (passwordRaw.isNotBlank() && passwordRaw.length < 8) {
+            return RuleOutcome(state.value, false, "Le mot de passe admin doit contenir au moins 8 caractères.")
+        }
+
+        val updated = if (passwordRaw.isBlank()) {
+            current.copy(
+                enabled = enabled,
+                username = username,
+                downloadBps = 1_000_000L,
+                uploadBps = 1_000_000L,
+            )
+        } else {
+            val salt = CybercafeSecurity.newSalt()
+            current.copy(
+                enabled = enabled,
+                username = username,
+                passwordSalt = salt,
+                passwordHash = CybercafeSecurity.hashPin(salt, passwordRaw, CybercafeSecurity.PIN_KDF_ITERATIONS),
+                passwordKdfIterations = CybercafeSecurity.PIN_KDF_ITERATIONS,
+                downloadBps = 1_000_000L,
+                uploadBps = 1_000_000L,
+            )
+        }
+
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(remoteAdmin = updated),
+                success = true,
+                message = if (enabled) "Administration distante activée." else "Administration distante désactivée.",
+            ),
+        )
+    }
+
+    @Synchronized
+    fun setPortalCustomization(
+        titleRaw: String,
+        messageRaw: String,
+        htmlRaw: String,
+    ): RuleOutcome {
+        val defaults = PortalCustomization()
+        val portal = PortalCustomization(
+            title = titleRaw.trim().ifBlank { defaults.title }.take(80),
+            message = messageRaw.trim().ifBlank { defaults.message }.take(240),
+            html = htmlRaw.take(100_000),
+        )
+        return commit(
+            RuleOutcome(
+                state = state.value.copy(portal = portal),
+                success = true,
+                message = "Portail enregistré.",
+            ),
+        )
+    }
+
+
+    /**
+     * Applies consumption measured by the datapath to the shared account
+     * balance. [dataBytes] is what the datapath counted in Data mode; it is
+     * deducted as-is (the datapath decides Data vs Unlimited, not Android).
+     *
+     * Updates memory at once and disk at most every [USAGE_FLUSH_MILLIS]:
+     * writing the whole state to SharedPreferences every second is wasteful.
+     */
+    @Synchronized
+    fun newUsageLedger(): UsageLedger {
+        val saved = JSONObject(usageCheckpoint)
+        val counters = mutableListOf<LiveAccountUsage>()
+        saved.optJSONArray("usage")?.forEachObject { item ->
+            counters += LiveAccountUsage(item.getString("account"), item.getLong("up"), item.getLong("down"), item.getLong("data"))
+        }
+        return UsageLedger().apply { restore(saved.optLong("epoch"), counters) }
+    }
+
+    @Synchronized
+    fun absorbUsage(ledger: UsageLedger, epoch: Long, usage: List<LiveAccountUsage>): Boolean {
+        val (restarted, deltas) = ledger.absorb(epoch, usage)
+        deltas.forEach(::recordAccountUsage)
+        usageCheckpoint = JSONObject().put("epoch", ledger.epoch).put("usage", JSONArray().apply {
+            ledger.checkpoint().forEach { item -> put(JSONObject().put("account", item.accountNumber)
+                .put("up", item.upBytes).put("down", item.downBytes).put("data", item.dataBytes)) }
+        }).toString()
+        if (restarted) usageDirty = true
+        return restarted
+    }
+
+    @Synchronized
+    fun recordAccountUsage(delta: UsageDelta) {
+        val number = CybercafeRules.normalizeAccountNumber(delta.accountNumber)
+        val account = state.value.accounts[number] ?: return
+        val updated = account.copy(
+            totalUpBytes = account.totalUpBytes + delta.upBytes.coerceAtLeast(0L),
+            totalDownBytes = account.totalDownBytes + delta.downBytes.coerceAtLeast(0L),
+            dataBalanceBytes = (account.dataBalanceBytes - delta.dataBytes.coerceAtLeast(0L))
+                .coerceAtLeast(0L),
+        )
+        mutableState.value = state.value.copy(
+            accounts = state.value.accounts + (number to updated),
+        )
+        usageDirty = true
+    }
+
+    @Synchronized
+    fun flushUsage(nowMillis: Long, force: Boolean = false) {
+        if (!usageDirty) return
+        if (!force && nowMillis - lastUsageFlushMillis < USAGE_FLUSH_MILLIS) return
+        writeToDisk(state.value)
+        lastUsageFlushMillis = nowMillis
+    }
+
+    private fun commit(outcome: RuleOutcome): RuleOutcome {
+        if (outcome.success) persist(outcome.state)
+        return outcome
+    }
+
+    private fun persist(value: CybercafeState) {
+        writeToDisk(value)
+        mutableState.value = value
+        mutablePolicyRevision.value = mutablePolicyRevision.value + 1
+    }
+
+    private fun writeToDisk(value: CybercafeState) {
+        check(preferences.edit().putString(KEY_STATE, encodeCybercafeState(value)).putString("usage_checkpoint", usageCheckpoint).commit()) { "Sauvegarde des comptes impossible." }
+        usageDirty = false
+    }
+
+    private fun newVoucherCode(): String = generateVoucherCode(random)
+
+    private companion object {
+        const val KEY_STATE = "state"
+        private const val MAX_MEDIA_DURATION_MINUTES = 5_256_000L
+        const val USAGE_FLUSH_MILLIS = 15_000L
+        val random = SecureRandom()
+    }
+}
+
+internal fun encodeCybercafeState(state: CybercafeState): String =
+    JSONObject().apply {
+        put("schemaVersion", state.schemaVersion)
+        put("cameras", JSONArray().apply { state.cameras.values.forEach { camera ->
+            put(JSONObject().put("accountNumber", camera.accountNumber).put("mac", camera.mac).put("enrollmentId", camera.enrollmentId))
+        } })
+        put("portal", JSONObject().apply {
+            put("title", state.portal.title)
+            put("message", state.portal.message)
+            put("html", state.portal.html)
+        })
+        put("remoteAdmin", JSONObject().apply {
+            put("enabled", state.remoteAdmin.enabled)
+            put("username", state.remoteAdmin.username)
+            put("passwordSalt", state.remoteAdmin.passwordSalt)
+            put("passwordHash", state.remoteAdmin.passwordHash)
+            put("passwordKdfIterations", state.remoteAdmin.passwordKdfIterations)
+            put("downloadBps", state.remoteAdmin.downloadBps)
+            put("uploadBps", state.remoteAdmin.uploadBps)
+        })
+        put("offers", JSONArray().apply {
+            state.offers.values.sortedBy(Offer::id).forEach { offer ->
+                put(JSONObject().apply {
+                    put("id", offer.id)
+                    put("name", offer.name)
+                    put("kind", offer.kind.name)
+                    put("downloadBps", offer.downloadBps)
+                    put("uploadBps", offer.uploadBps)
+                    put("quotaBytes", offer.quotaBytes)
+                    put("durationDays", offer.durationDays)
+                    put("priceXpf", offer.priceXpf)
+                })
+            }
+        })
+        put("accounts", JSONArray().apply {
+            state.accounts.values.sortedBy(PrepaidAccount::number).forEach { account ->
+                put(JSONObject().apply {
+                    put("number", account.number)
+                    put("name", account.name)
+                    put("pinSalt", account.pinSalt)
+                    put("pinHash", account.pinHash)
+                    put("pinKdfIterations", account.pinKdfIterations)
+                    put("enabled", account.enabled)
+                    put("dataBalanceBytes", account.dataBalanceBytes)
+                    put("dataValidUntilMillis", account.dataValidUntilMillis)
+                    put("dataDownloadBps", account.dataDownloadBps)
+                    put("dataUploadBps", account.dataUploadBps)
+                    put("unlimitedUntilMillis", account.unlimitedUntilMillis)
+                    put("unlimitedDownloadBps", account.unlimitedDownloadBps)
+                    put("unlimitedUploadBps", account.unlimitedUploadBps)
+                    put("unlimitedPlanName", account.unlimitedPlanName)
+                    put("mediaUntilMillis", account.mediaUntilMillis)
+                    put("totalUpBytes", account.totalUpBytes)
+                    put("totalDownBytes", account.totalDownBytes)
+                    put("createdAtMillis", account.createdAtMillis)
+                })
+            }
+        })
+        put("vouchers", JSONArray().apply {
+            state.vouchers.values.sortedBy(Voucher::code).forEach { voucher ->
+                put(JSONObject().apply {
+                    put("code", voucher.code)
+                    put("offerId", voucher.offerId)
+                    put("createdAtMillis", voucher.createdAtMillis)
+                    put("enabled", voucher.enabled)
+                    put("redeemedByAccount", voucher.redeemedByAccount)
+                    put("redeemedAtMillis", voucher.redeemedAtMillis)
+                    put("snapshotVersion", voucher.snapshotVersion)
+                    put("snapshotName", voucher.snapshotName)
+                    put("snapshotKind", voucher.snapshotKind.name)
+                    put("snapshotDownloadBps", voucher.snapshotDownloadBps)
+                    put("snapshotUploadBps", voucher.snapshotUploadBps)
+                    put("snapshotQuotaBytes", voucher.snapshotQuotaBytes)
+                    put("snapshotDurationDays", voucher.snapshotDurationDays)
+                    put("snapshotPriceXpf", voucher.snapshotPriceXpf)
+                })
+            }
+        })
+        put("mediaOffers", JSONArray().apply {
+            state.mediaOffers.values.sortedBy(MediaOffer::id).forEach { offer ->
+                put(JSONObject().apply {
+                    put("id", offer.id)
+                    put("name", offer.name)
+                    put("durationMinutes", offer.durationMinutes)
+                    put("priceXpf", offer.priceXpf)
+                })
+            }
+        })
+        put("mediaVouchers", JSONArray().apply {
+            state.mediaVouchers.values.sortedBy(MediaVoucher::code).forEach { voucher ->
+                put(JSONObject().apply {
+                    put("code", voucher.code)
+                    put("offerId", voucher.offerId)
+                    put("createdAtMillis", voucher.createdAtMillis)
+                    put("enabled", voucher.enabled)
+                    put("redeemedByAccount", voucher.redeemedByAccount)
+                    put("redeemedAtMillis", voucher.redeemedAtMillis)
+                    put("snapshotVersion", voucher.snapshotVersion)
+                    put("snapshotName", voucher.snapshotName)
+                    put("snapshotDurationMinutes", voucher.snapshotDurationMinutes)
+                    put("snapshotPriceXpf", voucher.snapshotPriceXpf)
+                })
+            }
+        })
+        put("devices", JSONArray().apply {
+            state.devices.values.sortedBy(DeviceBinding::deviceKey).forEach { device ->
+                put(JSONObject().apply {
+                    put("deviceKey", device.deviceKey)
+                    put("accountNumber", device.accountNumber)
+                    put("ip", device.ip)
+                    put("mac", device.mac)
+                    put("lastSeenMillis", device.lastSeenMillis)
+                })
+            }
+        })
+    }.toString()
+
+internal fun decodeCybercafeState(raw: String?): CybercafeState {
+    val root = runCatching { JSONObject(raw.orEmpty()) }.getOrNull()
+        ?: return CybercafeState()
+
+    val offers = linkedMapOf<String, Offer>()
+    root.optJSONArray("offers")?.forEachObject { item ->
+        val id = item.optString("id")
+        if (id.isBlank()) return@forEachObject
+        val kind = runCatching { VoucherKind.valueOf(item.optString("kind")) }
+            .getOrDefault(VoucherKind.DATA)
+        offers[id] = Offer(
+            id = id,
+            name = item.optString("name"),
+            kind = kind,
+            downloadBps = item.optLong("downloadBps"),
+            uploadBps = item.optLong("uploadBps"),
+            quotaBytes = item.optLong("quotaBytes"),
+            durationDays = item.optInt("durationDays"),
+            priceXpf = item.optInt("priceXpf"),
+        )
+    }
+
+    val accounts = linkedMapOf<String, PrepaidAccount>()
+    root.optJSONArray("accounts")?.forEachObject { item ->
+        val number = CybercafeRules.normalizeAccountNumber(item.optString("number"))
+        if (number.isBlank()) return@forEachObject
+        accounts[number] = PrepaidAccount(
+            number = number,
+            name = item.optString("name"),
+            pinSalt = item.optString("pinSalt"),
+            pinHash = item.optString("pinHash"),
+            pinKdfIterations = item.optInt("pinKdfIterations", 0),
+            enabled = item.optBoolean("enabled", true),
+            dataBalanceBytes = item.optLong("dataBalanceBytes"),
+            dataValidUntilMillis = item.optLong("dataValidUntilMillis"),
+            dataDownloadBps = item.optLong("dataDownloadBps"),
+            dataUploadBps = item.optLong("dataUploadBps"),
+            unlimitedUntilMillis = item.optLong("unlimitedUntilMillis"),
+            unlimitedDownloadBps = item.optLong("unlimitedDownloadBps"),
+            unlimitedUploadBps = item.optLong("unlimitedUploadBps"),
+            unlimitedPlanName = item.optString("unlimitedPlanName"),
+            mediaUntilMillis = item.optLong("mediaUntilMillis"),
+            totalUpBytes = item.optLong("totalUpBytes"),
+            totalDownBytes = item.optLong("totalDownBytes"),
+            createdAtMillis = item.optLong("createdAtMillis"),
+        )
+    }
+
+    val vouchers = linkedMapOf<String, Voucher>()
+    root.optJSONArray("vouchers")?.forEachObject { item ->
+        val code = item.optString("code").trim().uppercase()
+        if (code.isBlank()) return@forEachObject
+        vouchers[code] = Voucher(
+            code = code,
+            offerId = item.optString("offerId"),
+            createdAtMillis = item.optLong("createdAtMillis"),
+            enabled = item.optBoolean("enabled", true),
+            redeemedByAccount = item.optString("redeemedByAccount"),
+            redeemedAtMillis = item.optLong("redeemedAtMillis"),
+            snapshotVersion = item.optInt("snapshotVersion", 0),
+            snapshotName = item.optString("snapshotName"),
+            snapshotKind = runCatching {
+                VoucherKind.valueOf(item.optString("snapshotKind", VoucherKind.DATA.name))
+            }.getOrDefault(VoucherKind.DATA),
+            snapshotDownloadBps = item.optLong("snapshotDownloadBps"),
+            snapshotUploadBps = item.optLong("snapshotUploadBps"),
+            snapshotQuotaBytes = item.optLong("snapshotQuotaBytes"),
+            snapshotDurationDays = item.optInt("snapshotDurationDays"),
+            snapshotPriceXpf = item.optInt("snapshotPriceXpf"),
+        )
+    }
+
+    val mediaOffers = linkedMapOf<String, MediaOffer>()
+    root.optJSONArray("mediaOffers")?.forEachObject { item ->
+        val id = item.optString("id").trim().lowercase()
+        if (id.isBlank()) return@forEachObject
+        mediaOffers[id] = MediaOffer(
+            id = id,
+            name = item.optString("name"),
+            durationMinutes = item.optLong("durationMinutes"),
+            priceXpf = item.optInt("priceXpf"),
+        )
+    }
+
+    val mediaVouchers = linkedMapOf<String, MediaVoucher>()
+    root.optJSONArray("mediaVouchers")?.forEachObject { item ->
+        val code = item.optString("code").trim().uppercase()
+        if (code.isBlank()) return@forEachObject
+        mediaVouchers[code] = MediaVoucher(
+            code = code,
+            offerId = item.optString("offerId"),
+            createdAtMillis = item.optLong("createdAtMillis"),
+            enabled = item.optBoolean("enabled", true),
+            redeemedByAccount = item.optString("redeemedByAccount"),
+            redeemedAtMillis = item.optLong("redeemedAtMillis"),
+            snapshotVersion = item.optInt("snapshotVersion", 1),
+            snapshotName = item.optString("snapshotName"),
+            snapshotDurationMinutes = item.optLong("snapshotDurationMinutes"),
+            snapshotPriceXpf = item.optInt("snapshotPriceXpf"),
+        )
+    }
+
+    val portalObject = root.optJSONObject("portal")
+    val portalDefaults = PortalCustomization()
+    val portal = PortalCustomization(
+        title = portalObject?.optString("title").orEmpty()
+            .ifBlank { root.optString("portalTitle") }
+            .ifBlank { portalDefaults.title }
+            .take(80),
+        message = portalObject?.optString("message").orEmpty()
+            .ifBlank { root.optString("portalMessage") }
+            .ifBlank { portalDefaults.message }
+            .take(240),
+        html = if (portalObject != null) {
+            portalObject.optString("html").take(100_000)
+        } else {
+            root.optString("portalHtml").take(100_000)
+        },
+    )
+
+    val remoteAdminObject = root.optJSONObject("remoteAdmin")
+    val remoteAdmin = if (remoteAdminObject == null) {
+        RemoteAdminConfig()
+    } else {
+        RemoteAdminConfig(
+            enabled = remoteAdminObject.optBoolean("enabled", false),
+            username = remoteAdminObject.optString("username", "admin").trim().ifBlank { "admin" }.take(64),
+            passwordSalt = remoteAdminObject.optString("passwordSalt"),
+            passwordHash = remoteAdminObject.optString("passwordHash"),
+            passwordKdfIterations = remoteAdminObject.optInt("passwordKdfIterations", 0),
+            downloadBps = remoteAdminObject.optLong("downloadBps", 1_000_000L).coerceAtLeast(1_000_000L),
+            uploadBps = remoteAdminObject.optLong("uploadBps", 1_000_000L).coerceAtLeast(1_000_000L),
+        )
+    }
+
+    val devices = linkedMapOf<String, DeviceBinding>()
+    root.optJSONArray("devices")?.forEachObject { item ->
+        val key = item.optString("deviceKey").trim().lowercase()
+        if (key.isBlank()) return@forEachObject
+        devices[key] = DeviceBinding(
+            deviceKey = key,
+            accountNumber = CybercafeRules.normalizeAccountNumber(item.optString("accountNumber")),
+            ip = item.optString("ip"),
+            mac = item.optString("mac").lowercase(),
+            lastSeenMillis = item.optLong("lastSeenMillis"),
+        )
+    }
+
+    val cameras = linkedMapOf<String, CameraProfile>()
+    root.optJSONArray("cameras")?.forEachObject { item ->
+        val number = CybercafeRules.normalizeAccountNumber(item.optString("accountNumber"))
+        val profile = CameraProfile(number, item.optString("mac").lowercase(), item.optString("enrollmentId"))
+        if (number in accounts && profile.enrollmentId.isNotBlank()) cameras[number] = profile
+    }
+
+    return CybercafeState(
+        cameras = cameras,
+        schemaVersion = 5,
+        offers = if (offers.isEmpty()) defaultOffers() else offers,
+        accounts = accounts,
+        vouchers = vouchers,
+        mediaOffers = mediaOffers,
+        mediaVouchers = mediaVouchers,
+        devices = devices,
+        portal = portal,
+        remoteAdmin = remoteAdmin,
+    )
+}
+
+private inline fun JSONArray.forEachObject(block: (JSONObject) -> Unit) {
+    for (index in 0 until length()) {
+        optJSONObject(index)?.let(block)
+    }
+}

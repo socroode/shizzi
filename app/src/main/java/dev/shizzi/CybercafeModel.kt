@@ -1,0 +1,495 @@
+package dev.shizzi
+
+import java.security.MessageDigest
+import java.security.SecureRandom
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.PBEKeySpec
+import kotlin.math.max
+
+private const val DAY_MILLIS = 86_400_000L
+private const val MINUTE_MILLIS = 60_000L
+private const val GB = 1_000_000_000L
+
+enum class VoucherKind {
+    DATA,
+    UNLIMITED,
+}
+
+data class Offer(
+    val id: String,
+    val name: String,
+    val kind: VoucherKind,
+    val downloadBps: Long,
+    val uploadBps: Long,
+    val quotaBytes: Long,
+    val durationDays: Int,
+    val priceXpf: Int,
+)
+
+data class MediaOffer(
+    val id: String,
+    val name: String,
+    val durationMinutes: Long,
+    val priceXpf: Int,
+)
+
+data class MediaVoucher(
+    val code: String,
+    val offerId: String,
+    val createdAtMillis: Long,
+    val enabled: Boolean = true,
+    val redeemedByAccount: String = "",
+    val redeemedAtMillis: Long = 0L,
+    val snapshotVersion: Int = 1,
+    val snapshotName: String = "",
+    val snapshotDurationMinutes: Long = 0L,
+    val snapshotPriceXpf: Int = 0,
+)
+
+data class PrepaidAccount(
+    val number: String,
+    val name: String,
+    val pinSalt: String,
+    val pinHash: String,
+    val enabled: Boolean = true,
+    val dataBalanceBytes: Long = 0L,
+    val dataValidUntilMillis: Long = 0L,
+    val dataDownloadBps: Long = 0L,
+    val dataUploadBps: Long = 0L,
+    val unlimitedUntilMillis: Long = 0L,
+    val unlimitedDownloadBps: Long = 0L,
+    val unlimitedUploadBps: Long = 0L,
+    val unlimitedPlanName: String = "",
+    val mediaUntilMillis: Long = 0L,
+    val totalUpBytes: Long = 0L,
+    val totalDownBytes: Long = 0L,
+    val createdAtMillis: Long = 0L,
+    val pinKdfIterations: Int = 0,
+) {
+    fun hasUnlimited(nowMillis: Long): Boolean =
+        enabled && unlimitedUntilMillis > nowMillis
+
+    fun hasData(nowMillis: Long): Boolean =
+        enabled &&
+            dataBalanceBytes > 0L &&
+            (dataValidUntilMillis <= 0L || nowMillis < dataValidUntilMillis)
+
+    fun hasInternet(nowMillis: Long): Boolean =
+        hasUnlimited(nowMillis) || hasData(nowMillis)
+
+    fun hasMedia(nowMillis: Long): Boolean =
+        enabled && mediaUntilMillis > nowMillis
+
+    fun currentDownloadBps(nowMillis: Long): Long = when {
+        hasUnlimited(nowMillis) -> unlimitedDownloadBps
+        hasData(nowMillis) -> dataDownloadBps
+        else -> 0L
+    }
+
+    fun currentUploadBps(nowMillis: Long): Long = when {
+        hasUnlimited(nowMillis) -> unlimitedUploadBps
+        hasData(nowMillis) -> dataUploadBps
+        else -> 0L
+    }
+}
+
+data class Voucher(
+    val code: String,
+    val offerId: String,
+    val createdAtMillis: Long,
+    val enabled: Boolean = true,
+    val redeemedByAccount: String = "",
+    val redeemedAtMillis: Long = 0L,
+    val snapshotVersion: Int = 0,
+    val snapshotName: String = "",
+    val snapshotKind: VoucherKind = VoucherKind.DATA,
+    val snapshotDownloadBps: Long = 0L,
+    val snapshotUploadBps: Long = 0L,
+    val snapshotQuotaBytes: Long = 0L,
+    val snapshotDurationDays: Int = 0,
+    val snapshotPriceXpf: Int = 0,
+)
+
+data class DeviceBinding(
+    val deviceKey: String,
+    val accountNumber: String,
+    val ip: String = "",
+    val mac: String = "",
+    val lastSeenMillis: Long = 0L,
+)
+
+data class PortalCustomization(
+    val title: String = "Shizzi Hotspot",
+    val message: String = "Ouvrez votre compte ou rechargez avec un voucher.",
+    val html: String = "",
+)
+
+data class RemoteAdminConfig(
+    val enabled: Boolean = false,
+    val username: String = "admin",
+    val passwordSalt: String = "",
+    val passwordHash: String = "",
+    val downloadBps: Long = 1_000_000L,
+    val uploadBps: Long = 1_000_000L,
+    val passwordKdfIterations: Int = 0,
+)
+
+data class CameraProfile(val accountNumber: String, val mac: String, val enrollmentId: String)
+
+data class CybercafeState(
+    val schemaVersion: Int = 5,
+    val offers: Map<String, Offer> = defaultOffers(),
+    val accounts: Map<String, PrepaidAccount> = emptyMap(),
+    val vouchers: Map<String, Voucher> = emptyMap(),
+    val mediaOffers: Map<String, MediaOffer> = emptyMap(),
+    val mediaVouchers: Map<String, MediaVoucher> = emptyMap(),
+    val devices: Map<String, DeviceBinding> = emptyMap(),
+    val portal: PortalCustomization = PortalCustomization(),
+    val remoteAdmin: RemoteAdminConfig = RemoteAdminConfig(),
+    val cameras: Map<String, CameraProfile> = emptyMap(),
+)
+
+data class RuleOutcome(
+    val state: CybercafeState,
+    val success: Boolean,
+    val message: String,
+)
+
+fun defaultOffers(): Map<String, Offer> = listOf(
+    Offer(
+        id = "eco-12",
+        name = "Eco 12 Go",
+        kind = VoucherKind.DATA,
+        downloadBps = 2_000_000L,
+        uploadBps = 1_000_000L,
+        quotaBytes = 12L * GB,
+        durationDays = 30,
+        priceXpf = 1_000,
+    ),
+    Offer(
+        id = "eco-20",
+        name = "Eco+ 20 Go",
+        kind = VoucherKind.DATA,
+        downloadBps = 4_000_000L,
+        uploadBps = 2_000_000L,
+        quotaBytes = 20L * GB,
+        durationDays = 30,
+        priceXpf = 1_500,
+    ),
+    Offer(
+        id = "data-100",
+        name = "Data 100 Go",
+        kind = VoucherKind.DATA,
+        downloadBps = 10_000_000L,
+        uploadBps = 5_000_000L,
+        quotaBytes = 100L * GB,
+        durationDays = 30,
+        priceXpf = 5_000,
+    ),
+    Offer(
+        id = "unlimited-eco",
+        name = "Illimité Eco",
+        kind = VoucherKind.UNLIMITED,
+        downloadBps = 1_000_000L,
+        uploadBps = 1_000_000L,
+        quotaBytes = 0L,
+        durationDays = 30,
+        priceXpf = 4_000,
+    ),
+    Offer(
+        id = "unlimited-comfort",
+        name = "Illimité Confort",
+        kind = VoucherKind.UNLIMITED,
+        downloadBps = 4_000_000L,
+        uploadBps = 2_000_000L,
+        quotaBytes = 0L,
+        durationDays = 30,
+        priceXpf = 6_000,
+    ),
+).associateBy(Offer::id)
+
+object CybercafeRules {
+
+    fun normalizeAccountNumber(raw: String): String =
+        raw.filter(Char::isDigit)
+
+    fun redeemVoucher(
+        state: CybercafeState,
+        accountNumber: String,
+        rawCode: String,
+        nowMillis: Long,
+    ): RuleOutcome {
+        val number = normalizeAccountNumber(accountNumber)
+        val code = rawCode.trim().uppercase()
+        val account = state.accounts[number]
+            ?: return RuleOutcome(state, false, "Compte introuvable.")
+        if (!account.enabled) {
+            return RuleOutcome(state, false, "Compte suspendu.")
+        }
+
+        val voucher = state.vouchers[code]
+            ?: return RuleOutcome(state, false, "Voucher invalide.")
+        if (!voucher.enabled) {
+            return RuleOutcome(state, false, "Voucher désactivé.")
+        }
+        if (voucher.redeemedByAccount.isNotBlank()) {
+            return RuleOutcome(state, false, "Voucher déjà utilisé.")
+        }
+
+        val offer = if (voucher.snapshotVersion >= 1) {
+            Offer(
+                id = voucher.offerId,
+                name = voucher.snapshotName,
+                kind = voucher.snapshotKind,
+                downloadBps = voucher.snapshotDownloadBps,
+                uploadBps = voucher.snapshotUploadBps,
+                quotaBytes = voucher.snapshotQuotaBytes,
+                durationDays = voucher.snapshotDurationDays,
+                priceXpf = voucher.snapshotPriceXpf,
+            )
+        } else {
+            state.offers[voucher.offerId]
+                ?: return RuleOutcome(state, false, "Offre du voucher introuvable.")
+        }
+
+        val durationMillis = offer.durationDays.coerceAtLeast(0) * DAY_MILLIS
+        val updatedAccount = when (offer.kind) {
+            VoucherKind.DATA -> account.copy(
+                dataBalanceBytes = account.dataBalanceBytes + offer.quotaBytes.coerceAtLeast(0L),
+                dataValidUntilMillis = if (durationMillis > 0L) {
+                    nowMillis + durationMillis
+                } else {
+                    0L
+                },
+                dataDownloadBps = offer.downloadBps,
+                dataUploadBps = offer.uploadBps,
+            )
+
+            VoucherKind.UNLIMITED -> {
+                val start = max(nowMillis, account.unlimitedUntilMillis)
+                account.copy(
+                    unlimitedUntilMillis = start + durationMillis,
+                    unlimitedDownloadBps = offer.downloadBps,
+                    unlimitedUploadBps = offer.uploadBps,
+                    unlimitedPlanName = offer.name,
+                )
+            }
+        }
+
+        val updatedVoucher = voucher.copy(
+            redeemedByAccount = number,
+            redeemedAtMillis = nowMillis,
+        )
+
+        return RuleOutcome(
+            state = state.copy(
+                accounts = state.accounts + (number to updatedAccount),
+                vouchers = state.vouchers + (code to updatedVoucher),
+            ),
+            success = true,
+            message = "Recharge appliquée.",
+        )
+    }
+
+    fun redeemMediaVoucher(
+        state: CybercafeState,
+        accountNumber: String,
+        rawCode: String,
+        nowMillis: Long,
+    ): RuleOutcome {
+        val number = normalizeAccountNumber(accountNumber)
+        val code = rawCode.trim().uppercase()
+        val account = state.accounts[number]
+            ?: return RuleOutcome(state, false, "Compte introuvable.")
+        if (!account.enabled) {
+            return RuleOutcome(state, false, "Compte suspendu.")
+        }
+
+        val voucher = state.mediaVouchers[code]
+            ?: return RuleOutcome(state, false, "Voucher invalide.")
+        if (!voucher.enabled) {
+            return RuleOutcome(state, false, "Voucher Media désactivé.")
+        }
+        if (voucher.redeemedByAccount.isNotBlank()) {
+            return RuleOutcome(state, false, "Voucher Media déjà utilisé.")
+        }
+
+        val offer = if (voucher.snapshotVersion >= 1) {
+            MediaOffer(
+                id = voucher.offerId,
+                name = voucher.snapshotName,
+                durationMinutes = voucher.snapshotDurationMinutes,
+                priceXpf = voucher.snapshotPriceXpf,
+            )
+        } else {
+            state.mediaOffers[voucher.offerId]
+                ?: return RuleOutcome(state, false, "Offre Media du voucher introuvable.")
+        }
+
+        if (offer.durationMinutes <= 0L) {
+            return RuleOutcome(state, false, "Durée du voucher Media invalide.")
+        }
+        val durationMillis = runCatching {
+            Math.multiplyExact(offer.durationMinutes, MINUTE_MILLIS)
+        }.getOrElse {
+            return RuleOutcome(state, false, "Durée du voucher Media trop grande.")
+        }
+        val start = max(nowMillis, account.mediaUntilMillis)
+        val updatedAccount = account.copy(
+            mediaUntilMillis = runCatching {
+                Math.addExact(start, durationMillis)
+            }.getOrElse {
+                return RuleOutcome(state, false, "Durée du voucher Media trop grande.")
+            },
+        )
+        val updatedVoucher = voucher.copy(
+            redeemedByAccount = number,
+            redeemedAtMillis = nowMillis,
+        )
+
+        return RuleOutcome(
+            state = state.copy(
+                accounts = state.accounts + (number to updatedAccount),
+                mediaVouchers = state.mediaVouchers + (code to updatedVoucher),
+            ),
+            success = true,
+            message = "Recharge Media appliquée.",
+        )
+    }
+
+    fun redeemAnyVoucher(
+        state: CybercafeState,
+        accountNumber: String,
+        rawCode: String,
+        nowMillis: Long,
+    ): RuleOutcome {
+        val code = rawCode.trim().uppercase()
+        return when {
+            state.vouchers.containsKey(code) ->
+                redeemVoucher(state, accountNumber, code, nowMillis)
+            state.mediaVouchers.containsKey(code) ->
+                redeemMediaVoucher(state, accountNumber, code, nowMillis)
+            else -> RuleOutcome(state, false, "Voucher invalide.")
+        }
+    }
+
+    fun bindDevice(
+        state: CybercafeState,
+        accountNumber: String,
+        deviceKey: String,
+        ip: String,
+        mac: String,
+        nowMillis: Long,
+    ): RuleOutcome {
+        val number = normalizeAccountNumber(accountNumber)
+        val account = state.accounts[number]
+            ?: return RuleOutcome(state, false, "Compte introuvable.")
+        if (!account.enabled) {
+            return RuleOutcome(state, false, "Compte suspendu.")
+        }
+
+        val normalizedKey = deviceKey.trim().lowercase()
+        if (normalizedKey.isBlank()) {
+            return RuleOutcome(state, false, "Identifiant appareil manquant.")
+        }
+
+        val activeOnAnotherDevice = state.devices.values.any {
+            it.accountNumber == number && it.deviceKey != normalizedKey
+        }
+        if (activeOnAnotherDevice) {
+            return RuleOutcome(
+                state,
+                false,
+                "Ce compte est déjà utilisé sur un autre appareil.",
+            )
+        }
+
+        val binding = DeviceBinding(
+            deviceKey = normalizedKey,
+            accountNumber = number,
+            ip = ip.trim(),
+            mac = mac.trim().lowercase(),
+            lastSeenMillis = nowMillis,
+        )
+
+        return RuleOutcome(
+            state = state.copy(devices = state.devices + (normalizedKey to binding)),
+            success = true,
+            message = "Appareil associé.",
+        )
+    }
+
+    fun unbindDevice(state: CybercafeState, deviceKey: String): CybercafeState {
+        val key = deviceKey.trim().lowercase()
+        return state.copy(devices = state.devices - key)
+    }
+
+    fun recordTraffic(
+        state: CybercafeState,
+        deviceKey: String,
+        uploadBytes: Long,
+        downloadBytes: Long,
+        nowMillis: Long,
+    ): CybercafeState {
+        val key = deviceKey.trim().lowercase()
+        val binding = state.devices[key] ?: return state
+        val account = state.accounts[binding.accountNumber] ?: return state
+
+        val up = uploadBytes.coerceAtLeast(0L)
+        val down = downloadBytes.coerceAtLeast(0L)
+        val sessionBytes = up + down
+
+        val consumeData = !account.hasUnlimited(nowMillis) && account.hasData(nowMillis)
+        val updatedAccount = account.copy(
+            totalUpBytes = account.totalUpBytes + up,
+            totalDownBytes = account.totalDownBytes + down,
+            dataBalanceBytes = if (consumeData) {
+                (account.dataBalanceBytes - sessionBytes).coerceAtLeast(0L)
+            } else {
+                account.dataBalanceBytes
+            },
+        )
+        val updatedBinding = binding.copy(lastSeenMillis = nowMillis)
+
+        return state.copy(
+            accounts = state.accounts + (account.number to updatedAccount),
+            devices = state.devices + (key to updatedBinding),
+        )
+    }
+}
+
+object CybercafeSecurity {
+    private val random = SecureRandom()
+
+    fun newSalt(): String {
+        val bytes = ByteArray(16)
+        random.nextBytes(bytes)
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+
+    fun hashSecret(salt: String, secret: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val bytes = digest.digest((salt + ":" + secret).toByteArray(Charsets.UTF_8))
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+
+    const val PIN_KDF_ITERATIONS = 120_000
+
+    fun stretchVerifier(salt: String, legacyHash: String): String {
+        val spec = PBEKeySpec(legacyHash.toCharArray(), salt.toByteArray(Charsets.UTF_8), PIN_KDF_ITERATIONS, 256)
+        return try { SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
+            .joinToString("") { "%02x".format(it) } } finally { spec.clearPassword() }
+    }
+
+    fun hashPin(salt: String, pin: String, iterations: Int = 0): String {
+        val legacy = hashSecret(salt, pin)
+        return when (iterations) {
+            0 -> legacy
+            PIN_KDF_ITERATIONS -> stretchVerifier(salt, legacy)
+            else -> error("Format de PIN non pris en charge.")
+        }
+    }
+
+    fun verifyPin(account: PrepaidAccount, pin: String): Boolean =
+        account.pinKdfIterations in setOf(0, PIN_KDF_ITERATIONS) && MessageDigest.isEqual(hashPin(account.pinSalt, pin, account.pinKdfIterations).toByteArray(), account.pinHash.toByteArray())
+}
