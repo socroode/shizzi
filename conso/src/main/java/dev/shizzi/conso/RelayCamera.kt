@@ -11,6 +11,8 @@ import android.hardware.Camera
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
+import android.view.OrientationEventListener
+import android.hardware.SensorManager
 import android.widget.ImageView
 import java.io.ByteArrayOutputStream
 
@@ -28,6 +30,17 @@ internal class RelayCamera(
     private val handler = Handler(thread.looper)
     private val main = Handler(Looper.getMainLooper())
     private var camera: Camera? = null
+    @Volatile private var deviceDegrees = 0
+    private var sensorDegrees = 0
+    private var frontFacing = false
+    private val orientation = object : OrientationEventListener(context.applicationContext,
+        SensorManager.SENSOR_DELAY_UI) {
+        override fun onOrientationChanged(angle: Int) {
+            if (angle != ORIENTATION_UNKNOWN)
+                deviceDegrees = (((angle + 45) / 90) * 90) % 360
+        }
+    }
+
     private var texture: SurfaceTexture? = null
     private var side = "back"
     private var torch = false
@@ -53,6 +66,8 @@ internal class RelayCamera(
     fun detach(image: ImageView) { if (preview === image) preview = null }
     fun start(requested: String) {
         quality = requested
+        if (orientation.canDetectOrientation()) orientation.enable()
+        else onStatus("Capteur d'orientation indisponible : mode portrait par défaut")
         handler.post { open() }
     }
     private fun open() {
@@ -72,6 +87,9 @@ internal class RelayCamera(
                 if (info.facing == facing) { selected = i; break }
             }
             if (selected < 0) throw IllegalStateException("Caméra $side indisponible")
+            Camera.getCameraInfo(selected, info)
+            sensorDegrees = info.orientation
+            frontFacing = info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT
             val cam = Camera.open(selected)
             camera = cam
             val params = cam.parameters
@@ -111,9 +129,13 @@ internal class RelayCamera(
                     val now = android.os.SystemClock.elapsedRealtime()
                     if (now - lastFrameAt >= 125) {
                         lastFrameAt = now
+                        val turn = CamFrameRotation.frameRotation(sensorDegrees, deviceDegrees, frontFacing)
+                        val rotated = CamFrameRotation.rotateNV21(bytes, width, height, turn)
+                        val outWidth = if (turn == 90 || turn == 270) height else width
+                        val outHeight = if (turn == 90 || turn == 270) width else height
                         val out = ByteArrayOutputStream(96 * 1024)
-                        val ok = YuvImage(bytes, ImageFormat.NV21, width, height, null)
-                            .compressToJpeg(Rect(0, 0, width, height), 55, out)
+                        val ok = YuvImage(rotated, ImageFormat.NV21, outWidth, outHeight, null)
+                            .compressToJpeg(Rect(0, 0, outWidth, outHeight), 55, out)
                         if (ok) {
                             val jpg = out.toByteArray()
                             if (jpg.size <= 180000) {
@@ -125,7 +147,7 @@ internal class RelayCamera(
                                 }
                                 onFrame(jpg)
                                 if (frameCount == 1L) {
-                                    state = "Première image réelle reçue ($width × $height)"
+                                    state = "Première image redressée reçue ($outWidth × $outHeight · ${turn}°)"
                                     onStatus(state)
                                 }
                             } else if (frameCount == 0L) onStatus("Image trop volumineuse pour le relais")
@@ -201,6 +223,7 @@ internal class RelayCamera(
         }
     }
     fun stop() {
+        orientation.disable()
         handler.post {
             try { camera?.setPreviewCallbackWithBuffer(null); camera?.stopPreview(); camera?.release() }
             catch (_: Exception) {}
