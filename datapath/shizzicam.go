@@ -66,6 +66,7 @@ func (m *TrafficManager) serveCameraAPI(conn net.Conn, req *http.Request, client
  if m.serveCameraAudio(conn,req,clientIP) {return true}
  if m.serveCameraMetrics(conn,req,clientIP) {return true}
  if m.serveCamTalk(conn,req,clientIP) {return true}
+ if m.serveCamVideoStream(conn,req,clientIP) {return true}
  path:=req.URL.Path
  if path!="/api/v1/cam/frame" && path!="/api/v1/cam/list" { return false }
  // Never transmit images or admin tokens through cleartext captive-portal HTTP.
