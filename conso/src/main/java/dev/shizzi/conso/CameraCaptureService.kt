@@ -236,8 +236,9 @@ class CameraCaptureService : Service() {
             return
         }
         var active = false
+        var encoder:CamOpusEncoder?=null
         try {
-            val encoder = CamOpusEncoder()
+            encoder = CamOpusEncoder()
             val data = ByteArray(1920) // 20ms mono PCM16 at 48 kHz
             while (running) {
                 if (!micEnabled) {
@@ -257,6 +258,7 @@ class CameraCaptureService : Service() {
             android.util.Log.w("ShizziCam","Audio capture ended",e)
         } finally {
             if (active) try { record.stop() } catch (_: Exception) {}
+            encoder?.close()
             record.release()
         }
     }

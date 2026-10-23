@@ -9,6 +9,12 @@ import android.graphics.Color
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import android.Manifest
+import android.content.pm.PackageManager
+import android.view.MotionEvent
+import dev.shizzi.camrtc.CamOpusEncoder
 import dev.shizzi.camrtc.CamOpusDecoder
 import android.net.ConnectivityManager
 import android.net.Network
@@ -46,6 +52,8 @@ class CamAdminActivity : Activity() {
     private val eventCursors = mutableMapOf<String,Long>()
     private val pendingCommands = ConcurrentHashMap<String,String>()
     private val audioExecutor = Executors.newSingleThreadExecutor()
+    private val talkExecutor = Executors.newSingleThreadExecutor()
+    @Volatile private var talking = false
     @Volatile private var selected = ""
     @Volatile private var audioSelected = ""
     @Volatile private var alive = true
@@ -214,6 +222,16 @@ class CamAdminActivity : Activity() {
         sound.addView(button("Micro caméra"){
             micOn=!micOn
             sendControl("mic",if(micOn)"on" else "off")
+        })
+        sound.addView(Button(this).apply {
+            text="Maintenir pour parler"
+            setOnTouchListener { _,e ->
+                when(e.actionMasked){
+                    MotionEvent.ACTION_DOWN -> {startTalking();true}
+                    MotionEvent.ACTION_UP,MotionEvent.ACTION_CANCEL -> {talking=false;true}
+                    else -> true
+                }
+            }
         })
         root.addView(sound)
         val qualities=listOf("auto","360p","480p","720p")
@@ -424,6 +442,67 @@ class CamAdminActivity : Activity() {
         }
     }
 
+    /** Push-to-talk, 64 kbps Opus via router. One chosen camera at a time. */
+    private fun startTalking(){
+        val cam=selected
+        if(cam.isEmpty() || admin==null) {
+            status.text="Sélectionne une caméra avant de parler"
+            return
+        }
+        if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){
+            status.text="Autorise le microphone pour utiliser l'interphone"
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO),1080)
+            return
+        }
+        if(talking)return
+        talking=true
+        talkExecutor.execute {
+            var record:AudioRecord?=null
+            var encoder:CamOpusEncoder?=null
+            try {
+                val session=ensureSession(cam)
+                if(!talking || !alive)return@execute
+                val rate=48000
+                val min=AudioRecord.getMinBufferSize(rate,AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT)
+                check(min>0){"Microphone 48 kHz indisponible"}
+                record=AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION,rate,
+                    AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,maxOf(3840,min*2))
+                check(record.state==AudioRecord.STATE_INITIALIZED){"Microphone interphone indisponible"}
+                encoder=CamOpusEncoder()
+                val buffer=ByteArray(1920)
+                record.startRecording()
+                runOnUiThread{status.text="Interphone actif : $cam (Opus 64 kbps)"}
+                while(talking&&alive&&!Thread.currentThread().isInterrupted){
+                    val n=record.read(buffer,0,buffer.size)
+                    if(n<=0)continue
+                    for(packet in encoder.encode(buffer.copyOf(n))) {
+                        if(!talking || packet.isEmpty())break
+                        val endpoint="/api/v1/cam/talk?account="+URLEncoder.encode(cam,"UTF-8")+
+                            "&session="+URLEncoder.encode(session,"UTF-8")
+                        val c=url(endpoint)
+                        try {
+                            c.requestMethod="POST"
+                            c.doOutput=true
+                            c.setRequestProperty("Content-Type","audio/opus")
+                            c.setFixedLengthStreamingMode(packet.size)
+                            c.outputStream.use{it.write(packet)}
+                            if(c.responseCode!=200)error("Interphone : HTTP "+c.responseCode)
+                        }finally{c.disconnect()}
+                    }
+                }
+            }catch(e:Exception){
+                android.util.Log.w("ShizziCam","Talk transmission failed",e)
+                runOnUiThread{status.text="Interphone : "+(e.message?:"indisponible")}
+            }finally{
+                talking=false
+                runCatching{record?.stop()}
+                record?.release()
+                encoder?.close()
+            }
+        }
+    }
+
     private fun playSelectedAudio(){
         val rate=48000
         val decoder=try { CamOpusDecoder() }catch(e:Exception){
@@ -491,6 +570,8 @@ class CamAdminActivity : Activity() {
     override fun onDestroy(){
         alive=false
         audioSelected=""
+        talking=false
+        talkExecutor.shutdownNow()
         poll.shutdownNow()
         frames.shutdownNow()
         commands.shutdownNow()
