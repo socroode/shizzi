@@ -10,8 +10,8 @@ android {
         applicationId = "dev.shizzi.camadmin"
         minSdk = 30
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.3.1-av-controls"
+        versionCode = 7
+        versionName = "0.3.2-avc-opus-test"
     }
     sourceSets.getByName("main").java.srcDir("../admin/src/main/java")
     val properties = Properties().apply {

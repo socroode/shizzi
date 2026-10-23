@@ -241,14 +241,14 @@ class ClientAppDistributionServer(
 
     companion object {
         const val LOOPBACK_HOST = "127.0.0.1"
-        const val CLIENT_VERSION = "0.3.3.1-av-controls"
-        const val CLIENT_FILE_NAME = "Shizzi-PlusCam-0.3.3.1.apk"
+        const val CLIENT_VERSION = "0.3.4-avc-opus-test"
+        const val CLIENT_FILE_NAME = "Shizzi-PlusCam-0.3.4-test.apk"
         const val ASSET_PATH = "shizzi/Shizzi-Plus.apk"
         const val ADMIN_VERSION = "0.3.0-universal"
         const val ADMIN_FILE_NAME = "Shizzi-Admin-0.3.0-universal.apk"
         const val ADMIN_ASSET_PATH = "shizzi/Shizzi-Admin.apk"
-        const val VIEWER_VERSION = "0.3.1-av-controls"
-        const val VIEWER_FILE_NAME = "ShizziCam-Admin-0.3.1.apk"
+        const val VIEWER_VERSION = "0.3.2-avc-opus-test"
+        const val VIEWER_FILE_NAME = "ShizziCam-Admin-0.3.2-test.apk"
         const val VIEWER_ASSET_PATH = "shizzi/ShizziCam-Admin.apk"
     }
 }
