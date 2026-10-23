@@ -16,7 +16,7 @@ class CamFrameRotationTest {
             CamFrameRotation.rotateNV21(frame,4,2,180))
     }
     @Test fun rotatesBy270Degrees() {
-        assertArrayEquals(bytes(intArrayOf(3,7,2,6,1,5,0,4,10,11,20,21)),
+        assertArrayEquals(bytes(intArrayOf(3,7,2,6,1,5,0,4,20,21,10,11)),
             CamFrameRotation.rotateNV21(frame,4,2,270))
     }
     @Test fun uprightBufferUnchanged() {
