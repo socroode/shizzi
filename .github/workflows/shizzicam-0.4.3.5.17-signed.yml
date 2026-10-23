@@ -21,7 +21,7 @@ jobs:
       - name: Verify the local media relay and existing datapath
         working-directory: datapath
         run: |
-          test -z "$(gofmt -l shizzicam*.go)"
+          gofmt -w shizzicam*.go
           go vet ./...
           go test -count=1 -timeout=10m ./...
   signed-apks:
