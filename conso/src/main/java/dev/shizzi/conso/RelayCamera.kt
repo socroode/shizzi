@@ -15,6 +15,7 @@ import android.view.OrientationEventListener
 import android.hardware.SensorManager
 import android.widget.ImageView
 import java.io.ByteArrayOutputStream
+import dev.shizzi.camrtc.CamH264Encoder
 
 /**
  * Actual captured frames: Android camera -> local ImageView and HTTPS frame uploader.
@@ -24,7 +25,8 @@ import java.io.ByteArrayOutputStream
 internal class RelayCamera(
     private val context: Context,
     private val onFrame: (ByteArray) -> Unit,
-    private val onStatus: (String) -> Unit
+    private val onStatus: (String) -> Unit,
+    private val onH264: (ByteArray,Int,Int,Int,Long) -> Unit = {_,_,_,_,_->}
 ) {
     private val thread = HandlerThread("ShizziCamCamera").apply { start() }
     private val handler = Handler(thread.looper)
@@ -50,6 +52,11 @@ internal class RelayCamera(
     private var height = 480
     private var lastFrameAt = 0L
     private var frameCount = 0L
+    private var lastPreviewAt = 0L
+    private var avc:CamH264Encoder?=null
+    private var avcWidth=0
+    private var avcHeight=0
+    private var h264Unsupported=false
     @Volatile private var preview: ImageView? = null
     @Volatile private var latest: ByteArray? = null
     @Volatile var state = "Capture inactive"
@@ -76,6 +83,11 @@ internal class RelayCamera(
             camera?.stopPreview()
             camera?.release()
             camera = null
+            avc?.close()
+            avc=null
+            avcWidth=0
+            avcHeight=0
+            h264Unsupported=false
             texture?.release()
             texture = null
             val facing = if (side == "front") Camera.CameraInfo.CAMERA_FACING_FRONT
@@ -127,12 +139,32 @@ internal class RelayCamera(
             cam.setPreviewCallbackWithBuffer { bytes, device ->
                 try {
                     val now = android.os.SystemClock.elapsedRealtime()
-                    if (now - lastFrameAt >= 125) {
+                    if (now - lastFrameAt >= (if(h264Unsupported) 125 else 45)) {
                         lastFrameAt = now
                         val turn = CamFrameRotation.frameRotation(sensorDegrees, deviceDegrees, frontFacing)
                         val rotated = CamFrameRotation.rotateNV21(bytes, width, height, turn)
                         val outWidth = if (turn == 90 || turn == 270) height else width
                         val outHeight = if (turn == 90 || turn == 270) width else height
+                        if(!h264Unsupported) {
+                            try {
+                                if(avc==null || avcWidth!=outWidth || avcHeight!=outHeight){
+                                    avc?.close()
+                                    avc=CamH264Encoder(outWidth,outHeight)
+                                    avcWidth=outWidth;avcHeight=outHeight
+                                }
+                                avc?.encode(rotated,now*1000L){ encoded,flags,pts ->
+                                    onH264(encoded,outWidth,outHeight,flags,pts)
+                                }
+                            } catch (e:Exception) {
+                                avc?.close()
+                                avc=null
+                                h264Unsupported=true
+                                onStatus("H.264 matériel indisponible : "+(e.message?:"erreur")+" · secours JPEG non conforme 22 FPS")
+                            }
+                        }
+                        // Local preview is sparse; H264 is the primary router stream.
+                        if(now-lastPreviewAt<500 && !h264Unsupported) return@setPreviewCallbackWithBuffer
+                        lastPreviewAt=now
                         val out = ByteArrayOutputStream(96 * 1024)
                         val ok = YuvImage(rotated, ImageFormat.NV21, outWidth, outHeight, null)
                             .compressToJpeg(Rect(0, 0, outWidth, outHeight), 55, out)
@@ -145,7 +177,7 @@ internal class RelayCamera(
                                     val bitmap = BitmapFactory.decodeByteArray(jpg, 0, jpg.size)
                                     if (bitmap != null) main.post { if (preview === view) view.setImageBitmap(bitmap) }
                                 }
-                                onFrame(jpg)
+                                if(h264Unsupported)onFrame(jpg)
                                 if (frameCount == 1L) {
                                     state = "Première image redressée reçue ($outWidth × $outHeight · ${turn}°)"
                                     onStatus(state)
@@ -225,7 +257,7 @@ internal class RelayCamera(
     fun stop() {
         orientation.disable()
         handler.post {
-            try { camera?.setPreviewCallbackWithBuffer(null); camera?.stopPreview(); camera?.release() }
+            try { avc?.close();avc=null;camera?.setPreviewCallbackWithBuffer(null); camera?.stopPreview(); camera?.release() }
             catch (_: Exception) {}
             camera = null
             texture?.release()

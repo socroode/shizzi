@@ -28,6 +28,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.widget.ImageView
 import org.json.JSONObject
+import java.io.DataOutputStream
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
@@ -46,6 +47,10 @@ class CameraCaptureService : Service() {
     private var network: Network? = null
     private lateinit var worker: ScheduledExecutorService
     private val frames = Executors.newSingleThreadExecutor()
+    private val videoSender = Executors.newSingleThreadExecutor()
+    private data class VideoPacket(val data:ByteArray,val width:Int,val height:Int,val flags:Int,val ptsUs:Long)
+    private val videoQueue=ArrayBlockingQueue<VideoPacket>(40)
+    @Volatile private var lastConfig:VideoPacket?=null
     private val audioWorker = Executors.newSingleThreadExecutor()
     private val speakerWorker = Executors.newSingleThreadExecutor()
     private val audioSender = Executors.newSingleThreadExecutor()
@@ -136,6 +141,7 @@ class CameraCaptureService : Service() {
                         .getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
                 } ?: error("Connexion Wi-Fi ShizziCam manquante")
                 val camera = RelayCamera(this, onFrame = { bytes -> uploadFrame(bytes) },
+                    onH264 = { bytes,w,h,flags,pts -> queueVideo(bytes,w,h,flags,pts) },
                     onStatus = { message ->
                         captureStatus = message
                         android.util.Log.i("ShizziCam",message)
@@ -143,6 +149,7 @@ class CameraCaptureService : Service() {
                 relay = camera
                 main.post { preview?.let { camera.attach(it) } }
                 camera.start(quality)
+                videoSender.execute {sendVideoLoop()}
                 audioSender.execute { sendAudioLoop() }
                 audioWorker.execute { audioLoop() }
                 speakerWorker.execute { speakerLoop() }
@@ -159,6 +166,58 @@ class CameraCaptureService : Service() {
     private fun connection(path: String): javax.net.ssl.HttpsURLConnection =
         RouterTls.connection("https://192.0.2.1" + path, pin, network ?: error("Wi-Fi indisponible"))
             .apply { connectTimeout = 3000; readTimeout = 3000; instanceFollowRedirects = false }
+
+    private fun queueVideo(bytes:ByteArray,width:Int,height:Int,flags:Int,ptsUs:Long){
+        if(!running||bytes.isEmpty()||bytes.size>262144)return
+        val packet=VideoPacket(bytes,width,height,flags,ptsUs)
+        if(flags and 2!=0)lastConfig=packet
+        if(!videoQueue.offer(packet)){
+            videoQueue.poll()
+            videoQueue.offer(packet)
+        }
+    }
+
+    /** Single long-lived HTTPS upload instead of 22 individual TLS sessions per second. */
+    private fun sendVideoLoop(){
+        while(running&&!Thread.currentThread().isInterrupted){
+            var c:javax.net.ssl.HttpsURLConnection?=null
+            try{
+                val uplink=connection("/api/v1/cam/video-stream")
+                c=uplink
+                uplink.requestMethod="POST"
+                uplink.doOutput=true
+                uplink.connectTimeout=3500
+                uplink.readTimeout=0
+                uplink.setRequestProperty("Content-Type","application/x-shizzicam-h264")
+                uplink.setChunkedStreamingMode(16*1024)
+                val data=DataOutputStream(uplink.outputStream)
+                lastConfig?.let{packet->
+                    data.writeInt(packet.data.size)
+                    data.writeShort(packet.width)
+                    data.writeShort(packet.height)
+                    data.writeLong(packet.ptsUs)
+                    data.writeByte(packet.flags)
+                    data.write(packet.data)
+                    data.flush()
+                }
+                while(running){
+                    val packet=videoQueue.poll(600,TimeUnit.MILLISECONDS)?:continue
+                    data.writeInt(packet.data.size)
+                    data.writeShort(packet.width)
+                    data.writeShort(packet.height)
+                    data.writeLong(packet.ptsUs)
+                    data.writeByte(packet.flags)
+                    data.write(packet.data)
+                    data.flush()
+                }
+            }catch(_:InterruptedException){break}
+            catch(e:Exception){
+                android.util.Log.w("ShizziCam","H264 continuous uplink interrupted",e)
+                if(running)captureStatus="Relais H264 : reconnexion ("+(e.message?:"réseau")+")"
+                try{Thread.sleep(600)}catch(_:InterruptedException){break}
+            }finally{runCatching{c?.disconnect()}}
+        }
+    }
 
     private fun uploadFrame(bytes: ByteArray) {
         if (!running || !frameBusy.compareAndSet(false,true)) return
@@ -380,6 +439,8 @@ class CameraCaptureService : Service() {
         captureStatus = "Caméra et microphone arrêtés"
         worker.shutdownNow()
         frames.shutdownNow()
+        videoSender.shutdownNow()
+        videoQueue.clear()
         audioSender.shutdownNow()
         controlSender.shutdownNow()
         audioQueue.clear()
