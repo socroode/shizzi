@@ -60,7 +60,7 @@ class CamActivity:Activity() {
         }
         root.addView(TextView(this).apply{text="Shizzi+Cam";textSize=26f})
         root.addView(TextView(this).apply{
-            text="Aperçu réel sur ce téléphone. Images et son transmis uniquement au téléphone routeur ShizziCam par HTTPS. Mode relais de test : JPEG + PCM16. Le compte doit être connecté."
+            text="Caméra avec redressement automatique de l’image, à l’avant comme à l’arrière, même si la rotation de l’écran est verrouillée. Images et son transmis au routeur ShizziCam par HTTPS. Mode de test : JPEG + PCM16."
             textSize=14f
         })
         preview=ImageView(this).apply{
