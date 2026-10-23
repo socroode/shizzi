@@ -78,6 +78,7 @@ class CamMonitorActivity : Activity() {
   pane.addView(label("ShizziCam Débit",26f))
   pane.addView(label("Trafic vidéo et audio mesuré au relais, sans réseau Internet.",14f))
   pane.addView(label("Le débit disponible du Wi-Fi n'est PAS déduit du débit consommé.",13f))
+  pane.addView(Button(this).apply{text="Tester le débit local disponible";setOnClickListener{startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,android.net.Uri.parse("http://192.0.2.1/speedtest/")))}})
   pane.addView(Button(this).apply{text="Actualiser";setOnClickListener{refresh()}})
   pane.addView(Button(this).apply{text="Déconnexion";setOnClickListener{
    admin?.clearSession();admin=null;showLogin()
@@ -107,7 +108,7 @@ class CamMonitorActivity : Activity() {
     if(i>0)text.append("\n\n")
     text.append(CamMonitorMetric.render(entries.getJSONObject(i)))
    }
-   text.append("\n\nMesures sur deux secondes complètes. Le nombre de FPS affichés ici correspond aux trames relayées, pas au décodage réel.")
+   text.append("\n\nMesures sur deux secondes complètes. Les FPS relayés et les FPS des mises à jour de vignette sont distincts. Les mesures absentes ou périmées sont signalées.")
    runOnUiThread{if(admin===active)status.text=text.toString()}
   }catch(e:Exception){
    runOnUiThread{if(admin===active)status.text="Diagnostic local : ${e.message?:"indisponible"}"}

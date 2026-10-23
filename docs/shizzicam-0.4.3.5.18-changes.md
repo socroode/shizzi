@@ -1,0 +1,20 @@
+# ShizziCam 0.4.3.5.18-test — modifications
+
+Base : `feat/shizzicam-0.4.3.5.17-stream-audio-monitor`, commit `f4549ca970ce3e8cb827880e80b1ae223d113b99`.
+
+- Relais média H.264 et Opus intégralement local via le HOTSPOT en HTTPS avec vérification du certificat. Les annexes v3 ne créent aucune connexion média caméra/Visionneuse directe.
+- Ajout 144p/240p aux trois qualités existantes et configuration des cinq débits vidéo demandés ; adaptation aux alignements des codecs sans étirer l’image.
+- Capture et encodage découplés, cadence corrigée sur les caméras à 30 FPS, files bornées, attente d’une nouvelle image clé après perte et reprise des connexions.
+- Audio Opus 128 kbps, 48 kHz mono, transport continu dans les deux sens et transmission des paramètres réels du codec. Lecture sur le haut-parleur Android avec contrôle explicite du volume nul.
+- Horodatages communs estimés par échanges avec l’horloge du routeur ; latence du rendu et incertitude d’horloge distinguées des débits de transport.
+- Rotation automatique conservée et rotation manuelle disponible ; caméras avant/arrière, torche et zoom conservés selon le matériel.
+- Mosaïque 1/2/4/6/8, barre interphone fixe, états de transmission distincts de la confirmation matérielle de lecture. Un ancien accusé ne confirme pas une nouvelle conversation.
+- Sirène MP3 locale 128 kbps, durée du fichier inférieure à dix secondes, arrêt manuel, confirmation et protection contre les répétitions.
+- Statistiques séparées pour capture, encodage, relais et mises à jour de la vignette Visionneuse ; informations absentes ou périmées indiquées comme indisponibles. Les rejets applicatifs ne sont pas présentés comme une mesure des pertes radio.
+- Mode Auto fondé sur le nombre de caméras, les retours de rendu/latence, la charge observée et les informations thermiques, avec temporisation des remontées de qualité. La capacité radio disponible n’est pas inventée à partir du trafic consommé.
+- Trois annexes embarquées, contrôles ZIP/APK, versions, tailles, SHA-256 et signatures à la construction. Les téléchargements Shizzi Admin et Shizzi Comptes sont conservés.
+- L’ancien composant WebRTC pair à pair inutilisé a été retiré des annexes ; les fonctionnalités héritées de compte, vouchers, Internet, messagerie et médias n’ont pas été supprimées.
+
+Les essais sur appareils réels restent nécessaires : son audible, compatibilité des codecs par téléphone, neuf à dix clients Wi-Fi, tenue thermique, 2,4/5 GHz, latence nominale au plus 300 ms, synchronisation au plus 100 ms et surveillance de 1 heure/24 heures. Une construction réussie et une endurance virtuelle ne constituent pas ces validations.
+
+Les APK de livraison doivent porter le certificat permanent attendu, dont l’empreinte SHA-256 est `FADFC5E87FA60351F7DCB75D34F1AB91110824333CD1097A38B3C703F7AF3DB7`. Le rapport JSON joint indique les versions et empreintes des fichiers réellement construits. Les variantes debug locales ne sont pas des mises à jour signées avec ce certificat.

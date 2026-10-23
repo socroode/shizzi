@@ -155,8 +155,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 47
-        versionName = "0.4.3.5.17-test"
+        versionCode = 48
+        versionName = "0.4.3.5.18-test"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 
@@ -301,4 +301,11 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 
     testImplementation("org.json:json:20250107")
+}
+
+// No unsigned release may be mistaken for a permanent-signature test delivery.
+tasks.matching { it.name == "assembleRelease" }.configureEach {
+    doFirst { check(rootProject.file("keystore.properties").isFile) {
+        "La signature permanente est requise. Fournir la configuration de signature existante."
+    } }
 }

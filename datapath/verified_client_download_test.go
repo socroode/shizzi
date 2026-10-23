@@ -103,6 +103,8 @@ func TestReleasePortalDownload(t *testing.T) {
 	}
 	manager := newTrafficManager()
 	manager.portalClientApp = verifiedAnnouncement(data, port)
+    if version:=os.Getenv("SHIZZI_EXPECTED_PLUS_VERSION");version!=""{manager.portalClientApp.Version=version}
+    if name:=os.Getenv("SHIZZI_EXPECTED_PLUS_FILENAME");name!=""{manager.portalClientApp.FileName=name}
 	server, client := net.Pipe()
 	done := make(chan struct{})
 	go func() { defer close(done); defer server.Close(); manager.servePortal(server, "192.168.7.66") }()
@@ -113,11 +115,11 @@ func TestReleasePortalDownload(t *testing.T) {
 	<-done
 	if err != nil { t.Fatal(err) }
 	match := regexp.MustCompile(`href="([^"]*shizzi-plus\.apk[^"]*)"`).FindStringSubmatch(string(page))
-	if len(match) < 2 || !strings.Contains(match[1], "?sha256=" + manager.portalClientApp.SHA256) || !strings.Contains(string(page), "Shizzi+ 0.3.0-background-calls") {
+	if len(match) < 2 || !strings.Contains(match[1], "?sha256=" + manager.portalClientApp.SHA256) || !strings.Contains(string(page), "Shizzi+Cam "+manager.portalClientApp.Version) {
 		t.Fatalf("portal does not advertise the current version and fingerprint: %s", page)
 	}
 	response, body := verifiedDownloadRequest(t, manager, "GET", "", html.UnescapeString(match[1]))
-	if response.StatusCode != 200 || !bytes.Equal(body, data) || response.Header.Get("X-Shizzi-Version") != "0.3.0-background-calls" || !strings.Contains(response.Header.Get("Content-Disposition"), "Shizzi-Plus-0.3.0-background-calls.apk") {
+	if response.StatusCode != 200 || !bytes.Equal(body, data) || response.Header.Get("X-Shizzi-Version") != manager.portalClientApp.Version || !strings.Contains(response.Header.Get("Content-Disposition"), manager.portalClientApp.FileName) {
 		t.Fatalf("release portal download differs from expected APK: %d, %v", response.StatusCode, response.Header)
 	}
 	if path := os.Getenv("SHIZZI_DOWNLOADED_PLUS_APK"); path != "" {

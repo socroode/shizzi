@@ -41,7 +41,7 @@ class CamActivity:Activity() {
     private val handler=Handler(Looper.getMainLooper())
     private val statusRefresh=object:Runnable{
         override fun run(){
-            service?.let{status.text=it.captureStatus}
+            service?.let{status.text=it.captureStatus+"\n"+it.audioStatus}
             if(!isFinishing)handler.postDelayed(this,900)
         }
     }
@@ -63,7 +63,7 @@ class CamActivity:Activity() {
         }
         root.addView(TextView(this).apply{text="Shizzi+Cam";textSize=26f})
         root.addView(TextView(this).apply{
-            text="Aperçu réel sur ce téléphone. Images et son transmis uniquement au téléphone routeur ShizziCam par HTTPS. Mode relais de test : JPEG + Opus 64 kbps. Le compte doit être connecté."
+            text="Aperçu réel sur ce téléphone. Images et son transmis uniquement au téléphone routeur ShizziCam par HTTPS. H.264 continu et Opus 128 kbps via le routeur. Le compte doit être connecté."
             textSize=14f
         })
         preview=ImageView(this).apply{
@@ -97,7 +97,7 @@ class CamActivity:Activity() {
         root.addView(controls)
         quality=Spinner(this).apply{
             adapter=ArrayAdapter(this@CamActivity,android.R.layout.simple_spinner_dropdown_item,
-                listOf("Auto","360p","480p","720p"))
+                listOf("Auto","144p","240p","360p","480p","720p"))
         }
         root.addView(quality)
         status=TextView(this).apply{text="Caméra désactivée";textSize=15f;setPadding(0,14,0,14)}
@@ -166,7 +166,7 @@ class CamActivity:Activity() {
                 val local=packageManager.getPackageInfo(packageName,0).versionName.orEmpty()
                 val size=available.optLong("sizeBytes",0)
                 val sha=available.optString("sha256")
-                check(size>1024*1024 && sha.matches(Regex("[0-9a-fA-F]{64}"))){"APK non vérifiée par le routeur"}
+                check(size>0 && sha.matches(Regex("[0-9a-fA-F]{64}"))){"APK non vérifiée par le routeur"}
                 runOnUiThread {
                     if(compareUpdateVersion(remote,local)>0){
                         AlertDialog.Builder(this)
@@ -210,7 +210,7 @@ class CamActivity:Activity() {
     private fun pairAndStart(){
         if(busy)return
         busy=true
-        val requested=listOf("auto","360p","480p","720p")[quality.selectedItemPosition]
+        val requested=listOf("auto","144p","240p","360p","480p","720p")[quality.selectedItemPosition]
         status.text="Contrôle de la compatibilité du routeur…"
         thread(name="shizzicam-compat"){
             try {

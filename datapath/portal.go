@@ -2045,9 +2045,9 @@ func (m *TrafficManager) writePortalHTML(
         shortSHA := clientApp.SHA256
         if len(shortSHA)>12 {shortSHA=shortSHA[:12]}
         content += fmt.Sprintf(`<section class="app-download"><div class="eyebrow">APPLICATION CLIENT</div>
-<strong>Shizzi+ %s</strong>
-<p>Téléchargement local sécurisé, sans Internet ni quota Data.</p>
-<a class="download-button" data-size="%d" data-sha256="%s" href="%s">Télécharger Shizzi+</a>
+<strong>Shizzi+Cam %s</strong>
+<p>Application pour transformer un smartphone en caméra. Téléchargement local sans Internet.</p>
+<a class="download-button" data-size="%d" data-sha256="%s" href="%s">Télécharger Shizzi+Cam</a>
 <div id="shizzi-download-status" class="app-note" aria-live="polite">Vérification de l'APK avant téléchargement.</div>
 <div class="app-meta">%s · %s · SHA-256 %s…</div>
 <div class="app-note">Lien direct : %s</div></section>`,
@@ -2078,9 +2078,9 @@ func (m *TrafficManager) writePortalHTML(
         shortSHA := camViewerApp.SHA256
         if len(shortSHA)>12 {shortSHA=shortSHA[:12]}
         content += fmt.Sprintf(`<section class="app-download"><div class="eyebrow">VISIONNEUSE MOSAÏQUE</div>
-<strong>ShizziCam Admin %s</strong>
-<p>Visionneuse multi-caméras. Télécharger sans Internet ni voucher.</p>
-<a class="download-button" data-size="%d" data-sha256="%s" href="%s">Télécharger ShizziCam Admin</a>
+<strong>ShizziCam Visionneuse %s</strong>
+<p>Application pour regarder les flux, écouter, parler et déclencher l’alarme.</p>
+<a class="download-button" data-size="%d" data-sha256="%s" href="%s">Télécharger ShizziCam Visionneuse</a>
 <div id="shizzicam-admin-download-status" class="app-note" aria-live="polite">Vérification de l'APK avant téléchargement.</div>
 <div class="app-meta">%s · %s · SHA-256 %s…</div></section>`,
             html.EscapeString(camViewerApp.Version),camViewerApp.SizeBytes,

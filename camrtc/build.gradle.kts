@@ -16,5 +16,6 @@ android {
     kotlinOptions { jvmTarget = "17" }
 }
 dependencies {
-    api("io.github.webrtc-sdk:android:150.7871.01")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20250107")
 }

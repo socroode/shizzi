@@ -13,8 +13,8 @@ android {
         applicationId = "dev.shizzi.conso"
         minSdk = 30
         targetSdk = 35
-        versionCode = 24
-        versionName = "0.3.4-avc-opus-test"
+        versionCode = 25
+        versionName = "0.3.5-relay18-test"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

@@ -27,3 +27,8 @@ local.properties
 
 # Claude Code session state and its git worktrees.
 /.claude/
+
+/camrtc/build/
+/camadmin/build/
+/cammonitor/build/
+/accounts/build/

@@ -16,6 +16,12 @@ import android.hardware.SensorManager
 import android.widget.ImageView
 import java.io.ByteArrayOutputStream
 import dev.shizzi.camrtc.CamH264Encoder
+import dev.shizzi.camrtc.CamQuality
+import dev.shizzi.camrtc.CamRate
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
+import android.os.PowerManager
 
 /**
  * Actual captured frames: Android camera -> local ImageView and HTTPS frame uploader.
@@ -25,6 +31,7 @@ import dev.shizzi.camrtc.CamH264Encoder
 internal class RelayCamera(
     private val context: Context,
     private val onFrame: (ByteArray) -> Unit,
+    private val nowUs: () -> Long,
     private val onStatus: (String) -> Unit,
     private val onH264: (ByteArray,Int,Int,Int,Long) -> Unit = {_,_,_,_,_->}
 ) {
@@ -33,6 +40,7 @@ internal class RelayCamera(
     private val main = Handler(Looper.getMainLooper())
     private var camera: Camera? = null
     @Volatile private var deviceDegrees = 0
+    @Volatile private var rotationOverride=-1
     private var sensorDegrees = 0
     private var frontFacing = false
     private val orientation = object : OrientationEventListener(context.applicationContext,
@@ -47,7 +55,7 @@ internal class RelayCamera(
     private var side = "back"
     private var torch = false
     private var zoom = 1f
-    private var quality = "auto"
+    @Volatile private var quality = "auto"
     private var width = 640
     private var height = 480
     private var lastFrameAt = 0L
@@ -56,7 +64,38 @@ internal class RelayCamera(
     private var avc:CamH264Encoder?=null
     private var avcWidth=0
     private var avcHeight=0
-    private var h264Unsupported=false
+    @Volatile private var h264Unsupported=false
+    @Volatile var activeWidth=0
+    @Volatile var activeHeight=0
+    @Volatile var activeQuality="360p"
+    @Volatile var videoCodec="indisponible"
+    val capturedRate=CamRate()
+    val encodedRate=CamRate()
+    @Volatile var dropped=0L
+    private val generation=AtomicInteger()
+    private data class Frame(val data:ByteArray,val w:Int,val h:Int,val turn:Int,val pts:Long,val generation:Int)
+    private val pending=ArrayBlockingQueue<Frame>(2)
+    private val encoderWorker=Executors.newSingleThreadExecutor()
+    @Volatile private var encoding=true
+    @Volatile private var autoLevel=2
+    @Volatile private var keyFrameRequested=false
+    init {encoderWorker.execute{encodeLoop()}}
+    fun requestKeyFrame(){keyFrameRequested=true}
+    private var autoUpVotes=0
+    private var lastAutoChange=0L
+    fun adjustAuto(level:Int){
+        handler.post{
+            if(quality!="auto")return@post
+            val target=level.coerceIn(0,4)
+            val now=android.os.SystemClock.elapsedRealtime()
+            val next=when{
+                target<autoLevel->{autoUpVotes=0;target}
+                target>autoLevel&&++autoUpVotes>=3&&now-lastAutoChange>=8000->{autoUpVotes=0;autoLevel+1}
+                else->autoLevel
+            }
+            if(next!=autoLevel){autoLevel=next;lastAutoChange=now;open()}
+        }
+    }
     @Volatile private var preview: ImageView? = null
     @Volatile private var latest: ByteArray? = null
     @Volatile var state = "Capture inactive"
@@ -83,10 +122,8 @@ internal class RelayCamera(
             camera?.stopPreview()
             camera?.release()
             camera = null
-            avc?.close()
-            avc=null
-            avcWidth=0
-            avcHeight=0
+            generation.incrementAndGet()
+            pending.clear()
             h264Unsupported=false
             texture?.release()
             texture = null
@@ -108,11 +145,9 @@ internal class RelayCamera(
             val supported = params.supportedPreviewFormats ?: emptyList()
             if (ImageFormat.NV21 !in supported) throw IllegalStateException("Capture NV21 indisponible")
             params.previewFormat = ImageFormat.NV21
-            val target = when (quality) {
-                "360p" -> 360
-                "720p" -> 720
-                else -> 480
-            }
+            params.supportedPreviewFpsRange?.filter{it.size==2&&it[1]>=22000}
+                ?.minByOrNull{kotlin.math.abs(it[1]-22000)}?.let{params.setPreviewFpsRange(it[0],it[1])}
+            val target = CamQuality.profile(if(quality=="auto") CamQuality.profiles[autoLevel].name else quality).height
             val sizes = params.supportedPreviewSizes ?: emptyList()
             val chosen = sizes.minByOrNull {
                 kotlin.math.abs(it.height - target) * 3 + kotlin.math.abs(it.width * 9 - it.height * 16) / 16
@@ -139,51 +174,15 @@ internal class RelayCamera(
             cam.setPreviewCallbackWithBuffer { bytes, device ->
                 try {
                     val now = android.os.SystemClock.elapsedRealtime()
-                    if (now - lastFrameAt >= (if(h264Unsupported) 125 else 45)) {
-                        lastFrameAt = now
-                        val turn = CamFrameRotation.frameRotation(sensorDegrees, deviceDegrees, frontFacing)
-                        val rotated = CamFrameRotation.rotateNV21(bytes, width, height, turn)
-                        val outWidth = if (turn == 90 || turn == 270) height else width
-                        val outHeight = if (turn == 90 || turn == 270) width else height
-                        if(!h264Unsupported) {
-                            try {
-                                if(avc==null || avcWidth!=outWidth || avcHeight!=outHeight){
-                                    avc?.close()
-                                    avc=CamH264Encoder(outWidth,outHeight)
-                                    avcWidth=outWidth;avcHeight=outHeight
-                                }
-                                avc?.encode(rotated,now*1000L){ encoded,flags,pts ->
-                                    onH264(encoded,outWidth,outHeight,flags,pts)
-                                }
-                            } catch (e:Exception) {
-                                avc?.close()
-                                avc=null
-                                h264Unsupported=true
-                                onStatus("H.264 matériel indisponible : "+(e.message?:"erreur")+" · secours JPEG non conforme 22 FPS")
-                            }
-                        }
-                        // Local preview is sparse; H264 is the primary router stream.
-                        if(now-lastPreviewAt<500 && !h264Unsupported) return@setPreviewCallbackWithBuffer
-                        lastPreviewAt=now
-                        val out = ByteArrayOutputStream(96 * 1024)
-                        val ok = YuvImage(rotated, ImageFormat.NV21, outWidth, outHeight, null)
-                            .compressToJpeg(Rect(0, 0, outWidth, outHeight), 55, out)
-                        if (ok) {
-                            val jpg = out.toByteArray()
-                            if (jpg.size <= 180000) {
-                                frameCount++
-                                latest = jpg
-                                preview?.let { view ->
-                                    val bitmap = BitmapFactory.decodeByteArray(jpg, 0, jpg.size)
-                                    if (bitmap != null) main.post { if (preview === view) view.setImageBitmap(bitmap) }
-                                }
-                                if(h264Unsupported)onFrame(jpg)
-                                if (frameCount == 1L) {
-                                    state = "Première image redressée reçue ($outWidth × $outHeight · ${turn}°)"
-                                    onStatus(state)
-                                }
-                            } else if (frameCount == 0L) onStatus("Image trop volumineuse pour le relais")
-                        }
+                    if (now >= lastFrameAt) {
+                        // Carry fractional cadence across 30 FPS callbacks; resetting to now would cap at 15 FPS.
+                        if(lastFrameAt==0L||now-lastFrameAt>100)lastFrameAt=now
+                        lastFrameAt += 45
+                        capturedRate.event()
+                        val turn=if(rotationOverride<0)CamFrameRotation.frameRotation(sensorDegrees,deviceDegrees,frontFacing) else rotationOverride
+                        val frame=Frame(bytes.copyOf(),width,height,turn,nowUs(),generation.get())
+                        if(!pending.offer(frame)){pending.poll();pending.offer(frame);dropped++}
+
                     }
                 } catch (e: Exception) {
                     onStatus("Capture : " + (e.message ?: e.javaClass.simpleName))
@@ -201,6 +200,59 @@ internal class RelayCamera(
             camera = null
         }
     }
+    private fun encodeLoop(){
+        var previousGeneration=-1
+        var previousProfile=""
+        var previousTurn=-1
+        try{
+            while(encoding&&!Thread.currentThread().isInterrupted){
+                val frame=pending.take()
+                if(frame.generation!=generation.get())continue
+                val profile=CamQuality.profile(if(quality=="auto")CamQuality.profiles[autoLevel].name else quality)
+                val portrait=frame.turn==90||frame.turn==270
+                if(previousGeneration!=frame.generation||previousProfile!=profile.name||previousTurn!=frame.turn){
+                    avc?.close();avc=null
+                    h264Unsupported=false
+                    val w=if(portrait)profile.height else profile.width
+                    val h=if(portrait)profile.width else profile.height
+                    try{
+                        avc=CamH264Encoder(w,h,profile.bitrate)
+                        activeWidth=avc!!.width;activeHeight=avc!!.height
+                        activeQuality=profile.name;videoCodec=if(avc!!.hardware)"H264 matériel" else "H264 logiciel"
+                        onStatus("$videoCodec · $activeWidth × $activeHeight · ${profile.name}")
+                    }catch(e:Exception){
+                        h264Unsupported=true;videoCodec="indisponible"
+                        onStatus("Échec H.264 : ${e.message}. Aucun direct H.264 disponible.")
+                    }
+                    previousGeneration=frame.generation;previousProfile=profile.name;previousTurn=frame.turn
+                }
+                if(h264Unsupported)continue
+                val rotated=CamFrameRotation.rotateNV21(frame.data,frame.w,frame.h,frame.turn)
+                val rw=if(portrait)frame.h else frame.w
+                val rh=if(portrait)frame.w else frame.h
+                val codec=avc?:continue
+                val scaled=CamFrameRotation.fitNV21(rotated,rw,rh,codec.width,codec.height)
+                if(keyFrameRequested){codec.requestKeyFrame();keyFrameRequested=false}
+                codec.encode(scaled,frame.pts){bytes,flags,pts->
+                    if(flags and 2==0)encodedRate.event()
+                    onH264(bytes,codec.width,codec.height,flags,pts)
+                }
+                val now=android.os.SystemClock.elapsedRealtime()
+                if(now-lastPreviewAt>=500&&preview!=null){
+                    lastPreviewAt=now
+                    val out=ByteArrayOutputStream()
+                    YuvImage(scaled,ImageFormat.NV21,codec.width,codec.height,null)
+                        .compressToJpeg(Rect(0,0,codec.width,codec.height),45,out)
+                    val jpg=out.toByteArray();latest=jpg
+                    val bitmap=BitmapFactory.decodeByteArray(jpg,0,jpg.size)
+                    main.post{preview?.setImageBitmap(bitmap)}
+                }
+            }
+        }catch(_:InterruptedException){}
+        catch(e:Exception){videoCodec="indisponible";onStatus("Encodage arrêté : ${e.message}")}
+        finally{avc?.close();avc=null}
+    }
+
     /** Result is dispatched after the camera device operation, never at enqueue. */
     fun control(command: String, value: String, done: (Boolean,String) -> Unit = { _,_ -> }) {
         handler.post {
@@ -237,8 +289,13 @@ internal class RelayCamera(
                         torch = value=="on"
                         if (torch) "Flash activé" else "Flash désactivé"
                     }
+                    "rotation" -> {
+                        check(value in listOf("auto","0","90","180","270")){"Rotation invalide"}
+                        rotationOverride=if(value=="auto")-1 else value.toInt()
+                        "Orientation $value réglée"
+                    }
                     "quality" -> {
-                        check(value in listOf("auto","360p","480p","720p")) { "Qualité inconnue" }
+                        check(value in CamQuality.names) { "Qualité inconnue" }
                         quality = value
                         open()
                         check(camera != null) { "Échec du changement de qualité" }
@@ -257,7 +314,7 @@ internal class RelayCamera(
     fun stop() {
         orientation.disable()
         handler.post {
-            try { avc?.close();avc=null;camera?.setPreviewCallbackWithBuffer(null); camera?.stopPreview(); camera?.release() }
+            try { generation.incrementAndGet();encoding=false;encoderWorker.shutdownNow();camera?.setPreviewCallbackWithBuffer(null); camera?.stopPreview(); camera?.release() }
             catch (_: Exception) {}
             camera = null
             texture?.release()

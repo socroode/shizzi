@@ -63,7 +63,7 @@ func TestPortalShowsDirect192DownloadLink(t *testing.T) {
 	page := string(response)
 	for _, expected := range []string{
 		`http://192.0.2.1/shizzi-plus.apk`,
-		`Shizzi+ 0.2.10-test`,
+		`Shizzi+Cam 0.2.10-test`,
 		`Shizzi-Plus-0.2.10-test.apk`,
 	} {
 		if !strings.Contains(page, expected) {

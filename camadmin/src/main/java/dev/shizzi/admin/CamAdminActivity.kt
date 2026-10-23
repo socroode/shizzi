@@ -14,6 +14,10 @@ import android.media.MediaRecorder
 import android.Manifest
 import android.content.pm.PackageManager
 import android.view.MotionEvent
+import dev.shizzi.camrtc.*
+import android.os.SystemClock
+import java.io.DataOutputStream
+import java.util.concurrent.ArrayBlockingQueue
 import dev.shizzi.camrtc.CamOpusEncoder
 import dev.shizzi.camrtc.CamOpusDecoder
 import android.net.ConnectivityManager
@@ -44,6 +48,22 @@ import javax.net.ssl.HttpsURLConnection
  */
 class CamAdminActivity : Activity() {
     private lateinit var root: LinearLayout
+    private lateinit var footer: LinearLayout
+    private lateinit var interphoneState: TextView
+    private val clock=CamClock()
+    private val renderedRates=ConcurrentHashMap<String,CamRate>()
+    private val renderedAt=ConcurrentHashMap<String,Long>()
+    private val latency=ConcurrentHashMap<String,Double>()
+    private val lastDimensions=ConcurrentHashMap<String,String>()
+    private val tileLabels=ConcurrentHashMap<String,TextView>()
+    private val videoInterruptions=ConcurrentHashMap<String,Long>()
+    @Volatile private var audioConnection:HttpsURLConnection?=null
+    @Volatile private var talkConnection:HttpsURLConnection?=null
+    @Volatile private var talkTarget=""
+    @Volatile private var talkStartedUs=0L
+    private val activeQualities=ConcurrentHashMap<String,String>()
+    private var lastTelemetry=0L
+    private var lastClockSync=0L
     private lateinit var status: TextView
     private lateinit var tileHolder: LinearLayout
     private var wifi: Network? = null
@@ -62,6 +82,7 @@ class CamAdminActivity : Activity() {
     private val commands = Executors.newSingleThreadExecutor()
     private val eventPoll = Executors.newSingleThreadScheduledExecutor()
     private val eventCursors = mutableMapOf<String,Long>()
+    private val sessionBusy=ConcurrentHashMap.newKeySet<String>()
     private val pendingCommands = ConcurrentHashMap<String,String>()
     private val audioExecutor = Executors.newSingleThreadExecutor()
     private val talkExecutor = Executors.newSingleThreadExecutor()
@@ -74,6 +95,7 @@ class CamAdminActivity : Activity() {
     private var zoom = 1f
     private var gridCount = 4
     private var fullScreen = false
+    private var rotationIndex=0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -81,7 +103,11 @@ class CamAdminActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(18,20,18,24)
         }
-        setContentView(ScrollView(this).apply { addView(root) })
+        val shell=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL}
+        shell.addView(ScrollView(this).apply{addView(root)},LinearLayout.LayoutParams(-1,0,1f))
+        footer=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(12,4,12,4);visibility=View.GONE}
+        shell.addView(footer)
+        setContentView(shell)
         loginScreen()
         poll.scheduleWithFixedDelay({ updateTiles() }, 750, 300, TimeUnit.MILLISECONDS)
         audioExecutor.execute { playSelectedAudio() }
@@ -104,6 +130,9 @@ class CamAdminActivity : Activity() {
     }
 
     private fun loginScreen() {
+        footer.visibility=View.GONE
+        audioConnection?.disconnect();talkConnection?.disconnect();talking=false
+        streamGeneration.incrementAndGet();streamConnections.values.forEach{it.disconnect()}
         selected = ""
         audioSelected = ""
         cameras.clear()
@@ -139,6 +168,11 @@ class CamAdminActivity : Activity() {
                     wifi=net
                     pin=cert
                     admin=api
+                    val capabilities=this.api("GET","/api/v1/cam/capabilities")
+                    check(capabilities.optString("protocol")=="shizzicam-relay-avc-opus-v3"){
+                        "Cette Visionneuse nécessite ShizziCam HOTSPOT 0.4.3.5.18 ou un relais v3 compatible"
+                    }
+                    clock.synchronize{this.api("GET","/api/v1/cam/clock")}
                     runOnUiThread { mosaicScreen() }
                 } catch (e: Exception) {
                     runOnUiThread { status.text=e.message ?: "Connexion impossible" }
@@ -175,7 +209,7 @@ class CamAdminActivity : Activity() {
     private fun mosaicScreen() {
         root.removeAllViews()
         root.addView(label("ShizziCam · Mosaïque",25f))
-        root.addView(label("Images JPEG et audio Opus 64 kbps via le routeur — candidate de test"))
+        root.addView(label("H.264 et Opus 128 kbps via le routeur · version de test"))
         val toolbar=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
         toolbar.addView(button("Actualiser"){refresh()})
         toolbar.addView(button("Mise à jour"){checkLocalUpdate()})
@@ -210,6 +244,11 @@ class CamAdminActivity : Activity() {
             }
         })
         root.addView(selection)
+        root.addView(button("Orientation : Auto / 0° / 90° / 180° / 270°"){
+            val choices=listOf("auto","0","90","180","270")
+            rotationIndex=(rotationIndex+1)%choices.size
+            sendControl("rotation",choices[rotationIndex])
+        })
         val adjust=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
         val zoomLabel=label("1.0×")
         adjust.addView(button("Zoom −"){
@@ -228,28 +267,44 @@ class CamAdminActivity : Activity() {
             sendControl("torch",if(torchOn)"on" else "off")
         })
         root.addView(adjust)
+        footer.removeAllViews();footer.visibility=View.VISIBLE
+        interphoneState=label("Microphone coupé",13f).apply{setTextColor(Color.GRAY)}
+        footer.addView(interphoneState)
         val sound=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
-        sound.addView(button("Écouter caméra"){audioSelected=selected;status.text="Écoute de la caméra $selected demandée"})
-        sound.addView(button("Couper écoute"){audioSelected="";status.text="Écoute coupée"})
+        sound.addView(button("Écouter"){audioConnection?.disconnect();audioSelected=selected;status.text="Écoute de la caméra $selected demandée"})
+        sound.addView(button("Couper écoute"){audioSelected="";audioConnection?.disconnect();status.text="Écoute coupée"})
         sound.addView(button("Micro caméra"){
             micOn=!micOn
             sendControl("mic",if(micOn)"on" else "off")
         })
-        sound.addView(Button(this).apply {
+        footer.addView(sound)
+        val talkBar=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        talkBar.addView(Button(this).apply{
             text="Maintenir pour parler"
-            setOnTouchListener { _,e ->
+            setOnTouchListener{_,e->
                 when(e.actionMasked){
-                    MotionEvent.ACTION_DOWN -> {startTalking();true}
-                    MotionEvent.ACTION_UP,MotionEvent.ACTION_CANCEL -> {talking=false;true}
-                    else -> true
+                    MotionEvent.ACTION_DOWN->{startTalking();true}
+                    MotionEvent.ACTION_UP,MotionEvent.ACTION_CANCEL->{stopTalking();true}
+                    else->true
                 }
             }
         })
-        root.addView(sound)
-        val qualities=listOf("auto","360p","480p","720p")
+        talkBar.addView(button("Couper mon micro"){stopTalking()})
+        footer.addView(talkBar)
+        val alarmBar=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
+        alarmBar.addView(button("Alarme"){
+            val target=selected
+            if(target.isNotEmpty())AlertDialog.Builder(this).setTitle("Alarme caméra $target")
+                .setMessage("Déclencher la sirène pendant 10 secondes maximum ?")
+                .setPositiveButton("Déclencher"){_,_->if(selected==target)sendControl("alarm","start")}
+                .setNegativeButton("Annuler",null).show()
+        })
+        alarmBar.addView(button("Arrêter alarme"){sendControl("alarm","stop")})
+        root.addView(alarmBar)
+        val qualities=listOf("auto","144p","240p","360p","480p","720p")
         val qualitySpinner=Spinner(this).apply {
             adapter=ArrayAdapter(this@CamAdminActivity,android.R.layout.simple_spinner_dropdown_item,
-                listOf("Auto","360p","480p","720p"))
+                listOf("Auto","144p","240p","360p","480p","720p"))
         }
         root.addView(qualitySpinner)
         root.addView(button("Appliquer qualité"){
@@ -268,7 +323,7 @@ class CamAdminActivity : Activity() {
                 val local=packageManager.getPackageInfo(packageName,0).versionName.orEmpty()
                 val sha=entry.getString("sha256")
                 val size=entry.getLong("sizeBytes")
-                check(size>1024*1024 && sha.matches(Regex("[0-9a-fA-F]{64}"))){"APK non vérifiée"}
+                check(size>0 && sha.matches(Regex("[0-9a-fA-F]{64}"))){"APK non vérifiée"}
                 fun numbers(s:String)=s.substringBefore("-").split(".").mapNotNull{it.toIntOrNull()}
                 val r=numbers(remote);val l=numbers(local)
                 val upgrade=(0 until maxOf(r.size,l.size)).firstOrNull{
@@ -278,7 +333,7 @@ class CamAdminActivity : Activity() {
                     if(upgrade){
                         AlertDialog.Builder(this)
                             .setTitle("Mise à jour visionneuse")
-                            .setMessage("ShizziCam Admin $remote disponible localement (${size/1048576} Mio).")
+                            .setMessage("ShizziCam Visionneuse $remote disponible localement (${size/1048576} Mio).")
                             .setPositiveButton("Télécharger"){_,_->
                                 startActivity(Intent(Intent.ACTION_VIEW,
                                     Uri.parse("http://192.0.2.1/shizzicam-admin.apk?sha256=$sha")))
@@ -318,6 +373,7 @@ class CamAdminActivity : Activity() {
         streamConnections.clear()
         tileImages.clear()
         tileTextures.clear()
+        tileLabels.clear()
         tileHolder.removeAllViews()
         val names=if(fullScreen && selected.isNotEmpty()) listOf(selected)
             else cameras.keys.take(gridCount)
@@ -334,9 +390,8 @@ class CamAdminActivity : Activity() {
                 setPadding(3,3,3,3)
                 setBackgroundColor(if(name==selected)Color.rgb(50,85,105) else Color.DKGRAY)
             }
-            item.addView(label("Cam $name · ${cameras[name] ?: "?"}%",12f).apply{
-                setTextColor(Color.WHITE)
-            })
+            val tileLabel=label("Cam $name · ${cameras[name] ?: "?"}% · connexion…",12f).apply{setTextColor(Color.WHITE)}
+            tileLabels[name]=tileLabel;item.addView(tileLabel)
             val image=ImageView(this).apply{
                 layoutParams=LinearLayout.LayoutParams(width-8,(width-8)*9/16)
                 setBackgroundColor(Color.BLACK)
@@ -360,7 +415,13 @@ class CamAdminActivity : Activity() {
                     streamVideo(name,texture,generation,st)
                 }
                 override fun onSurfaceTextureSizeChanged(st:SurfaceTexture,w:Int,h:Int){}
-                override fun onSurfaceTextureUpdated(st:SurfaceTexture){}
+                override fun onSurfaceTextureUpdated(st:SurfaceTexture){
+                    if(generation==streamGeneration.get()){
+                        renderedRates.getOrPut(name){CamRate()}.event()
+                        renderedAt[name]=SystemClock.elapsedRealtime()
+                    }
+                }
+
                 override fun onSurfaceTextureDestroyed(st:SurfaceTexture):Boolean=true
             }
             if(texture.isAvailable)texture.surfaceTexture?.let{streamVideo(name,texture,generation,it)}
@@ -400,7 +461,19 @@ class CamAdminActivity : Activity() {
                             stream.readFully(data)
                             if(decoder==null || decoder.width!=w || decoder.height!=h || (flags and 2!=0)){
                                 decoder?.close()
-                                decoder=CamH264Decoder(surface,w,h)
+                                decoder=CamH264Decoder(surface,w,h,clock){renderedPts,renderedClockUs->
+                                    if(generation==streamGeneration.get()){
+                                        if(clock.ready)latency[name]=((renderedClockUs-renderedPts)/1000.0).coerceAtLeast(0.0)
+                                    }
+                                }
+                                lastDimensions[name]="$w × $h"
+                                runOnUiThread{
+                                    val ratio=(w.toFloat()/h)/(texture.width.toFloat()/texture.height.coerceAtLeast(1))
+                                    val matrix=android.graphics.Matrix()
+                                    matrix.setScale(if(ratio<1f)ratio else 1f,if(ratio>1f)1f/ratio else 1f,
+                                        texture.width/2f,texture.height/2f)
+                                    texture.setTransform(matrix)
+                                }
                             }
                             val shown=decoder.decode(data,flags,pts)
                             if(shown)runOnUiThread {
@@ -411,6 +484,7 @@ class CamAdminActivity : Activity() {
                             }
                         }
                     }catch(e:Exception){
+                        videoInterruptions.merge(name,1L){a,b->a+b}
                         android.util.Log.w("ShizziCam","H264 stream $name unavailable",e)
                         runOnUiThread {
                             if(generation==streamGeneration.get()&&tileTextures[name]===texture){
@@ -431,11 +505,13 @@ class CamAdminActivity : Activity() {
 
     private fun selectCam(account:String){
         if(account !in cameras) return
+        stopTalking()
         selected=account
+        audioConnection?.disconnect()
+        audioSelected=account
         // Select the first camera's microphone automatically. Only one is audible.
         if(audioSelected.isEmpty()) audioSelected=account
         status.text="Caméra $account sélectionnée · association…"
-        renderGrid()
         commands.execute {
             try {
                 ensureSession(account)
@@ -480,7 +556,11 @@ class CamAdminActivity : Activity() {
         if(admin==null||!alive)return
         val active=selected
         if(active.isEmpty())return
-        val sid= synchronized(sessions){sessions[active]} ?:return
+        val sid= synchronized(sessions){sessions[active]}
+        if(sid==null){
+            if(sessionBusy.add(active))commands.execute{try{ensureSession(active)}catch(_:Exception){}finally{sessionBusy.remove(active)}}
+            return
+        }
         try {
             val after=synchronized(sessions){eventCursors[active] ?:0L}
             val events=api("GET","/api/v1/cam/events?side=viewer&account="+
@@ -504,161 +584,122 @@ class CamAdminActivity : Activity() {
                 }
             }
         }catch(e:Exception){
+            synchronized(sessions){sessions.remove(active);eventCursors.remove(active)}
             android.util.Log.w("ShizziCam","Command acknowledgement unavailable",e)
         }
     }
 
-    private fun updateTiles() {
+    private fun updateTiles(){
         if(!alive||admin==null)return
-        val names=tileImages.keys.toList()
-        for(name in names) {
-            if (!fetching.add(name)) continue
-            frames.execute {
-                try {
-                    val c=url("/api/v1/cam/frame?account="+URLEncoder.encode(name,"UTF-8"))
-                    try {
-                        if(c.responseCode==200) {
-                            val bytes=c.inputStream.use { it.readBytes() }
-                            if(bytes.isNotEmpty() && bytes.size<=180000){
-                                val bitmap=BitmapFactory.decodeByteArray(bytes,0,bytes.size)
-                                if(bitmap!=null) runOnUiThread {
-                                    tileImages[name]?.setImageBitmap(bitmap)
-                                }
-                            }
-                        }
-                    }finally{c.disconnect()}
-                }catch(e:Exception){android.util.Log.w("ShizziCam","Image $name inaccessible",e)}
-                finally{fetching.remove(name)}
+        val now=SystemClock.elapsedRealtime()
+        val labels=tileLabels.toMap()
+        for((name,view) in labels){
+            val age=now-(renderedAt[name]?:0L)
+            runOnUiThread{
+                view.text="Cam $name · ${cameras[name]?:-1}% · "+
+                    if(age<1500)"H.264 en lecture · ${activeQualities[name].orEmpty()} · ${lastDimensions[name].orEmpty()}" else "direct interrompu / en attente"
             }
         }
+        if(now-lastTelemetry<2000)return
+        lastTelemetry=now
+        try{
+            if(now-lastClockSync>30000){clock.synchronize{api("GET","/api/v1/cam/clock")};lastClockSync=now}
+            for(name in labels.keys){
+                val fps=renderedRates[name]?.sample()?:0.0
+                val fresh=now-(renderedAt[name]?:0L)<3000
+                api("POST","/api/v1/cam/telemetry?side=viewer&account="+URLEncoder.encode(name,"UTF-8"),
+                    JSONObject().put("renderedFps",fps).put("latencyMillis",if(fresh)latency[name]?:JSONObject.NULL else JSONObject.NULL)
+                        .put("clockUncertaintyMillis",clock.uncertaintyUs/1000.0)
+                        .put("interruptions",videoInterruptions[name]?:0L))
+            }
+            val metrics=api("GET","/api/v1/cam/metrics").optJSONArray("cameras")
+            if(metrics!=null)for(i in 0 until metrics.length()){
+                val item=metrics.getJSONObject(i)
+                activeQualities[item.optString("account")]=item.optString("quality")
+                if(talking&&item.optString("account")==talkTarget&&item.optDouble("intercomInKbps")>0){
+                    val state=if(CamPlaybackAcknowledgement.confirmed(item,talkStartedUs))
+                        "Relais accepté · lecture signalée par la caméra" else "Transmission acceptée par le relais · lecture non confirmée"
+                    talkState(state,Color.rgb(0,135,55))
+                }
+            }
+        }catch(e:Exception){android.util.Log.w("ShizziCam","Telemetry unavailable",e)}
     }
-
-    /** Push-to-talk, 64 kbps Opus via router. One chosen camera at a time. */
+    private fun talkState(text:String,color:Int){runOnUiThread{if(color==Color.rgb(0,135,55)&&!talking)return@runOnUiThread;if(::interphoneState.isInitialized){interphoneState.text=text;interphoneState.setTextColor(color)}}}
+    private fun stopTalking(){talking=false;talkConnection?.disconnect();talkState("Microphone coupé",Color.GRAY)}
     private fun startTalking(){
         val cam=selected
-        if(cam.isEmpty() || admin==null) {
-            status.text="Sélectionne une caméra avant de parler"
-            return
-        }
+        if(cam.isEmpty()||admin==null)return
         if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){
-            status.text="Autorise le microphone pour utiliser l'interphone"
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO),1080)
-            return
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO),1080);return
         }
         if(talking)return
-        talking=true
-        talkExecutor.execute {
-            var record:AudioRecord?=null
-            var encoder:CamOpusEncoder?=null
-            try {
+        talking=true;talkTarget=cam;talkStartedUs=clock.nowUs()
+        talkState("Connexion interphone…",Color.rgb(210,125,0))
+        talkExecutor.execute{
+            var record:AudioRecord?=null;var encoder:CamOpusEncoder?=null
+            val queue=ArrayBlockingQueue<CamAudioPacket>(6)
+            val sender=Executors.newSingleThreadExecutor()
+            try{
                 val session=ensureSession(cam)
-                if(!talking || !alive)return@execute
-                val rate=48000
-                val min=AudioRecord.getMinBufferSize(rate,AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT)
-                check(min>0){"Microphone 48 kHz indisponible"}
-                record=AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION,rate,
-                    AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,maxOf(3840,min*2))
-                check(record.state==AudioRecord.STATE_INITIALIZED){"Microphone interphone indisponible"}
-                encoder=CamOpusEncoder()
-                val buffer=ByteArray(1920)
-                record.startRecording()
-                runOnUiThread{status.text="Interphone actif : $cam (Opus 64 kbps)"}
-                while(talking&&alive&&!Thread.currentThread().isInterrupted){
-                    val n=record.read(buffer,0,buffer.size)
-                    if(n<=0)continue
-                    for(packet in encoder.encode(buffer.copyOf(n))) {
-                        if(!talking || packet.isEmpty())break
-                        val endpoint="/api/v1/cam/talk?account="+URLEncoder.encode(cam,"UTF-8")+
-                            "&session="+URLEncoder.encode(session,"UTF-8")
-                        val c=url(endpoint)
-                        try {
-                            c.requestMethod="POST"
-                            c.doOutput=true
-                            c.setRequestProperty("Content-Type","audio/opus")
-                            c.setFixedLengthStreamingMode(packet.size)
-                            c.outputStream.use{it.write(packet)}
-                            if(c.responseCode!=200)error("Interphone : HTTP "+c.responseCode)
-                        }finally{c.disconnect()}
+                if(!talking)return@execute
+                val endpoint="/api/v1/cam/talk-stream?account="+URLEncoder.encode(cam,"UTF-8")+"&session="+URLEncoder.encode(session,"UTF-8")
+                val c=url(endpoint);talkConnection=c;c.requestMethod="POST";c.doOutput=true;c.readTimeout=0
+                c.setRequestProperty("Content-Type","application/x-shizzicam-opus-v3");c.setChunkedStreamingMode(1024)
+                sender.execute{
+                    try{
+                        val output=DataOutputStream(c.outputStream)
+                        while(talking&&alive){
+                            val packet=queue.poll(300,TimeUnit.MILLISECONDS)?:continue
+                            if(packet.flags==0&&clock.nowUs()-packet.ptsUs>180000)continue
+                            packet.write(output)
+                        }
+                    }catch(e:Exception){if(talking){talking=false;talkState("Échec de transmission : ${e.message}",Color.RED)}}
+                }
+                val min=AudioRecord.getMinBufferSize(48000,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT)
+                check(min>0)
+                record=AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION,48000,AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,maxOf(3840,min))
+                check(record.state==AudioRecord.STATE_INITIALIZED)
+                encoder=CamOpusEncoder();val buffer=ByteArray(1920);record.startRecording()
+                while(talking&&alive){
+                    val n=record.read(buffer,0,buffer.size);check(n>0&&n%2==0)
+                    for(packet in encoder.encode(buffer.copyOf(n),clock.nowUs()-n*1000000L/96000)){
+                        if(!queue.offer(packet)){queue.clear();encoder.configuration?.let{queue.offer(it)};queue.offer(packet)}
                     }
                 }
-            }catch(e:Exception){
-                android.util.Log.w("ShizziCam","Talk transmission failed",e)
-                runOnUiThread{status.text="Interphone : "+(e.message?:"indisponible")}
-            }finally{
-                talking=false
-                runCatching{record?.stop()}
-                record?.release()
-                encoder?.close()
+            }catch(e:Exception){if(talking)talkState("Interphone : ${e.message}",Color.RED)}
+            finally{
+                talking=false;sender.shutdownNow();talkConnection?.disconnect();talkConnection=null
+                runCatching{record?.stop()};record?.release();encoder?.close()
             }
+        }
+    }
+    private fun playSelectedAudio(){
+        while(alive&&!Thread.currentThread().isInterrupted){
+            val name=audioSelected
+            if(admin==null||name.isEmpty()){try{Thread.sleep(150)}catch(_:InterruptedException){break};continue}
+            var c:HttpsURLConnection?=null;var player:AudioTrack?=null
+            val decoder=CamOpusDecoder()
+            try{
+                c=url("/api/v1/cam/audio-stream?account="+URLEncoder.encode(name,"UTF-8"));audioConnection=c;c.readTimeout=3000
+                check(c.responseCode==200){"Écoute HTTP ${c.responseCode}"}
+                player=CamAudioPlayback.create(this);player.play()
+                val input=DataInputStream(c.inputStream)
+                while(alive&&audioSelected==name){
+                    val packet=CamAudioPacket.read(input)
+                    val age=clock.nowUs()-packet.ptsUs
+                    if(packet.flags==0&&age>350000)continue
+                    if(packet.flags==0&&clock.ready&&age<110000)Thread.sleep((110000-age)/1000)
+                    for(pcm in decoder.decode(packet))CamAudioPlayback.write(player,pcm)
+                }
+            }catch(_:InterruptedException){break}
+            catch(e:Exception){if(audioSelected==name)runOnUiThread{status.text="Écoute : ${e.message}"};try{Thread.sleep(500)}catch(_:InterruptedException){break}}
+            finally{c?.disconnect();if(audioConnection===c)audioConnection=null;decoder.close();player?.let{runCatching{it.stop()};it.release()}}
         }
     }
 
-    private fun playSelectedAudio(){
-        val rate=48000
-        val decoder=try { CamOpusDecoder() }catch(e:Exception){
-            android.util.Log.e("ShizziCam","Audio Opus indisponible",e)
-            runOnUiThread {status.text="Décodage Opus indisponible sur cet appareil"}
-            return
-        }
-        val required=AudioTrack.getMinBufferSize(rate,AudioFormat.CHANNEL_OUT_MONO,
-            AudioFormat.ENCODING_PCM_16BIT)
-        if(required<=0)return
-        val player=try {
-            AudioTrack(AudioManager.STREAM_MUSIC,rate,AudioFormat.CHANNEL_OUT_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,maxOf(required,12800),AudioTrack.MODE_STREAM)
-        }catch(e:Exception){android.util.Log.e("ShizziCam","AudioTrack unavailable",e);return}
-        var previous=""
-        var after=0L
-        try {
-            while(alive){
-                val name=audioSelected
-                if(admin==null||name.isEmpty()){
-                    if(previous.isNotEmpty()) {
-                        player.pause()
-                        player.flush()
-                    }
-                    previous=""
-                    Thread.sleep(200)
-                    continue
-                }
-                if(name!=previous){
-                    if(previous.isNotEmpty()) player.pause()
-                    player.flush()
-                    after=0
-                    previous=name
-                    player.play()
-                }
-                try{
-                    val c=url("/api/v1/cam/audio?account="+URLEncoder.encode(name,"UTF-8")+
-                        "&after="+after)
-                    try{
-                        if(c.responseCode==200){
-                            val seq=c.getHeaderField("X-Shizzi-Cam-Audio-Seq")?.toLongOrNull() ?: 0
-                            val bytes=c.inputStream.use{it.readBytes()}
-                            if(seq>after && bytes.isNotEmpty() && bytes.size<=4096) {
-                                after=seq
-                                for(pcm in decoder.decode(bytes)){
-                                    val wrote=player.write(pcm,0,pcm.size)
-                                    if(wrote<0)android.util.Log.e("ShizziCam","AudioTrack error $wrote")
-                                }
-                            }
-                        } else if(c.responseCode!=204) {
-                            android.util.Log.w("ShizziCam","Audio HTTP "+c.responseCode)
-                            if(c.responseCode==401 || c.responseCode==403)runOnUiThread {status.text="Son : accès refusé (HTTP "+c.responseCode+")"}
-                        }
-                    }finally{c.disconnect()}
-                }catch(e:Exception){
-                    android.util.Log.w("ShizziCam","Audio relay read failed",e)
-                }
-                Thread.sleep(25)
-            }
-        }catch(_:InterruptedException){}finally{
-            try{player.pause();player.flush();player.release()}catch(_:Exception){}
-            decoder.close()
-        }
-    }
     override fun onDestroy(){
+        audioConnection?.disconnect();talkConnection?.disconnect()
         alive=false
         audioSelected=""
         talking=false

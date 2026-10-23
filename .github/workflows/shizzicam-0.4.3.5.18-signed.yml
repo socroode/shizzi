@@ -1,0 +1,128 @@
+name: ShizziCam 0.4.3.5.18 signed HOTSPOT, camera, viewer and monitor
+on:
+  push:
+    branches:
+      - feat/shizzicam-0.4.3.5.18-relay
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: shizzicam-18-signed-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: datapath/go.mod
+          cache-dependency-path: datapath/go.sum
+      - name: Verify the local media relay and existing datapath
+        working-directory: datapath
+        run: |
+          test -z "$(gofmt -l shizzicam*.go)"
+          go vet ./...
+          go test -race -count=1 -timeout=10m ./...
+  signed-apks:
+    needs: regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: datapath/go.mod
+          cache-dependency-path: datapath/go.sum
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+      - name: Install required Android NDK
+        run: sdkmanager --install "ndk;27.0.12077973"
+      - name: Install Android Go mobile bridge
+        working-directory: datapath
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile
+          go install golang.org/x/mobile/cmd/gobind
+          gomobile init
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Restore permanent signing certificate
+        env:
+          KEYSTORE_B64: ${{ secrets.SHIZZI_KEYSTORE_B64 || secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.SHIZZI_STORE_PASSWORD || secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SHIZZI_KEY_ALIAS || secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SHIZZI_KEY_PASSWORD || secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE_B64"
+          test -n "$STORE_PASSWORD"
+          test -n "$KEY_ALIAS"
+          test -n "$KEY_PASSWORD"
+          echo "$KEYSTORE_B64" | base64 -d > shizzi-release.jks
+          cat > keystore.properties <<EOF
+          storeFile=shizzi-release.jks
+          storePassword=$STORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+      - name: Verify all camera-side client unit tests and diagnostic APK
+        run: |
+          ./gradlew -PshizziClientsOnly=true :camrtc:testDebugUnitTest :cammonitor:testDebugUnitTest :accounts:testDebugUnitTest :conso:testDebugUnitTest :camadmin:assembleDebug --no-daemon
+      - name: Build signed router and all camera applications
+        run: ./gradlew :app:testDebugUnitTest :app:assembleRelease :camadmin:assembleRelease :cammonitor:assembleRelease :accounts:assembleRelease --no-daemon
+      - name: Verify identity, code versions, original signing certificate, and embedded APKs
+        env:
+          EXPECTED_CERT: FADFC5E87FA60351F7DCB75D34F1AB91110824333CD1097A38B3C703F7AF3DB7
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | grep -v -- "-rc" | sort -V | tail -1)
+          for row in \
+            "app/build/outputs/apk/release/app-release.apk|dev.shizzi|0.4.3.5.18-test|48" \
+            "conso/build/outputs/apk/release/conso-release.apk|dev.shizzi.conso|0.3.5-relay18-test|25" \
+            "camadmin/build/outputs/apk/release/camadmin-release.apk|dev.shizzi.camadmin|0.3.3-relay18-test|8" \
+            "cammonitor/build/outputs/apk/release/cammonitor-release.apk|dev.shizzi.cammonitor|0.1.1-relay18-test|2" \
+            "admin/build/outputs/apk/release/admin-release.apk|dev.shizzi.admin|0.3.0-universal|15" \
+            "accounts/build/outputs/apk/release/accounts-release.apk|dev.shizzi.accounts|0.1.1|2"; do
+            IFS='|' read -r apk pkg version code <<< "$row"
+            test -s "$apk"
+            badges=$("$BUILD_TOOLS/aapt2" dump badging "$apk")
+            grep -q "name='$pkg'" <<< "$badges"
+            grep -q "versionName='$version'" <<< "$badges"
+            grep -q "versionCode='$code'" <<< "$badges"
+            "$BUILD_TOOLS/apksigner" verify "$apk"
+            cert=$("$BUILD_TOOLS/apksigner" verify --print-certs "$apk" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ': ')
+            test "$cert" = "$EXPECTED_CERT"
+          done
+          unzip -p app/build/outputs/apk/release/app-release.apk assets/shizzi/Shizzi-Plus.apk > /tmp/shizzicam-embedded-plus.apk
+          cmp /tmp/shizzicam-embedded-plus.apk conso/build/outputs/apk/release/conso-release.apk
+          unzip -p app/build/outputs/apk/release/app-release.apk assets/shizzi/ShizziCam-Admin.apk > /tmp/shizzicam-embedded-viewer.apk
+          cmp /tmp/shizzicam-embedded-viewer.apk camadmin/build/outputs/apk/release/camadmin-release.apk
+          unzip -p app/build/outputs/apk/release/app-release.apk assets/shizzi/Shizzi-Admin.apk > /tmp/shizzicam-embedded-admin.apk
+          cmp /tmp/shizzicam-embedded-admin.apk admin/build/outputs/apk/release/admin-release.apk
+          unzip -p app/build/outputs/apk/release/app-release.apk assets/shizzi/ShizziCam-Debit.apk > /tmp/shizzicam-embedded-monitor.apk
+          cmp /tmp/shizzicam-embedded-monitor.apk cammonitor/build/outputs/apk/release/cammonitor-release.apk
+          unzip -p app/build/outputs/apk/release/app-release.apk assets/shizzi/Shizzi-Comptes.apk > /tmp/shizzicam-embedded-comptes.apk
+          cmp /tmp/shizzicam-embedded-comptes.apk accounts/build/outputs/apk/release/accounts-release.apk
+      - name: Verify offline distribution and APK contents
+        run: python3 scripts/verify_shizzicam18.py --variant release --output shizzicam18-verification.json
+      - name: Package signed test candidates without publishing a release
+        run: |
+          mkdir -p shizzicam-18-test
+          cp app/build/outputs/apk/release/app-release.apk shizzicam-18-test/ShizziCam-HOTSPOT-0.4.3.5.18-test.apk
+          cp conso/build/outputs/apk/release/conso-release.apk shizzicam-18-test/Shizzi-PlusCam-0.3.5-test.apk
+          cp camadmin/build/outputs/apk/release/camadmin-release.apk shizzicam-18-test/ShizziCam-Visionneuse-0.3.3-test.apk
+          cp cammonitor/build/outputs/apk/release/cammonitor-release.apk shizzicam-18-test/ShizziCam-Debit-0.1.1-test.apk
+          cp accounts/build/outputs/apk/release/accounts-release.apk shizzicam-18-test/Shizzi-Comptes-0.1.1-test.apk
+          cp shizzicam18-verification.json shizzicam-18-test/
+          cp docs/shizzicam-0.4.3.5.18-testplan.md shizzicam-18-test/
+          cp docs/shizzicam-0.4.3.5.18-changes.md shizzicam-18-test/
+          cd shizzicam-18-test
+          sha256sum *.apk > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v5
+        with:
+          name: ShizziCam-0.4.3.5.18-SIGNED-TEST-TEST-APKS-NOT-FOR-CLIENTS
+          path: shizzicam-18-test/
+          retention-days: 30
+          if-no-files-found: error

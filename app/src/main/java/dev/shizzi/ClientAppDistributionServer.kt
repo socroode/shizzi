@@ -256,17 +256,17 @@ class ClientAppDistributionServer(
 
     companion object {
         const val LOOPBACK_HOST = "127.0.0.1"
-        const val CLIENT_VERSION = "0.3.4-avc-opus-test"
-        const val CLIENT_FILE_NAME = "Shizzi-PlusCam-0.3.4-test.apk"
+        const val CLIENT_VERSION = "0.3.5-relay18-test"
+        const val CLIENT_FILE_NAME = "Shizzi-PlusCam-0.3.5-test.apk"
         const val ASSET_PATH = "shizzi/Shizzi-Plus.apk"
         const val ADMIN_VERSION = "0.3.0-universal"
         const val ADMIN_FILE_NAME = "Shizzi-Admin-0.3.0-universal.apk"
         const val ADMIN_ASSET_PATH = "shizzi/Shizzi-Admin.apk"
-        const val VIEWER_VERSION = "0.3.2-avc-opus-test"
-        const val VIEWER_FILE_NAME = "ShizziCam-Admin-0.3.2-test.apk"
+        const val VIEWER_VERSION = "0.3.3-relay18-test"
+        const val VIEWER_FILE_NAME = "ShizziCam-Visionneuse-0.3.3-test.apk"
         const val VIEWER_ASSET_PATH = "shizzi/ShizziCam-Admin.apk"
-        const val MONITOR_VERSION = "0.1.0-candidate"
-        const val MONITOR_FILE_NAME = "ShizziCam-Debit-0.1.0.apk"
+        const val MONITOR_VERSION = "0.1.1-relay18-test"
+        const val MONITOR_FILE_NAME = "ShizziCam-Debit-0.1.1-test.apk"
         const val MONITOR_ASSET_PATH = "shizzi/ShizziCam-Debit.apk"
         const val ACCOUNTS_VERSION = "0.1.1"
         const val ACCOUNTS_FILE_NAME = "Shizzi-Comptes-0.1.1.apk"
@@ -393,10 +393,37 @@ internal fun inspectEmbeddedAppBytes(
 ): ClientAppDistributionInfo {
     val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
     return ClientAppDistributionInfo(
-        available = bytes.isNotEmpty(),
+        available = hasCompleteApkContainer(bytes),
         version = version,
         fileName = fileName,
         sizeBytes = bytes.size.toLong(),
         sha256 = digest.joinToString("") { "%02x".format(it) },
     )
 }
+
+/** Reject HTML, truncated ZIPs and missing Android payloads before advertising a download. */
+internal fun hasCompleteApkContainer(bytes:ByteArray):Boolean=runCatching{
+    if(bytes.size<64||bytes[0]!=80.toByte()||bytes[1]!=75.toByte())return@runCatching false
+    val eocd=(bytes.size-22 downTo maxOf(0,bytes.size-65557)).firstOrNull{offset->
+        bytes[offset]==80.toByte()&&bytes[offset+1]==75.toByte()&&bytes[offset+2]==5.toByte()&&bytes[offset+3]==6.toByte()
+    }?:return@runCatching false
+    fun u16(i:Int)=(bytes[i].toInt() and 255) or ((bytes[i+1].toInt() and 255) shl 8)
+    if(eocd+22+u16(eocd+20)!=bytes.size)return@runCatching false
+    var manifest=false;var dex=false
+    java.util.zip.ZipInputStream(bytes.inputStream()).use{zip->
+        val buffer=ByteArray(16384)
+        while(true){
+            val entry=zip.nextEntry?:break
+            var length=0L
+            var prefix=ByteArray(0)
+            while(true){val n=zip.read(buffer);if(n<0)break
+                if(length==0L)prefix=buffer.copyOf(minOf(n,8))
+                length+=n;check(length<=256L*1024*1024)
+            }
+            if(entry.name=="AndroidManifest.xml")manifest=length>=8&&prefix.take(4)==listOf<Byte>(3,0,8,0)
+            if(entry.name=="classes.dex")dex=length>=8&&prefix.take(4)==listOf<Byte>(100,101,120,10)
+            zip.closeEntry()
+        }
+    }
+    manifest&&dex
+}.getOrDefault(false)

@@ -10,8 +10,8 @@ android {
   applicationId = "dev.shizzi.cammonitor"
   minSdk = 30
   targetSdk = 35
-  versionCode = 1
-  versionName = "0.1.0-candidate"
+  versionCode = 2
+  versionName = "0.1.1-relay18-test"
  }
  sourceSets.getByName("main").java.srcDir("../admin/src/main/java")
  val keys = Properties().apply {
