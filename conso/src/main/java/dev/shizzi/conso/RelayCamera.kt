@@ -12,6 +12,8 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.widget.ImageView
+import android.view.OrientationEventListener
+import android.hardware.SensorManager
 import java.io.ByteArrayOutputStream
 
 /**
@@ -35,6 +37,17 @@ internal class RelayCamera(
     private var quality = "auto"
     private var width = 640
     private var height = 480
+    private var sensorOrientation = 90
+    private var frontFacing = false
+    @Volatile private var deviceOrientation = 0
+    private val orientationListener = object : OrientationEventListener(context.applicationContext,
+        SensorManager.SENSOR_DELAY_NORMAL) {
+        override fun onOrientationChanged(orientation: Int) {
+            deviceOrientation = CameraFrameOrientation.snappedDeviceOrientation(
+                orientation, deviceOrientation
+            )
+        }
+    }
     private var lastFrameAt = 0L
     private var frameCount = 0L
     @Volatile private var preview: ImageView? = null
@@ -53,6 +66,8 @@ internal class RelayCamera(
     fun detach(image: ImageView) { if (preview === image) preview = null }
     fun start(requested: String) {
         quality = requested
+        if (orientationListener.canDetectOrientation()) orientationListener.enable()
+        else onStatus("Capteur d'orientation indisponible : position par défaut")
         handler.post { open() }
     }
     private fun open() {
@@ -72,6 +87,11 @@ internal class RelayCamera(
                 if (info.facing == facing) { selected = i; break }
             }
             if (selected < 0) throw IllegalStateException("Caméra $side indisponible")
+            sensorOrientation = info.orientation
+            frontFacing = info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT
+            lastFrameAt = 0L
+            frameCount = 0L
+            latest = null
             val cam = Camera.open(selected)
             camera = cam
             val params = cam.parameters
@@ -111,9 +131,22 @@ internal class RelayCamera(
                     val now = android.os.SystemClock.elapsedRealtime()
                     if (now - lastFrameAt >= 125) {
                         lastFrameAt = now
+                        // Camera1 preview callback is ALWAYS in native sensor coordinates.
+                        // Rotate the actual NV21 Y + VU pixels before JPEG encoding so the
+                        // phone preview and every ShizziCam viewer receive an upright frame.
+                        val rotation = CameraFrameOrientation.jpegRotation(
+                            sensorOrientation, deviceOrientation, frontFacing
+                        )
+                        val oriented = CameraFrameOrientation.rotateNv21(
+                            bytes, width, height, rotation
+                        )
                         val out = ByteArrayOutputStream(96 * 1024)
-                        val ok = YuvImage(bytes, ImageFormat.NV21, width, height, null)
-                            .compressToJpeg(Rect(0, 0, width, height), 55, out)
+                        val ok = YuvImage(
+                            oriented.pixels, ImageFormat.NV21,
+                            oriented.width, oriented.height, null
+                        ).compressToJpeg(
+                            Rect(0, 0, oriented.width, oriented.height), 55, out
+                        )
                         if (ok) {
                             val jpg = out.toByteArray()
                             if (jpg.size <= 180000) {
@@ -125,7 +158,7 @@ internal class RelayCamera(
                                 }
                                 onFrame(jpg)
                                 if (frameCount == 1L) {
-                                    state = "Première image réelle reçue ($width × $height)"
+                                    state = "Image orientée : ${oriented.width} × ${oriented.height}, rotation ${rotation}°"
                                     onStatus(state)
                                 }
                             } else if (frameCount == 0L) onStatus("Image trop volumineuse pour le relais")
@@ -184,6 +217,7 @@ internal class RelayCamera(
         }
     }
     fun stop() {
+        orientationListener.disable()
         handler.post {
             try { camera?.setPreviewCallbackWithBuffer(null); camera?.stopPreview(); camera?.release() }
             catch (_: Exception) {}
