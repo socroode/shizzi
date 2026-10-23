@@ -8,8 +8,8 @@ class CamCapabilityTest {
    assertFalse(CamCapability.supports(200,"<html>Shizzi 0.4.3.5.11</html>"))
  }
  @Test fun cameraModeRequiresExactRouterRelayProtocol(){
-   assertTrue(CamCapability.supports(200,"""{"ok":true,"protocol":"shizzicam-relay-jpeg-pcm-v1","video":"JPEG","audio":"PCM16","transport":"https-router-relay","relayAvailable":true}"""))
-   assertFalse(CamCapability.supports(200,"""{"ok":true,"protocol":"other","video":"JPEG","audio":"PCM16","transport":"https-router-relay","relayAvailable":true}"""))
-   assertFalse(CamCapability.supports(401,"""{"ok":true,"protocol":"shizzicam-relay-jpeg-pcm-v1","video":"JPEG","audio":"PCM16","transport":"https-router-relay","relayAvailable":true}"""))
+   assertTrue(CamCapability.supports(200,"""{"ok":true,"protocol":"shizzicam-relay-avc-opus-v2","video":"H264","audio":"Opus-64k","transport":"https-router-relay","relayAvailable":true}"""))
+   assertFalse(CamCapability.supports(200,"""{"ok":true,"protocol":"other","video":"H264","audio":"Opus-64k","transport":"https-router-relay","relayAvailable":true}"""))
+   assertFalse(CamCapability.supports(401,"""{"ok":true,"protocol":"shizzicam-relay-avc-opus-v2","video":"H264","audio":"Opus-64k","transport":"https-router-relay","relayAvailable":true}"""))
  }
 }
