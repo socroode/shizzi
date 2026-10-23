@@ -17,6 +17,11 @@ class ClientAppDistributionServerHttpTest {
         val root = File(System.getenv("GITHUB_WORKSPACE") ?: System.getProperty("user.dir")).let {
             if (File(it, "datapath").isDirectory) it else it.parentFile
         }
+        val comptes = if (routerPath != null) {
+            ZipFile(routerPath).use { zip ->
+                zip.getInputStream(zip.getEntry("assets/shizzi/Shizzi-Comptes.apk")).use { it.readBytes() }
+            }
+        } else "accounts-fixture".toByteArray()
         val monitor = if (routerPath != null) {
             ZipFile(routerPath).use { zip ->
                 zip.getInputStream(zip.getEntry("assets/shizzi/ShizziCam-Debit.apk")).use { it.readBytes() }
@@ -36,7 +41,7 @@ class ClientAppDistributionServerHttpTest {
         val (plus, admin, viewer) = payloads
         ServerSocket(8091, 8, InetAddress.getByName("127.0.0.1")).use { legacy ->
             legacy.soTimeout = 100
-            val server = ClientAppDistributionServer(plus, admin, viewer, monitor)
+            val server = ClientAppDistributionServer(plus, admin, viewer, monitor, comptes)
             try {
                 assertTrue(server.start())
                 assertTrue(server.port in 1..65535)
@@ -56,6 +61,7 @@ class ClientAppDistributionServerHttpTest {
                     Triple("/shizzi-admin.apk",admin,server.adminInfo),
                     Triple("/shizzicam-admin.apk",viewer,server.viewerInfo),
                     Triple("/shizzicam-debit.apk",monitor,server.monitorInfo),
+                    Triple("/shizzi-comptes.apk",comptes,server.accountsInfo),
                 )) {
                     val (endpoint, bytes, metadata)=row
                     val next=(URL("http://127.0.0.1:${server.port}"+endpoint).openConnection() as HttpURLConnection)
@@ -91,7 +97,7 @@ class ClientAppDistributionServerHttpTest {
     @Test fun privilegedAnnouncementOverridesStaleUIInfoAndDisablesMissingServer() {
         val info = inspectClientAppBytes("current-apk".toByteArray())
         val stale = """{"clientApp":{"available":true,"version":"0.2.12-candidate","sha256":"old"},"accounts":[]}"""
-        val current = JSONObject(portalConfigWithDistribution(stale, info, info, info, info, 12345))
+        val current = JSONObject(portalConfigWithDistribution(stale, info, info, info, info, info, 12345))
         assertTrue(current.has("accounts"))
         val app = current.getJSONObject("clientApp")
         assertEquals("0.3.4-avc-opus-test", app.getString("version"))
@@ -106,6 +112,8 @@ class ClientAppDistributionServerHttpTest {
         assertEquals(info.sha256,current.getJSONObject("camViewerApp").getString("sha256"))
         assertTrue(current.getJSONObject("camMonitorApp").getBoolean("available"))
         assertEquals(info.sha256,current.getJSONObject("camMonitorApp").getString("sha256"))
-        assertFalse(JSONObject(portalConfigWithDistribution(stale, info, info, info, info, 0)).getJSONObject("clientApp").getBoolean("available"))
+        assertTrue(current.getJSONObject("accountsApp").getBoolean("available"))
+        assertEquals(info.sha256,current.getJSONObject("accountsApp").getString("sha256"))
+        assertFalse(JSONObject(portalConfigWithDistribution(stale, info, info, info, info, info, 0)).getJSONObject("clientApp").getBoolean("available"))
     }
 }

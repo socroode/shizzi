@@ -67,6 +67,24 @@ val embeddedCamMonitorDebugDir =
     layout.buildDirectory.dir("generated/shizziCamMonitorAssets/debug")
 val embeddedCamMonitorReleaseDir =
     layout.buildDirectory.dir("generated/shizziCamMonitorAssets/release")
+val embeddedAccountsDebugDir =
+    layout.buildDirectory.dir("generated/shizziAccountsAssets/debug")
+val embeddedAccountsReleaseDir =
+    layout.buildDirectory.dir("generated/shizziAccountsAssets/release")
+val prepareEmbeddedAccountsDebug by tasks.registering(Sync::class) {
+    dependsOn(":accounts:assembleDebug")
+    from(rootProject.layout.projectDirectory.file("accounts/build/outputs/apk/debug/accounts-debug.apk"))
+    into(embeddedAccountsDebugDir.map { it.dir("shizzi") })
+    rename { "Shizzi-Comptes.apk" }
+    outputs.dir(embeddedAccountsDebugDir)
+}
+val prepareEmbeddedAccountsRelease by tasks.registering(Sync::class) {
+    dependsOn(":accounts:assembleRelease")
+    from(rootProject.layout.projectDirectory.file("accounts/build/outputs/apk/release/accounts-release.apk"))
+    into(embeddedAccountsReleaseDir.map { it.dir("shizzi") })
+    rename { "Shizzi-Comptes.apk" }
+    outputs.dir(embeddedAccountsReleaseDir)
+}
 val prepareEmbeddedCamMonitorDebug by tasks.registering(Sync::class) {
     dependsOn(":cammonitor:assembleDebug")
     from(rootProject.layout.projectDirectory.file("cammonitor/build/outputs/apk/debug/cammonitor-debug.apk"))
@@ -169,10 +187,12 @@ android {
         getByName("debug").assets.srcDir(embeddedShizziAdminDebugDir)
         getByName("debug").assets.srcDir(embeddedCamViewerDebugDir)
         getByName("debug").assets.srcDir(embeddedCamMonitorDebugDir)
+        getByName("debug").assets.srcDir(embeddedAccountsDebugDir)
         getByName("release").assets.srcDir(embeddedShizziPlusReleaseDir)
         getByName("release").assets.srcDir(embeddedShizziAdminReleaseDir)
         getByName("release").assets.srcDir(embeddedCamViewerReleaseDir)
         getByName("release").assets.srcDir(embeddedCamMonitorReleaseDir)
+        getByName("release").assets.srcDir(embeddedAccountsReleaseDir)
     }
 
     buildTypes {
@@ -228,22 +248,26 @@ tasks.configureEach {
             name != "prepareEmbeddedShizziAdminDebug" &&
             name != "prepareEmbeddedCamViewerDebug" &&
             name != "prepareEmbeddedCamMonitorDebug" &&
+            name != "prepareEmbeddedAccountsDebug" &&
             name.contains("Debug", ignoreCase = true) -> {
             dependsOn(prepareEmbeddedShizziPlusDebug)
             dependsOn(prepareEmbeddedShizziAdminDebug)
             dependsOn(prepareEmbeddedCamViewerDebug)
             dependsOn(prepareEmbeddedCamMonitorDebug)
+            dependsOn(prepareEmbeddedAccountsDebug)
         }
 
         name != "prepareEmbeddedShizziPlusRelease" &&
             name != "prepareEmbeddedShizziAdminRelease" &&
             name != "prepareEmbeddedCamViewerRelease" &&
             name != "prepareEmbeddedCamMonitorRelease" &&
+            name != "prepareEmbeddedAccountsRelease" &&
             name.contains("Release", ignoreCase = true) -> {
             dependsOn(prepareEmbeddedShizziPlusRelease)
             dependsOn(prepareEmbeddedShizziAdminRelease)
             dependsOn(prepareEmbeddedCamViewerRelease)
             dependsOn(prepareEmbeddedCamMonitorRelease)
+            dependsOn(prepareEmbeddedAccountsRelease)
         }
     }
 }
