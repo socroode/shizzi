@@ -2,6 +2,14 @@
 """Verify actual Android identities, signing certificates and byte-identical embedded annex APKs."""
 import argparse,hashlib,json,os,re,subprocess,zipfile
 from pathlib import Path
+def read_raw_resource(aapt, apk, name):
+ table=subprocess.check_output([str(aapt),"dump","resources",str(apk)],text=True)
+ # Release resource optimization can rename res/raw/name.mp3 to e.g. res/TB.mp3.
+ # Resolve the runtime resource rather than assuming its ZIP entry retains its source name.
+ pattern=r"(?m)^\s*resource\s+0x[0-9a-fA-F]+\s+(?:[^\s:]+:)?raw/"+re.escape(name)+r"[^\n]*\n\s*\(\)\s+\(file\)\s+(\S+)"
+ matches=re.findall(pattern,table)
+ assert len(matches)==1,(name,"expected one default raw resource",matches)
+ with zipfile.ZipFile(apk) as archive:return matches[0],archive.read(matches[0])
 def main():
  p=argparse.ArgumentParser()
  p.add_argument("--variant",choices=["debug","release"],default="release")
@@ -45,10 +53,10 @@ def main():
   entry={"module":module,"package":pkg,"version":version,"versionCode":code,"sizeBytes":len(data),
    "sha256":hashlib.sha256(data).hexdigest(),"certificateSha256":cert}
   result["apks"].append(entry);archives[module]=path
- with zipfile.ZipFile(archives["conso"]) as camera:
-  siren=camera.read("res/raw/shizzicam_siren.mp3")
-  assert siren==(root/"conso/src/main/res/raw/shizzicam_siren.mp3").read_bytes(),"embedded siren differs"
-  result["sirenSha256"]=hashlib.sha256(siren).hexdigest()
+ siren_path,siren=read_raw_resource(aapt,archives["conso"],"shizzicam_siren")
+ assert siren==(root/"conso/src/main/res/raw/shizzicam_siren.mp3").read_bytes(),"embedded siren differs"
+ result["sirenResourcePath"]=siren_path
+ result["sirenSha256"]=hashlib.sha256(siren).hexdigest()
  with zipfile.ZipFile(archives["app"]) as router:
   for module,pkg,version,code,asset in rows[1:]:
    embedded=router.read("assets/shizzi/"+asset)
