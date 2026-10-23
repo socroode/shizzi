@@ -58,6 +58,7 @@ class CamAdminActivity : Activity() {
     private val videoThreads = Executors.newFixedThreadPool(8)
     private val streamGeneration=AtomicInteger(0)
     private val tileTextures=mutableMapOf<String,TextureView>()
+    private val streamConnections=ConcurrentHashMap<String,HttpsURLConnection>()
     private val commands = Executors.newSingleThreadExecutor()
     private val eventPoll = Executors.newSingleThreadScheduledExecutor()
     private val eventCursors = mutableMapOf<String,Long>()
@@ -313,6 +314,8 @@ class CamAdminActivity : Activity() {
 
     private fun renderGrid() {
         val generation=streamGeneration.incrementAndGet()
+        streamConnections.values.forEach{runCatching{it.disconnect()}}
+        streamConnections.clear()
         tileImages.clear()
         tileTextures.clear()
         tileHolder.removeAllViews()
@@ -344,7 +347,7 @@ class CamAdminActivity : Activity() {
             layers.addView(image)
             val texture=TextureView(this).apply {
                 layoutParams=FrameLayout.LayoutParams(width-8,(width-8)*9/16)
-                visibility=View.INVISIBLE
+                alpha=0f
                 isOpaque=true
             }
             layers.addView(texture)
@@ -381,6 +384,7 @@ class CamAdminActivity : Activity() {
                     var decoder:CamH264Decoder?=null
                     try{
                         c=url("/api/v1/cam/video-stream?account="+URLEncoder.encode(name,"UTF-8"))
+                        streamConnections["$generation:$name"]=c
                         c.readTimeout=12000
                         if(c.responseCode!=200)throw IllegalStateException("H264 HTTP "+c.responseCode)
                         val stream=DataInputStream(BufferedInputStream(c.inputStream))
@@ -401,7 +405,7 @@ class CamAdminActivity : Activity() {
                             val shown=decoder.decode(data,flags,pts)
                             if(shown)runOnUiThread {
                                 if(generation==streamGeneration.get()&&tileTextures[name]===texture){
-                                    texture.visibility=View.VISIBLE
+                                    texture.alpha=1f
                                     tileImages[name]?.visibility=View.GONE
                                 }
                             }
@@ -410,13 +414,14 @@ class CamAdminActivity : Activity() {
                         android.util.Log.w("ShizziCam","H264 stream $name unavailable",e)
                         runOnUiThread {
                             if(generation==streamGeneration.get()&&tileTextures[name]===texture){
-                                texture.visibility=View.INVISIBLE
+                                texture.alpha=0f
                                 tileImages[name]?.visibility=View.VISIBLE
                             }
                         }
                         if(alive&&generation==streamGeneration.get())Thread.sleep(800)
                     }finally{
                         decoder?.close()
+                        streamConnections.remove("$generation:$name",c)
                         c?.disconnect()
                     }
                 }
@@ -661,6 +666,8 @@ class CamAdminActivity : Activity() {
         poll.shutdownNow()
         frames.shutdownNow()
         streamGeneration.incrementAndGet()
+        streamConnections.values.forEach{runCatching{it.disconnect()}}
+        streamConnections.clear()
         videoThreads.shutdownNow()
         commands.shutdownNow()
         eventPoll.shutdownNow()
