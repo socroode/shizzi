@@ -79,6 +79,7 @@ func (m *TrafficManager) serveCameraAudio(conn net.Conn,req *http.Request,client
    writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true
   }
   camAudioStore(account,body,time.Now())
+  camMeasure(account,camAudioIn,len(body),time.Now())
   writeJSONStatus(conn,"200 OK",map[string]any{"ok":true})
   return true
  }
@@ -98,6 +99,6 @@ func (m *TrafficManager) serveCameraAudio(conn net.Conn,req *http.Request,client
   return true
  }
  _,_=fmt.Fprintf(conn,"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nCache-Control: no-store\r\nX-Shizzi-Cam-Audio-Seq: %d\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",packet.sequence,len(packet.data))
- _,_=conn.Write(packet.data)
+ if n,err:=conn.Write(packet.data); n>0&&err==nil {camMeasure(account,camAudioOut,n,time.Now())}
  return true
 }

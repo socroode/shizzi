@@ -64,6 +64,7 @@ func camText(conn net.Conn, status string, body string) {
 func (m *TrafficManager) serveCameraAPI(conn net.Conn, req *http.Request, clientIP string) bool {
  if m.serveCameraRTC(conn,req,clientIP) {return true}
  if m.serveCameraAudio(conn,req,clientIP) {return true}
+ if m.serveCameraMetrics(conn,req,clientIP) {return true}
  path:=req.URL.Path
  if path!="/api/v1/cam/frame" && path!="/api/v1/cam/list" { return false }
  // Never transmit images or admin tokens through cleartext captive-portal HTTP.
@@ -84,6 +85,7 @@ func (m *TrafficManager) serveCameraAPI(conn net.Conn, req *http.Request, client
   battery,_:=strconv.Atoi(req.Header.Get("X-Shizzi-Cam-Battery"))
   if battery<0||battery>100 {battery=-1}
   if !storeCamFrame(account,data,battery,time.Now()) {camText(conn,"422 Unprocessable Entity","Image refusee ou capacite atteinte.");return true}
+ camMeasure(account,camVideoIn,len(data),time.Now())
   camText(conn,"200 OK","OK")
   return true
  }
@@ -113,6 +115,6 @@ func (m *TrafficManager) serveCameraAPI(conn net.Conn, req *http.Request, client
  frame,ok:=frames[account]
  if !ok {camText(conn,"404 Not Found","Camera hors ligne.");return true}
  _,_=fmt.Fprintf(conn,"HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nCache-Control: no-store\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",len(frame.jpg))
- _,_=conn.Write(frame.jpg)
+ if n,err:=conn.Write(frame.jpg); n>0 && err==nil {camMeasure(account,camVideoOut,n,time.Now())}
  return true
 }
