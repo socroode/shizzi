@@ -21,3 +21,4 @@ include(":admin")
 include(":camadmin")
 
 include(":camrtc")
+include(":cammonitor")
