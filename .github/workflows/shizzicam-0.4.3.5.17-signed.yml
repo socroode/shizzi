@@ -1,4 +1,4 @@
-name: ShizziCam 0.4.3.5.17 signed four-app test candidate
+name: ShizziCam 0.4.3.5.17 signed HOTSPOT and five annex APKs
 on:
   push:
     branches:
@@ -83,6 +83,7 @@ jobs:
             "conso/build/outputs/apk/release/conso-release.apk|dev.shizzi.conso|0.3.4-avc-opus-test|24" \
             "camadmin/build/outputs/apk/release/camadmin-release.apk|dev.shizzi.camadmin|0.3.2-avc-opus-test|7" \
             "cammonitor/build/outputs/apk/release/cammonitor-release.apk|dev.shizzi.cammonitor|0.1.0-candidate|1" \
+            "admin/build/outputs/apk/release/admin-release.apk|dev.shizzi.admin|0.3.0-universal|15" \
             "accounts/build/outputs/apk/release/accounts-release.apk|dev.shizzi.accounts|0.1.1|2"; do
             IFS='|' read -r apk pkg version code <<< "$row"
             test -s "$apk"
