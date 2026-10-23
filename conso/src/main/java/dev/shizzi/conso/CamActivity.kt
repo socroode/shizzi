@@ -63,7 +63,7 @@ class CamActivity:Activity() {
         }
         root.addView(TextView(this).apply{text="Shizzi+Cam";textSize=26f})
         root.addView(TextView(this).apply{
-            text="Aperçu réel sur ce téléphone. Images et son transmis uniquement au téléphone routeur ShizziCam par HTTPS. Mode relais de test : JPEG + PCM16. Le compte doit être connecté."
+            text="Aperçu réel sur ce téléphone. Images et son transmis uniquement au téléphone routeur ShizziCam par HTTPS. Mode relais de test : JPEG + Opus 64 kbps. Le compte doit être connecté."
             textSize=14f
         })
         preview=ImageView(this).apply{

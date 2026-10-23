@@ -1,7 +1,7 @@
 package datapath
 
 // Ephemeral LAN-only microphone relay. Audio and frames are independently authorized.
-// PCM16 mono, 16000 Hz; this transport is not Opus and must not be labelled Opus.
+// Packetized Opus (48 kHz mono, nominal encoder bitrate 64 kbps).
 import (
  "fmt"
  "io"
@@ -13,7 +13,7 @@ import (
  "time"
 )
 
-const camAudioMaxBytes = 16384
+const camAudioMaxBytes = 4096
 const camAudioTTL = 8*time.Second
 const camAudioQueueLimit = 64
 type camAudioPacket struct { data []byte; sequence uint64; updated time.Time }
@@ -71,11 +71,11 @@ func (m *TrafficManager) serveCameraAudio(conn net.Conn,req *http.Request,client
   valid,account:=m.mediaAccountIdentity(clientIP)
   if !valid||account=="" {writeJSONStatus(conn,"401 Unauthorized",map[string]any{"ok":false});return true}
   if req.ContentLength<=0||req.ContentLength>camAudioMaxBytes||
-    !strings.EqualFold(req.Header.Get("Content-Type"),"application/octet-stream") {
+    !strings.EqualFold(req.Header.Get("Content-Type"),"audio/opus") {
    writeJSONStatus(conn,"413 Content Too Large",map[string]any{"ok":false});return true
   }
   body,err:=io.ReadAll(io.LimitReader(req.Body,camAudioMaxBytes+1))
-  if err!=nil||len(body)!=int(req.ContentLength)||len(body)%2!=0 {
+  if err!=nil||len(body)!=int(req.ContentLength) {
    writeJSONStatus(conn,"400 Bad Request",map[string]any{"ok":false});return true
   }
   camAudioStore(account,body,time.Now())
@@ -98,7 +98,7 @@ func (m *TrafficManager) serveCameraAudio(conn net.Conn,req *http.Request,client
   _,_=fmt.Fprint(conn,"HTTP/1.1 204 No Content\r\nCache-Control: no-store\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
   return true
  }
- _,_=fmt.Fprintf(conn,"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nCache-Control: no-store\r\nX-Shizzi-Cam-Audio-Seq: %d\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",packet.sequence,len(packet.data))
+ _,_=fmt.Fprintf(conn,"HTTP/1.1 200 OK\r\nContent-Type: audio/opus\r\nCache-Control: no-store\r\nX-Shizzi-Cam-Audio-Seq: %d\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",packet.sequence,len(packet.data))
  if n,err:=conn.Write(packet.data); n>0&&err==nil {camMeasure(account,camAudioOut,n,time.Now())}
  return true
 }

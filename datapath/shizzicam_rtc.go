@@ -84,7 +84,7 @@ func (m *TrafficManager) serveCameraRTC(conn net.Conn, r *http.Request, clientIP
  if r.Method==http.MethodGet && p=="/api/v1/cam/capabilities" {
   writeJSONStatus(conn,"200 OK",map[string]any{
     "ok":true, "protocol":"shizzicam-relay-jpeg-pcm-v1",
-    "video":"JPEG", "audio":"PCM16", "qualities":[]string{"360p","480p","720p","auto"},
+    "video":"JPEG", "audio":"Opus-64k", "qualities":[]string{"360p","480p","720p","auto"},
     "requiresAccount":true,"requiresAdmin":true,
     "transport":"https-router-relay", "relayAvailable":true,
   })

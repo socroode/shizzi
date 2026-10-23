@@ -9,6 +9,7 @@ import android.graphics.Color
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import dev.shizzi.camrtc.CamOpusDecoder
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -154,7 +155,7 @@ class CamAdminActivity : Activity() {
     private fun mosaicScreen() {
         root.removeAllViews()
         root.addView(label("ShizziCam · Mosaïque",25f))
-        root.addView(label("Images JPEG et son PCM16 via le routeur — candidate de test"))
+        root.addView(label("Images JPEG et audio Opus 64 kbps via le routeur — candidate de test"))
         val toolbar=LinearLayout(this).apply{orientation=LinearLayout.HORIZONTAL}
         toolbar.addView(button("Actualiser"){refresh()})
         toolbar.addView(button("Mise à jour"){checkLocalUpdate()})
@@ -424,7 +425,12 @@ class CamAdminActivity : Activity() {
     }
 
     private fun playSelectedAudio(){
-        val rate=16000
+        val rate=48000
+        val decoder=try { CamOpusDecoder() }catch(e:Exception){
+            android.util.Log.e("ShizziCam","Audio Opus indisponible",e)
+            runOnUiThread {status.text="Décodage Opus indisponible sur cet appareil"}
+            return
+        }
         val required=AudioTrack.getMinBufferSize(rate,AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT)
         if(required<=0)return
@@ -460,10 +466,12 @@ class CamAdminActivity : Activity() {
                         if(c.responseCode==200){
                             val seq=c.getHeaderField("X-Shizzi-Cam-Audio-Seq")?.toLongOrNull() ?: 0
                             val bytes=c.inputStream.use{it.readBytes()}
-                            if(seq>after && bytes.isNotEmpty() && bytes.size<=16384) {
+                            if(seq>after && bytes.isNotEmpty() && bytes.size<=4096) {
                                 after=seq
-                                val wrote=player.write(bytes,0,bytes.size)
-                                if(wrote<0)android.util.Log.e("ShizziCam","AudioTrack error $wrote")
+                                for(pcm in decoder.decode(bytes)){
+                                    val wrote=player.write(pcm,0,pcm.size)
+                                    if(wrote<0)android.util.Log.e("ShizziCam","AudioTrack error $wrote")
+                                }
                             }
                         } else if(c.responseCode!=204) {
                             android.util.Log.w("ShizziCam","Audio HTTP "+c.responseCode)
@@ -477,6 +485,7 @@ class CamAdminActivity : Activity() {
             }
         }catch(_:InterruptedException){}finally{
             try{player.pause();player.flush();player.release()}catch(_:Exception){}
+            decoder.close()
         }
     }
     override fun onDestroy(){

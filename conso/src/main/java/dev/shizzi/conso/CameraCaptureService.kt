@@ -12,6 +12,10 @@ import android.content.pm.ServiceInfo
 import android.graphics.BitmapFactory
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.AudioManager
+import android.media.AudioTrack
+import dev.shizzi.camrtc.CamOpusEncoder
+import dev.shizzi.camrtc.CamOpusDecoder
 import android.media.MediaRecorder
 import android.net.ConnectivityManager
 import android.net.Network
@@ -43,6 +47,7 @@ class CameraCaptureService : Service() {
     private lateinit var worker: ScheduledExecutorService
     private val frames = Executors.newSingleThreadExecutor()
     private val audioWorker = Executors.newSingleThreadExecutor()
+    private val speakerWorker = Executors.newSingleThreadExecutor()
     private val audioSender = Executors.newSingleThreadExecutor()
     private val controlSender = Executors.newSingleThreadExecutor()
     private val audioQueue = ArrayBlockingQueue<ByteArray>(16)
@@ -140,6 +145,7 @@ class CameraCaptureService : Service() {
                 camera.start(quality)
                 audioSender.execute { sendAudioLoop() }
                 audioWorker.execute { audioLoop() }
+                speakerWorker.execute { speakerLoop() }
                 worker.scheduleWithFixedDelay({ tick() }, 0, 650, TimeUnit.MILLISECONDS)
             } catch (e: Exception) {
                 captureStatus = "Échec capture : " + (e.message ?: e.javaClass.simpleName)
@@ -195,7 +201,7 @@ class CameraCaptureService : Service() {
                 try {
                     c.requestMethod="POST"
                     c.doOutput=true
-                    c.setRequestProperty("Content-Type","application/octet-stream")
+                    c.setRequestProperty("Content-Type","audio/opus")
                     c.setFixedLengthStreamingMode(bytes.size)
                     c.outputStream.use { it.write(bytes) }
                     if (c.responseCode!=200) error("Relais audio HTTP "+c.responseCode)
@@ -212,8 +218,8 @@ class CameraCaptureService : Service() {
     }
 
     private fun audioLoop() {
-        val rate = 16000
-        val size = maxOf(3200,AudioRecord.getMinBufferSize(rate,
+        val rate = 48000
+        val size = maxOf(3840,AudioRecord.getMinBufferSize(rate,
             AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT))
         if (size <= 0) { audioStatus="Enregistrement audio non pris en charge"; android.util.Log.e("ShizziCam","AudioRecord unsupported"); return }
         val record = try {
@@ -231,7 +237,8 @@ class CameraCaptureService : Service() {
         }
         var active = false
         try {
-            val data = ByteArray(3200) // 100ms mono PCM16
+            val encoder = CamOpusEncoder()
+            val data = ByteArray(1920) // 20ms mono PCM16 at 48 kHz
             while (running) {
                 if (!micEnabled) {
                     if (active) { record.stop(); active = false }
@@ -240,7 +247,9 @@ class CameraCaptureService : Service() {
                 }
                 if (!active) { record.startRecording(); active = true; audioStatus="Microphone actif" }
                 val length = record.read(data,0,data.size)
-                if (length > 0 && length % 2 == 0) uploadAudio(data.copyOf(length))
+                if (length > 0 && length % 2 == 0) {
+                    for (packet in encoder.encode(data.copyOf(length))) uploadAudio(packet)
+                }
                 else if (length < 0) Thread.sleep(100)
             }
         } catch (e: Exception) {
@@ -314,6 +323,56 @@ class CameraCaptureService : Service() {
             if (failures > 25) stopSelf()
         }
     }
+    /** Opus talk-back always comes from the router, never from the viewer handset. */
+    private fun speakerLoop() {
+        val decoder=try { CamOpusDecoder() }catch(e:Exception){
+            audioStatus="Interphone : codec Opus indisponible"
+            android.util.Log.e("ShizziCam","Talk-back Opus unavailable",e)
+            return
+        }
+        val rate=48000
+        val min=AudioTrack.getMinBufferSize(rate,AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT)
+        if(min<=0){decoder.close();audioStatus="Haut-parleur interphone indisponible";return}
+        val speaker=try {
+            AudioTrack(AudioManager.STREAM_MUSIC,rate,AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,maxOf(min,19200),AudioTrack.MODE_STREAM)
+        }catch(e:Exception){decoder.close();audioStatus="Haut-parleur interphone indisponible";return}
+        var after=0L
+        try {
+            speaker.play()
+            while(running&&!Thread.currentThread().isInterrupted){
+                try {
+                    val c=connection("/api/v1/cam/talk?after="+after)
+                    try {
+                        when(c.responseCode){
+                            200 -> {
+                                val seq=c.getHeaderField("X-Shizzi-Cam-Talk-Seq")?.toLongOrNull()?:0
+                                val compressed=c.inputStream.use{it.readBytes()}
+                                if(seq>after && compressed.isNotEmpty() && compressed.size<=4096){
+                                    after=seq
+                                    for(pcm in decoder.decode(compressed)){
+                                        val wrote=speaker.write(pcm,0,pcm.size)
+                                        if(wrote<0) android.util.Log.w("ShizziCam","Speaker playback $wrote")
+                                    }
+                                }
+                            }
+                            204 -> Thread.sleep(45)
+                            else -> Thread.sleep(250)
+                        }
+                    }finally{c.disconnect()}
+                }catch(_:InterruptedException){break}
+                catch(e:Exception){
+                    android.util.Log.w("ShizziCam","Talk-back read failed",e)
+                    Thread.sleep(250)
+                }
+            }
+        }catch(_:InterruptedException){}finally{
+            try{speaker.pause();speaker.flush();speaker.release()}catch(_:Exception){}
+            decoder.close()
+        }
+    }
+
     override fun onDestroy() {
         running = false
         captureStatus = "Caméra et microphone arrêtés"
@@ -323,6 +382,7 @@ class CameraCaptureService : Service() {
         controlSender.shutdownNow()
         audioQueue.clear()
         audioWorker.shutdownNow()
+        speakerWorker.shutdownNow()
         relay?.stop()
         relay = null
         super.onDestroy()
