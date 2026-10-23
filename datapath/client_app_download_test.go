@@ -280,6 +280,50 @@ func TestCamMonitorVerifiedLocalDownload(t *testing.T) {
   t.Fatalf("monitor download bad: status=%d body=%q",response.StatusCode,body)
  }
 }
+func TestAccountsAppDownloadPathVariants(t *testing.T) {
+ for _,path:=range []string{"/shizzi-comptes.apk","/download/shizzi-comptes.apk/","/SHIZZI-COMPTES.APK"} {
+  if !isAccountsAppDownloadPath(path) {t.Fatalf("missing Comptes route %s",path)}
+ }
+ for _,path:=range []string{"/shizzi-admin.apk","/media/shizzi-comptes.apk","/shizzi-comptes.apk.html"} {
+  if isAccountsAppDownloadPath(path) {t.Fatalf("unexpected Comptes route %s",path)}
+ }
+}
+func TestPortalShowsShizziComptes(t *testing.T) {
+ m:=newTrafficManager()
+ m.portalAccountsApp=portalClientApp{
+  Available:true,Version:"0.1.1",FileName:"Shizzi-Comptes-0.1.1.apk",
+  SizeBytes:2000,SHA256:strings.Repeat("c",64),BridgePort:12345,
+ }
+ server,client:=net.Pipe()
+ done:=make(chan struct{})
+ go func(){defer close(done);m.servePortal(server,"192.168.7.4")}()
+ _,_=fmt.Fprint(client,"GET / HTTP/1.1\r\nHost: 192.0.2.1\r\nConnection: close\r\n\r\n")
+ _=client.SetDeadline(time.Now().Add(4*time.Second))
+ response,err:=io.ReadAll(client)
+ _=client.Close()
+ <-done
+ if err!=nil||!strings.Contains(string(response),"shizzi-comptes.apk?sha256="+strings.Repeat("c",64)){
+  t.Fatalf("Comptes portal link absent: %v",err)
+ }
+}
+func TestShizziComptesVerifiedLocalDownload(t *testing.T) {
+ data:=[]byte("shizzi-comptes-0.1.1-apk")
+ upstream:=httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request) {
+  if r.URL.Path!="/shizzi-comptes.apk" {w.WriteHeader(404);return}
+  _,_=w.Write(data)
+ }))
+ defer upstream.Close()
+ _,portRaw,_:=net.SplitHostPort(upstream.Listener.Addr().String())
+ port,_:=strconv.Atoi(portRaw)
+ manager:=newTrafficManager()
+ manager.portalAccountsApp=verifiedAnnouncement(data,port)
+ manager.portalAccountsApp.FileName="Shizzi-Comptes-0.1.1.apk"
+ response,body:=verifiedDownloadRequest(t,manager,"GET","","http://192.0.2.1/shizzi-comptes.apk")
+ if response.StatusCode!=200||string(data)!=string(body)||
+  response.Header.Get("X-Shizzi-SHA256")!=manager.portalAccountsApp.SHA256 {
+  t.Fatalf("Comptes download failed: status=%d body=%q",response.StatusCode,body)
+ }
+}
 func TestPortalShowsShizziCamViewerDownload(t *testing.T) {
  m:=newTrafficManager()
  m.portalCamViewerApp=portalClientApp{

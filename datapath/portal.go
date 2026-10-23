@@ -171,6 +171,7 @@ type portalConfig struct {
 	AdminApp           portalClientApp   `json:"adminApp"`
 	CamViewerApp      portalClientApp   `json:"camViewerApp"`
     CamMonitorApp     portalClientApp   `json:"camMonitorApp"`
+    AccountsApp       portalClientApp   `json:"accountsApp"`
 	// ClaimResults lets Android tell the portal how a voucher claim ended so
 	// the client sees "accepted"/"rejected" instead of a silent drop.
 	ClaimResults []PortalClaimResult  `json:"claimResults"`
@@ -290,6 +291,7 @@ func (m *TrafficManager) setPortalConfig(required bool, raw string) {
 	m.portalAdminApp = config.AdminApp
 	m.portalCamViewerApp = config.CamViewerApp
     m.portalCamMonitorApp = config.CamMonitorApp
+    m.portalAccountsApp = config.AccountsApp
 	credentialsChanged := m.adminConfig.Username != config.Admin.Username ||
 		m.adminConfig.PasswordHash != config.Admin.PasswordHash ||
 		m.adminConfig.Enabled != config.Admin.Enabled
@@ -1073,6 +1075,13 @@ func isCamMonitorDownloadPath(rawPath string) bool {
     return false
 }
 
+func isAccountsAppDownloadPath(rawPath string) bool {
+    switch normalizeEmbeddedAppDownloadPath(rawPath) {
+    case "/shizzi-comptes.apk", "/download/shizzi-comptes.apk": return true
+    }
+    return false
+}
+
 // portalRecoveryNeeded never grants Internet access. It only lets an
 // unidentified, NAT-translated HTTP client reach an isolated explanation
 // instead of a TCP reset. This is restricted to the local portal address
@@ -1200,7 +1209,7 @@ func (m *TrafficManager) servePortal(conn net.Conn, clientIP string) {
 	case request.Method == http.MethodGet && path == "/api/v1/apps/manifest":
         m.serveCamUpdateManifest(conn)
     case (request.Method == http.MethodGet || request.Method == http.MethodHead) &&
-        (isClientAppDownloadPath(path) || isAdminAppDownloadPath(path) || isCamViewerDownloadPath(path) || isCamMonitorDownloadPath(path)):
+        (isClientAppDownloadPath(path) || isAdminAppDownloadPath(path) || isCamViewerDownloadPath(path) || isCamMonitorDownloadPath(path) || isAccountsAppDownloadPath(path)):
 		m.serveClientAppDownload(conn, request)
 	case request.Method == http.MethodPost && path == "/login":
 		_ = request.ParseForm()
@@ -1722,12 +1731,13 @@ func (m *TrafficManager) serveChatProxy(
 // Clients compare version numbers before opening the verified portal APK URL.
 func (m *TrafficManager) serveCamUpdateManifest(conn net.Conn) {
  m.mu.Lock()
- client,viewer,monitor,admin:=m.portalClientApp,m.portalCamViewerApp,m.portalCamMonitorApp,m.portalAdminApp
+ client,viewer,monitor,admin,accounts:=m.portalClientApp,m.portalCamViewerApp,m.portalCamMonitorApp,m.portalAdminApp,m.portalAccountsApp
  m.mu.Unlock()
  writeJSONStatus(conn,"200 OK",map[string]any{
   "clientApp":client,
   "camViewerApp":viewer,
    "camMonitorApp":monitor,
+   "accountsApp":accounts,
    "adminApp":admin,
  })
 }
@@ -1737,6 +1747,7 @@ func (m *TrafficManager) serveClientAppDownload(conn net.Conn, request *http.Req
     adminApp := m.portalAdminApp
     viewerApp := m.portalCamViewerApp
     monitorApp := m.portalCamMonitorApp
+    accountsApp := m.portalAccountsApp
     m.mu.Unlock()
 
     requestPath := "/shizzi-plus.apk"
@@ -1757,6 +1768,10 @@ func (m *TrafficManager) serveClientAppDownload(conn net.Conn, request *http.Req
         app = monitorApp
         backendPath = "/shizzicam-debit.apk"
         label = "ShizziCam Débit"
+    } else if isAccountsAppDownloadPath(requestPath) {
+        app = accountsApp
+        backendPath = "/shizzi-comptes.apk"
+        label = "Shizzi Comptes"
     }
 
     // Never use a fixed, possibly stale 8091 port nor blindly copy the response
@@ -1911,6 +1926,7 @@ func (m *TrafficManager) writePortalHTML(
 	adminApp := m.portalAdminApp
 	camViewerApp := m.portalCamViewerApp
     camMonitorApp := m.portalCamMonitorApp
+    accountsApp := m.portalAccountsApp
 	m.mu.Unlock()
 
 	alert := ""
@@ -2089,6 +2105,22 @@ func (m *TrafficManager) writePortalHTML(
             html.EscapeString(camMonitorApp.FileName),html.EscapeString(shortSHA))
     }
 
+    if accountsApp.Available && accountsApp.BridgePort > 0 {
+        downloadURL := "http://192.0.2.1/shizzi-comptes.apk?sha256=" + accountsApp.SHA256
+        shortSHA := accountsApp.SHA256
+        if len(shortSHA)>12 {shortSHA=shortSHA[:12]}
+        content += fmt.Sprintf(`<section class="app-download"><div class="eyebrow">GESTION DES COMPTES</div>
+<strong>Shizzi Comptes %s</strong>
+<p>Suivi des comptes et batterie du routeur. Téléchargement depuis ce HOTSPOT, sans Internet.</p>
+<a class="download-button" data-size="%d" data-sha256="%s" href="%s">Télécharger Shizzi Comptes</a>
+<div id="shizzi-comptes-download-status" class="app-note" aria-live="polite">Vérification de l'APK avant téléchargement.</div>
+<div class="app-meta">%s · %s · SHA-256 %s…</div></section>`,
+            html.EscapeString(accountsApp.Version),accountsApp.SizeBytes,
+            html.EscapeString(accountsApp.SHA256),html.EscapeString(downloadURL),
+            html.EscapeString(formatPortalFileSize(accountsApp.SizeBytes)),
+            html.EscapeString(accountsApp.FileName),html.EscapeString(shortSHA))
+    }
+
 	refresh := ""
 	if status.ClaimPending {
 		refresh = `<meta http-equiv="refresh" content="3;url=/">`
@@ -2178,7 +2210,8 @@ func injectClientAppDownload(page string) string {
 	if !strings.Contains(page, "shizzi-plus.apk") &&
 		!strings.Contains(page, "shizzi-admin.apk") &&
         !strings.Contains(page, "shizzicam-admin.apk") &&
-        !strings.Contains(page, "shizzicam-debit.apk") {
+        !strings.Contains(page, "shizzicam-debit.apk") &&
+        !strings.Contains(page, "shizzi-comptes.apk") {
 		return page
 	}
 
@@ -2230,6 +2263,7 @@ func injectClientAppDownload(page string) string {
   wire('a.download-button[href*="shizzi-admin.apk"]',"shizzi-admin-download-status");
   wire('a.download-button[href*="shizzicam-admin.apk"]',"shizzicam-admin-download-status");
   wire('a.download-button[href*="shizzicam-debit.apk"]',"shizzicam-debit-download-status");
+  wire('a.download-button[href*="shizzi-comptes.apk"]',"shizzi-comptes-download-status");
 })();
 </script>`;
 
