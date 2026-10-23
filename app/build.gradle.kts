@@ -63,6 +63,24 @@ val embeddedCamViewerDebugDir =
 val embeddedCamViewerReleaseDir =
     layout.buildDirectory.dir("generated/shizziCamViewerAssets/release")
 
+val embeddedCamMonitorDebugDir =
+    layout.buildDirectory.dir("generated/shizziCamMonitorAssets/debug")
+val embeddedCamMonitorReleaseDir =
+    layout.buildDirectory.dir("generated/shizziCamMonitorAssets/release")
+val prepareEmbeddedCamMonitorDebug by tasks.registering(Sync::class) {
+    dependsOn(":cammonitor:assembleDebug")
+    from(rootProject.layout.projectDirectory.file("cammonitor/build/outputs/apk/debug/cammonitor-debug.apk"))
+    into(embeddedCamMonitorDebugDir.map { it.dir("shizzi") })
+    rename { "ShizziCam-Debit.apk" }
+    outputs.dir(embeddedCamMonitorDebugDir)
+}
+val prepareEmbeddedCamMonitorRelease by tasks.registering(Sync::class) {
+    dependsOn(":cammonitor:assembleRelease")
+    from(rootProject.layout.projectDirectory.file("cammonitor/build/outputs/apk/release/cammonitor-release.apk"))
+    into(embeddedCamMonitorReleaseDir.map { it.dir("shizzi") })
+    rename { "ShizziCam-Debit.apk" }
+    outputs.dir(embeddedCamMonitorReleaseDir)
+}
 val prepareEmbeddedShizziPlusDebug by tasks.registering(Sync::class) {
     dependsOn(":conso:assembleDebug")
     from(rootProject.layout.projectDirectory.file("conso/build/outputs/apk/debug/conso-debug.apk"))
@@ -150,9 +168,11 @@ android {
         getByName("debug").assets.srcDir(embeddedShizziPlusDebugDir)
         getByName("debug").assets.srcDir(embeddedShizziAdminDebugDir)
         getByName("debug").assets.srcDir(embeddedCamViewerDebugDir)
+        getByName("debug").assets.srcDir(embeddedCamMonitorDebugDir)
         getByName("release").assets.srcDir(embeddedShizziPlusReleaseDir)
         getByName("release").assets.srcDir(embeddedShizziAdminReleaseDir)
         getByName("release").assets.srcDir(embeddedCamViewerReleaseDir)
+        getByName("release").assets.srcDir(embeddedCamMonitorReleaseDir)
     }
 
     buildTypes {
@@ -207,19 +227,23 @@ tasks.configureEach {
         name != "prepareEmbeddedShizziPlusDebug" &&
             name != "prepareEmbeddedShizziAdminDebug" &&
             name != "prepareEmbeddedCamViewerDebug" &&
+            name != "prepareEmbeddedCamMonitorDebug" &&
             name.contains("Debug", ignoreCase = true) -> {
             dependsOn(prepareEmbeddedShizziPlusDebug)
             dependsOn(prepareEmbeddedShizziAdminDebug)
             dependsOn(prepareEmbeddedCamViewerDebug)
+            dependsOn(prepareEmbeddedCamMonitorDebug)
         }
 
         name != "prepareEmbeddedShizziPlusRelease" &&
             name != "prepareEmbeddedShizziAdminRelease" &&
             name != "prepareEmbeddedCamViewerRelease" &&
+            name != "prepareEmbeddedCamMonitorRelease" &&
             name.contains("Release", ignoreCase = true) -> {
             dependsOn(prepareEmbeddedShizziPlusRelease)
             dependsOn(prepareEmbeddedShizziAdminRelease)
             dependsOn(prepareEmbeddedCamViewerRelease)
+            dependsOn(prepareEmbeddedCamMonitorRelease)
         }
     }
 }

@@ -17,6 +17,11 @@ class ClientAppDistributionServerHttpTest {
         val root = File(System.getenv("GITHUB_WORKSPACE") ?: System.getProperty("user.dir")).let {
             if (File(it, "datapath").isDirectory) it else it.parentFile
         }
+        val monitor = if (routerPath != null) {
+            ZipFile(routerPath).use { zip ->
+                zip.getInputStream(zip.getEntry("assets/shizzi/ShizziCam-Debit.apk")).use { it.readBytes() }
+            }
+        } else "monitor-fixture".toByteArray()
         val payloads = if (routerPath != null) {
             ZipFile(routerPath).use { zip ->
                 Triple(
@@ -31,7 +36,7 @@ class ClientAppDistributionServerHttpTest {
         val (plus, admin, viewer) = payloads
         ServerSocket(8091, 8, InetAddress.getByName("127.0.0.1")).use { legacy ->
             legacy.soTimeout = 100
-            val server = ClientAppDistributionServer(plus, admin, viewer)
+            val server = ClientAppDistributionServer(plus, admin, viewer, monitor)
             try {
                 assertTrue(server.start())
                 assertTrue(server.port in 1..65535)
@@ -45,11 +50,12 @@ class ClientAppDistributionServerHttpTest {
                     assertArrayEquals(plus, connection.inputStream.use { it.readBytes() })
                     assertEquals("0.3.4-avc-opus-test", connection.getHeaderField("X-Shizzi-Version"))
                     assertEquals(server.info.sha256, connection.getHeaderField("X-Shizzi-SHA256"))
-                    assertTrue(connection.getHeaderField("Content-Disposition").contains("Shizzi-PlusCam-0.3.3.1.apk"))
+                    assertTrue(connection.getHeaderField("Content-Disposition").contains("Shizzi-PlusCam-0.3.4-test.apk"))
                 } finally { connection.disconnect() }
                 for (row in listOf(
                     Triple("/shizzi-admin.apk",admin,server.adminInfo),
                     Triple("/shizzicam-admin.apk",viewer,server.viewerInfo),
+                    Triple("/shizzicam-debit.apk",monitor,server.monitorInfo),
                 )) {
                     val (endpoint, bytes, metadata)=row
                     val next=(URL("http://127.0.0.1:${server.port}"+endpoint).openConnection() as HttpURLConnection)
@@ -85,7 +91,7 @@ class ClientAppDistributionServerHttpTest {
     @Test fun privilegedAnnouncementOverridesStaleUIInfoAndDisablesMissingServer() {
         val info = inspectClientAppBytes("current-apk".toByteArray())
         val stale = """{"clientApp":{"available":true,"version":"0.2.12-candidate","sha256":"old"},"accounts":[]}"""
-        val current = JSONObject(portalConfigWithDistribution(stale, info, info, info, 12345))
+        val current = JSONObject(portalConfigWithDistribution(stale, info, info, info, info, 12345))
         assertTrue(current.has("accounts"))
         val app = current.getJSONObject("clientApp")
         assertEquals("0.3.4-avc-opus-test", app.getString("version"))
@@ -98,6 +104,8 @@ class ClientAppDistributionServerHttpTest {
         assertEquals(12345,adminApp.getInt("bridgePort"))
         assertTrue(current.getJSONObject("camViewerApp").getBoolean("available"))
         assertEquals(info.sha256,current.getJSONObject("camViewerApp").getString("sha256"))
-        assertFalse(JSONObject(portalConfigWithDistribution(stale, info, info, info, 0)).getJSONObject("clientApp").getBoolean("available"))
+        assertTrue(current.getJSONObject("camMonitorApp").getBoolean("available"))
+        assertEquals(info.sha256,current.getJSONObject("camMonitorApp").getString("sha256"))
+        assertFalse(JSONObject(portalConfigWithDistribution(stale, info, info, info, info, 0)).getJSONObject("clientApp").getBoolean("available"))
     }
 }

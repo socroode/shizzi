@@ -20,6 +20,7 @@ class TetherService : ITetherService.Stub {
             readClientAppAssetFromInstalledShizzi(context),
             readAdminAppAssetFromInstalledShizzi(context),
             readCamViewerAssetFromInstalledShizzi(context),
+            readCamMonitorAssetFromInstalledShizzi(context),
         )
     }
 
@@ -101,7 +102,8 @@ class TetherService : ITetherService.Stub {
         ensureClientAppDistribution()
         session.setPortalConfig(required, portalConfigWithDistribution(
             configJson.orEmpty(), clientAppDistribution.info, clientAppDistribution.adminInfo,
-            clientAppDistribution.viewerInfo, clientAppDistribution.port,
+            clientAppDistribution.viewerInfo, clientAppDistribution.monitorInfo,
+            clientAppDistribution.port,
         ))
     }
 

@@ -33,6 +33,7 @@ class ClientAppDistributionServer(
     private val apkBytes: ByteArray,
     private val adminApkBytes: ByteArray,
     private val viewerApkBytes: ByteArray,
+    private val monitorApkBytes: ByteArray,
 ) {
     private val running = AtomicBoolean(false)
     private val acceptExecutor = Executors.newSingleThreadExecutor()
@@ -57,11 +58,15 @@ class ClientAppDistributionServer(
         inspectEmbeddedAppBytes(viewerApkBytes, VIEWER_VERSION, VIEWER_FILE_NAME)
     }
 
+    val monitorInfo: ClientAppDistributionInfo by lazy {
+        inspectEmbeddedAppBytes(monitorApkBytes, MONITOR_VERSION, MONITOR_FILE_NAME)
+    }
+
     @Synchronized fun start(): Boolean {
-        if (!info.available || !adminInfo.available || !viewerInfo.available) {
+        if (!info.available || !adminInfo.available || !viewerInfo.available || !monitorInfo.available) {
             SessionLog.warn(
                 "Embedded app distribution asset unavailable: " +
-                    "plus=${info.available}, admin=${adminInfo.available}, viewer=${viewerInfo.available}",
+                    "plus=${info.available}, admin=${adminInfo.available}, viewer=${viewerInfo.available}, monitor=${monitorInfo.available}",
             )
             return false
         }
@@ -96,7 +101,9 @@ class ClientAppDistributionServer(
         SessionLog.info(
             "Embedded app distribution ready: " +
                 "${info.fileName} (${info.sizeBytes} bytes), " +
-                "${adminInfo.fileName} (${adminInfo.sizeBytes} bytes)",
+                "${adminInfo.fileName} (${adminInfo.sizeBytes} bytes), " +
+                "${viewerInfo.fileName} (${viewerInfo.sizeBytes} bytes), " +
+                "${monitorInfo.fileName} (${monitorInfo.sizeBytes} bytes)",
         )
         return true
     }
@@ -135,6 +142,7 @@ class ClientAppDistributionServer(
                 "/shizzi-plus.apk" -> apkBytes to info
                 "/shizzi-admin.apk" -> adminApkBytes to adminInfo
                 "/shizzicam-admin.apk" -> viewerApkBytes to viewerInfo
+                "/shizzicam-debit.apk" -> monitorApkBytes to monitorInfo
                 else -> null
             }
             if ((method != "GET" && method != "HEAD") || payload == null) {
@@ -250,12 +258,15 @@ class ClientAppDistributionServer(
         const val VIEWER_VERSION = "0.3.2-avc-opus-test"
         const val VIEWER_FILE_NAME = "ShizziCam-Admin-0.3.2-test.apk"
         const val VIEWER_ASSET_PATH = "shizzi/ShizziCam-Admin.apk"
+        const val MONITOR_VERSION = "0.1.0-candidate"
+        const val MONITOR_FILE_NAME = "ShizziCam-Debit-0.1.0.apk"
+        const val MONITOR_ASSET_PATH = "shizzi/ShizziCam-Debit.apk"
     }
 }
 
 /** The privileged process publishes the identity and port of its own live server.
  * Never retain an app-process announcement referring to a different installed APK/server. */
-internal fun portalConfigWithDistribution(configJson: String, info: ClientAppDistributionInfo, adminInfo: ClientAppDistributionInfo, viewerInfo: ClientAppDistributionInfo, port: Int): String =
+internal fun portalConfigWithDistribution(configJson: String, info: ClientAppDistributionInfo, adminInfo: ClientAppDistributionInfo, viewerInfo: ClientAppDistributionInfo, monitorInfo: ClientAppDistributionInfo, port: Int): String =
     JSONObject(configJson.ifBlank { "{}" }).apply {
         put("clientApp", JSONObject().apply {
             put("available", info.available && port in 1..65535)
@@ -279,6 +290,14 @@ internal fun portalConfigWithDistribution(configJson: String, info: ClientAppDis
             put("fileName", viewerInfo.fileName)
             put("sizeBytes", viewerInfo.sizeBytes)
             put("sha256", viewerInfo.sha256)
+            put("bridgePort", port)
+        })
+        put("camMonitorApp", JSONObject().apply {
+            put("available", monitorInfo.available && port in 1..65535)
+            put("version", monitorInfo.version)
+            put("fileName", monitorInfo.fileName)
+            put("sizeBytes", monitorInfo.sizeBytes)
+            put("sha256", monitorInfo.sha256)
             put("bridgePort", port)
         })
     }.toString()
@@ -323,6 +342,13 @@ internal fun readCamViewerAssetFromInstalledShizzi(context: Context): ByteArray 
         context,
         ClientAppDistributionServer.VIEWER_ASSET_PATH,
         "ShizziCam Admin (visionneuse)",
+    )
+
+internal fun readCamMonitorAssetFromInstalledShizzi(context: Context): ByteArray =
+    readEmbeddedAppAssetFromInstalledShizzi(
+        context,
+        ClientAppDistributionServer.MONITOR_ASSET_PATH,
+        "ShizziCam Débit",
     )
 
 internal fun inspectClientAppAsset(context: Context): ClientAppDistributionInfo =
