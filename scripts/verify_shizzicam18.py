@@ -58,7 +58,8 @@ def main():
    prefix=prefixes[module]
    advertised=re.search(r'const val '+prefix+r'_VERSION = "([^"]+)"',distribution)
    assert advertised and advertised.group(1)==version,(module,"portal advertises a different APK version")
-   asset_path=re.search(r'const val '+prefix+r'_ASSET_PATH = "([^"]+)"',distribution)
+   asset_name="ASSET_PATH" if module=="conso" else prefix+"_ASSET_PATH"
+   asset_path=re.search(r'const val '+asset_name+r' = "([^"]+)"',distribution)
    assert asset_path and asset_path.group(1)=="shizzi/"+asset,(module,"portal uses a different embedded asset")
    entry["advertisedVersion"]=advertised.group(1)
   result["apks"].append(entry);archives[module]=path
