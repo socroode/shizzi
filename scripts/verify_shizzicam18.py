@@ -34,6 +34,8 @@ def main():
   "apks":[],"embeddedAnnexes":[]}
  archives={}
  router_cert=None
+ distribution=(root/"app/src/main/java/dev/shizzi/ClientAppDistributionServer.kt").read_text()
+ prefixes={"conso":"CLIENT","admin":"ADMIN","camadmin":"VIEWER","cammonitor":"MONITOR","accounts":"ACCOUNTS"}
  for module,pkg,version,code,asset in rows:
   path=root/module/"build/outputs/apk"/args.variant/(module+"-"+args.variant+".apk")
   assert path.is_file(),str(path)+" missing"
@@ -52,6 +54,13 @@ def main():
   if args.variant=="release":assert cert==permanent,module+" permanent signing certificate differs"
   entry={"module":module,"package":pkg,"version":version,"versionCode":code,"sizeBytes":len(data),
    "sha256":hashlib.sha256(data).hexdigest(),"certificateSha256":cert}
+  if asset:
+   prefix=prefixes[module]
+   advertised=re.search(r'const val '+prefix+r'_VERSION = "([^"]+)"',distribution)
+   assert advertised and advertised.group(1)==version,(module,"portal advertises a different APK version")
+   asset_path=re.search(r'const val '+prefix+r'_ASSET_PATH = "([^"]+)"',distribution)
+   assert asset_path and asset_path.group(1)=="shizzi/"+asset,(module,"portal uses a different embedded asset")
+   entry["advertisedVersion"]=advertised.group(1)
   result["apks"].append(entry);archives[module]=path
  siren_path,siren=read_raw_resource(aapt,archives["conso"],"shizzicam_siren")
  assert siren==(root/"conso/src/main/res/raw/shizzicam_siren.mp3").read_bytes(),"embedded siren differs"
