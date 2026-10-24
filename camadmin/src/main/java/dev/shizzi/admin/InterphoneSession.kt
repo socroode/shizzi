@@ -11,6 +11,10 @@ internal class InterphoneSession {
         val acceptedRouterUs: Long = 0,
         val playbackConfirmed: Boolean = false,
         val message: String = "Mon micro : coupé",
+        val capturedSamples: Long = 0,
+        val encodedPackets: Long = 0,
+        val sentPackets: Long = 0,
+        val confirmationError: String = "",
     ) {
         val streaming get() = phase == Phase.CONNECTING || phase == Phase.ACCEPTED
     }
@@ -32,6 +36,19 @@ internal class InterphoneSession {
         return true
     }
     fun streaming(generation: Long): Boolean = state.let { it.generation == generation && it.streaming }
+
+    @Synchronized fun captured(generation: Long, samples: Int) {
+        if(streaming(generation))state=state.copy(capturedSamples=state.capturedSamples+samples)
+    }
+    @Synchronized fun encoded(generation: Long) {
+        if(streaming(generation))state=state.copy(encodedPackets=state.encodedPackets+1)
+    }
+    @Synchronized fun sent(generation: Long) {
+        if(streaming(generation))state=state.copy(sentPackets=state.sentPackets+1)
+    }
+    @Synchronized fun confirmationError(generation: Long, detail: String) {
+        if(streaming(generation))state=state.copy(confirmationError=detail.take(120))
+    }
 
     @Synchronized fun observe(generation: Long, acceptedUs: Long, playbackUs: Long, playbackVerified: Boolean) {
         if (!streaming(generation) || acceptedUs < state.startedRouterUs) return
@@ -60,8 +77,16 @@ internal class InterphoneSession {
     @Synchronized fun expire(nowUs: Long, generation: Long = state.generation): Boolean {
         val s = state
         if (s.generation != generation) return false
-        if (s.phase == Phase.CONNECTING && nowUs - s.startedRouterUs > 10_000_000)
-            return fail(s.generation, "le relais n’a pas confirmé la transmission")
+        if (s.phase == Phase.CONNECTING && nowUs - s.startedRouterUs > 10_000_000) {
+            val detail=when {
+                s.capturedSamples==0L -> "aucune donnée reçue du microphone"
+                s.encodedPackets==0L -> "micro capturé · aucun paquet Opus produit"
+                s.sentPackets==0L -> "Opus produit · envoi au relais bloqué"
+                s.confirmationError.isNotEmpty() -> "confirmation inaccessible : ${s.confirmationError}"
+                else -> "${s.sentPackets} paquets envoyés · réception par le relais non confirmée"
+            }
+            return fail(s.generation, detail)
+        }
         if (s.phase == Phase.ACCEPTED && nowUs - s.acceptedRouterUs > 5_000_000)
             return fail(s.generation, "transmission interrompue")
         return false

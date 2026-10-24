@@ -82,4 +82,34 @@ class InterphoneSessionTest {
         assertEquals(InterphoneSession.Phase.ACCEPTED, s.state.phase)
         assertTrue(s.state.playbackConfirmed)
     }
+    @Test fun timeoutExplainsTheLastCompletedStageWithoutClaimingRouterAcceptance() {
+        fun failure(captured: Boolean, encoded: Boolean, sent: Boolean, error: String = ""): String {
+            val s = InterphoneSession()
+            val attempt = s.request("123", true, 1_000)!!
+            if(captured)s.captured(attempt.generation, 960)
+            if(encoded)s.encoded(attempt.generation)
+            if(sent)s.sent(attempt.generation)
+            s.confirmationError(attempt.generation,error)
+            assertTrue(s.expire(10_001_001))
+            assertEquals(InterphoneSession.Phase.FAILED,s.state.phase)
+            return s.state.message
+        }
+        assertTrue(failure(false,false,false).contains("aucune donnée"))
+        assertTrue(failure(true,false,false).contains("aucun paquet Opus"))
+        assertTrue(failure(true,true,false).contains("envoi au relais bloqué"))
+        assertTrue(failure(true,true,true).contains("réception par le relais non confirmée"))
+        assertTrue(failure(true,true,true,"HTTP 503").contains("confirmation inaccessible : HTTP 503"))
+    }
+    @Test fun lateProgressCannotDescribeANewConversation() {
+        val s=InterphoneSession()
+        val old=s.request("123",true,100)!!
+        s.stop()
+        s.request("456",true,200)
+        s.captured(old.generation,960);s.encoded(old.generation);s.sent(old.generation)
+        s.confirmationError(old.generation,"old HTTP failure")
+        assertEquals(0L,s.state.capturedSamples)
+        assertEquals(0L,s.state.encodedPackets)
+        assertEquals(0L,s.state.sentPackets)
+        assertEquals("",s.state.confirmationError)
+    }
 }

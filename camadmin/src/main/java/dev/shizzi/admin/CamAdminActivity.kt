@@ -73,7 +73,7 @@ class CamAdminActivity : Activity() {
     private var admin: AdminApi? = null
     private val cameras = linkedMapOf<String, Int>()
     private val tileImages = mutableMapOf<String, ImageView>()
-    private val sessions = mutableMapOf<String, String>()
+    private val sessions = ViewerSessions()
     private val fetching = ConcurrentHashMap.newKeySet<String>()
     private val poll = Executors.newSingleThreadScheduledExecutor()
     private val frames = Executors.newFixedThreadPool(4)
@@ -83,7 +83,6 @@ class CamAdminActivity : Activity() {
     private val streamConnections=ConcurrentHashMap<String,HttpsURLConnection>()
     private val commands = Executors.newSingleThreadExecutor()
     private val eventPoll = Executors.newSingleThreadScheduledExecutor()
-    private val eventCursors = mutableMapOf<String,Long>()
     private val sessionBusy=ConcurrentHashMap.newKeySet<String>()
     private val pendingCommands = ConcurrentHashMap<String,String>()
     private val audioExecutor = Executors.newSingleThreadExecutor()
@@ -145,7 +144,7 @@ class CamAdminActivity : Activity() {
         audioSelected = ""
         cameras.clear()
         tileImages.clear()
-        synchronized(sessions){sessions.clear();eventCursors.clear()}
+        sessions.clear()
         pendingCommands.clear()
         root.removeAllViews()
         root.addView(label("ShizziCam · Visionneuse",25f))
@@ -209,7 +208,8 @@ class CamAdminActivity : Activity() {
                 c.setFixedLengthStreamingMode(bytes.size)
                 c.outputStream.use{it.write(bytes)}
             }
-            if(c.responseCode!=200)error("Caméra HTTP "+c.responseCode)
+            val code=c.responseCode
+            if(code!=200)throw AdminApiException(code,"Routeur HTTP $code")
             return JSONObject(c.inputStream.bufferedReader().use{it.readText()})
         } finally {c.disconnect()}
     }
@@ -522,14 +522,10 @@ class CamAdminActivity : Activity() {
         }
     }
     private fun ensureSession(account:String):String {
-        synchronized(sessions){sessions[account]?.let{return it}}
-        val sid=api("POST","/api/v1/cam/watch?side=viewer",
-            JSONObject().put("account",account)).getString("session")
-        synchronized(sessions){
-            sessions[account]=sid
-            eventCursors[account]=0L
+        return sessions.ensure(account){
+            api("POST","/api/v1/cam/watch?side=viewer",
+                JSONObject().put("account",account)).getString("session")
         }
-        return sid
     }
     private fun sendControl(command:String,value:String) {
         val account=selected
@@ -556,20 +552,20 @@ class CamAdminActivity : Activity() {
         if(admin==null||!alive)return
         val active=selected
         if(active.isEmpty())return
-        val sid= synchronized(sessions){sessions[active]}
+        val sid=sessions.current(active)
         if(sid==null){
             if(sessionBusy.add(active))commands.execute{try{ensureSession(active)}catch(_:Exception){}finally{sessionBusy.remove(active)}}
             return
         }
         try {
-            val after=synchronized(sessions){eventCursors[active] ?:0L}
+            val after=sessions.after(active,sid)
             val events=api("GET","/api/v1/cam/events?side=viewer&account="+
                 URLEncoder.encode(active,"UTF-8")+"&session="+URLEncoder.encode(sid,"UTF-8")+
                 "&after="+after).optJSONArray("events") ?:return
             for(i in 0 until events.length()){
                 val e=events.getJSONObject(i)
                 val id=e.optLong("id")
-                synchronized(sessions){eventCursors[active]=maxOf(eventCursors[active] ?:0,id)}
+                sessions.advance(active,sid,id)
                 if(e.optString("type")=="status"){
                     val command=e.optString("command")
                     val requestId=e.optString("requestId")
@@ -584,7 +580,16 @@ class CamAdminActivity : Activity() {
                 }
             }
         }catch(e:Exception){
-            synchronized(sessions){sessions.remove(active);eventCursors.remove(active)}
+            // A timeout does not revoke a router session. Re-watching would stop a live upload.
+            if(sessions.onPollFailure(active,sid,(e as? AdminApiException)?.status)){
+                val attempt=interphone.state
+                if(attempt.streaming && attempt.target==active)
+                    failTalking(attempt.generation,if((e as AdminApiException).status==404)"caméra déconnectée"
+                        else "association refusée par le relais (HTTP 403) · réessaie Parler")
+            }else if(e is AdminApiException && e.status==401){
+                val attempt=interphone.state
+                if(attempt.streaming)failTalking(attempt.generation,"session administrateur expirée · reconnecte la Visionneuse")
+            }
             android.util.Log.w("ShizziCam","Command acknowledgement unavailable",e)
         }
     }
@@ -652,6 +657,7 @@ class CamAdminActivity : Activity() {
         if(!attempt.streaming || admin==null || !alive)return
         try{
             val list=api("GET","/api/v1/cam/metrics").optJSONArray("cameras")
+            interphone.confirmationError(attempt.generation,"")
             if(list!=null)for(i in 0 until list.length()){
                 val item=list.getJSONObject(i)
                 if(item.optString("account")==attempt.target){
@@ -664,7 +670,10 @@ class CamAdminActivity : Activity() {
                     }
                 }
             }
-        }catch(e:Exception){android.util.Log.w("ShizziCam","Interphone confirmation unavailable",e)}
+        }catch(e:Exception){
+            interphone.confirmationError(attempt.generation,e.message?:"routeur inaccessible")
+            android.util.Log.w("ShizziCam","Interphone confirmation unavailable",e)
+        }
         if(interphone.expire(clock.nowUs(),attempt.generation))talkConnections[attempt.generation]?.disconnect()
         renderInterphoneState()
     }
@@ -719,6 +728,7 @@ class CamAdminActivity : Activity() {
                             val packet=queue.poll(300,TimeUnit.MILLISECONDS)?:continue
                             if(packet.flags==0&&clock.nowUs()-packet.ptsUs>180000)continue
                             packet.write(output)
+                            if(packet.flags==0)interphone.sent(generation)
                         }
                     }catch(e:Exception){failTalking(generation,"échec de transmission : ${e.message}")}
                 }
@@ -731,7 +741,9 @@ class CamAdminActivity : Activity() {
                 check(record.recordingState==AudioRecord.RECORDSTATE_RECORDING){"capture microphone non démarrée"}
                 while(interphone.streaming(generation)&&alive){
                     val n=record.read(buffer,0,buffer.size);check(n>0&&n%2==0){"capture microphone interrompue ($n)"}
+                    interphone.captured(generation,n/2)
                     for(packet in encoder.encode(buffer.copyOf(n),clock.nowUs()-n*1000000L/96000)){
+                        if(packet.flags==0)interphone.encoded(generation)
                         if(!queue.offer(packet)){queue.clear();encoder.configuration?.let{queue.offer(it)};queue.offer(packet)}
                     }
                 }

@@ -1,4 +1,4 @@
-# ShizziCam 0.4.3.5.18.1-test — modifications
+# ShizziCam 0.4.3.5.18.2-test — modifications
 
 Base : `feat/shizzicam-0.4.3.5.17-stream-audio-monitor`, commit `f4549ca970ce3e8cb827880e80b1ae223d113b99`.
 
@@ -28,3 +28,11 @@ Les APK de livraison doivent porter le certificat permanent attendu, dont l’em
 - Le routeur publie la date du dernier paquet interphone montant accepté. La Visionneuse conserve un mode de confirmation compatible avec les routeurs v3 précédents, sans réutiliser le trafic d’une conversation antérieure.
 - HOTSPOT : code Android 49 ; Visionneuse : code Android 9. Les autres annexes conservent leurs versions. La Visionneuse corrigée est intégrée au téléchargement local du HOTSPOT.
 - Des tests logiciels couvrent les transitions, permissions, confirmations, temporisations et changements de conversation ; le son et les couleurs sur appareils réels restent à valider.
+
+## Correctif de session et diagnostic interphone 0.4.3.5.18.2-test
+
+- Visionneuse 0.3.5-relay18-test : les commandes et l’interphone partagent une seule création de session par caméra, même lors de demandes simultanées. Deux requêtes « watch » ne peuvent plus s’invalider au démarrage.
+- Un délai réseau ou une erreur serveur transitoire lors du suivi des commandes conserve la session utilisée par le flux interphone. Un refus HTTP 403/404 invalide uniquement la session concernée ; un retour tardif ne supprime pas sa remplaçante.
+- L’échec de confirmation distingue l’absence de données du microphone, l’absence de paquets Opus, l’envoi bloqué et l’impossibilité d’interroger le relais. Le comptage de paquets envoyés ne remplace pas une confirmation de réception par le relais.
+- HOTSPOT : code Android 50 ; Visionneuse : code Android 10. Les trois annexes restent embarquées, avec Shizzi Admin et Shizzi Comptes conservés. Pas de modification du codec ni de l’application caméra dans ce correctif.
+- Ces défauts logiciels sont identifiés dans le chemin correspondant au bouton rouge photographié. Leur correction ne constitue pas encore la preuve que le silence observé sur les téléphones de l’utilisateur est résolu. Une confirmation matérielle reste nécessaire.
