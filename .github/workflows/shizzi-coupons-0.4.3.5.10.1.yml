@@ -1,4 +1,4 @@
-name: Shizzi 0.4.3.5.10.1 account coupon validation
+name: Shizzi 0.4.3.5.10.2 account coupon validation
 on:
   push:
     branches: [feature/0.4.3.5.10.1-admin-coupons]
@@ -57,7 +57,7 @@ jobs:
           set -euo pipefail
           BUILD_TOOLS=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | grep -v -- '-rc' | sort -V | tail -1)
           mkdir -p verified-apks
-          for item in "app:dev.shizzi:0.4.3.5.10.1:39" "admin:dev.shizzi.admin:0.3.4-coupons:19" "conso:dev.shizzi.conso:0.3.0-background-calls:17"; do
+          for item in "app:dev.shizzi:0.4.3.5.10.2:40" "admin:dev.shizzi.admin:0.3.4-coupons:19" "conso:dev.shizzi.conso:0.3.0-background-calls:17"; do
             IFS=: read -r module package expected_name expected_code <<< "$item"
             APK="$module/build/outputs/apk/release/$module-release.apk"
             test -s "$APK"
@@ -78,14 +78,14 @@ jobs:
       - name: Upload verified APKs
         uses: actions/upload-artifact@v5
         with:
-          name: Shizzi-0.4.3.5.10.1-coupons-signed
+          name: Shizzi-0.4.3.5.10.2-coupons-signed
           path: verified-apks/
           if-no-files-found: error
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: Shizzi-0.4.3.5.10.1-test-reports
+          name: Shizzi-0.4.3.5.10.2-test-reports
           path: |
             app/build/test-results/
             admin/build/test-results/
