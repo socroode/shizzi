@@ -66,6 +66,14 @@ fun processRemoteAdminCommand(
                 ),
             )
 
+            "account.coupon.media.issue" -> outcome(
+                store.issueMediaCouponForAccount(
+                    params.optString("number"),
+                    params.optString("offerId"),
+                    nowMillis,
+                ),
+            )
+
             "account.disconnect" -> {
                 val number = params.optString("number")
                 SessionService.disconnectAccount(number)
