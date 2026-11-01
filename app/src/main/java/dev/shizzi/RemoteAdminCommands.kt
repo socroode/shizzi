@@ -50,6 +50,22 @@ fun processRemoteAdminCommand(
 
             "account.delete" -> outcome(store.deleteAccount(params.optString("number")))
 
+            "account.coupon.redeem" -> outcome(
+                store.redeemVoucherForAccount(
+                    params.optString("number"),
+                    params.optString("code"),
+                    nowMillis,
+                ),
+            )
+
+            "account.coupon.issue" -> outcome(
+                store.issueCouponForAccount(
+                    params.optString("number"),
+                    params.optString("offerId"),
+                    nowMillis,
+                ),
+            )
+
             "account.disconnect" -> {
                 val number = params.optString("number")
                 SessionService.disconnectAccount(number)

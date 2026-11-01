@@ -22,6 +22,78 @@ class CandidateAccountingTest {
         assertEquals(migrated.pinHash, CybercafeStore(prefs).state.value.accounts.getValue("1001").pinHash)
     }
 
+    @Test fun adminCanRedeemCouponOnceWithoutOverwritingBalance() {
+        val offer = defaultOffers().getValue("eco-12")
+        val voucher = Voucher(
+            code = "CODE123",
+            offerId = offer.id,
+            createdAtMillis = 1L,
+            snapshotVersion = 1,
+            snapshotName = offer.name,
+            snapshotKind = offer.kind,
+            snapshotDownloadBps = offer.downloadBps,
+            snapshotUploadBps = offer.uploadBps,
+            snapshotQuotaBytes = offer.quotaBytes,
+            snapshotDurationDays = offer.durationDays,
+        )
+        val store = CybercafeStore(preferences(CybercafeState(
+            accounts = mapOf("1001" to account()),
+            offers = mapOf(offer.id to offer),
+            vouchers = mapOf(voucher.code to voucher),
+        )))
+        assertTrue(store.redeemVoucherForAccount("1001", " code123 ", 1_000L).success)
+        val newBalance = 1_000L + offer.quotaBytes
+        assertEquals(newBalance, store.state.value.accounts.getValue("1001").dataBalanceBytes)
+        assertEquals("1001", store.state.value.vouchers.getValue("CODE123").redeemedByAccount)
+        assertFalse(store.redeemVoucherForAccount("1001", "CODE123", 1_100L).success)
+        assertEquals(newBalance, store.state.value.accounts.getValue("1001").dataBalanceBytes)
+    }
+
+    @Test fun adminCanIssueCouponAtomicallyAndPersistAcrossRestart() {
+        val offer = defaultOffers().getValue("eco-12")
+        val prefs = preferences(CybercafeState(
+            accounts = mapOf("1001" to account()),
+            offers = mapOf(offer.id to offer),
+        ))
+        val store = CybercafeStore(prefs)
+        val result = store.issueCouponForAccount("1001", offer.id, 1_000L)
+        assertTrue(result.message, result.success)
+        val updated = store.state.value
+        assertEquals(1_000L + offer.quotaBytes, updated.accounts.getValue("1001").dataBalanceBytes)
+        assertEquals(1, updated.vouchers.size)
+        assertEquals("1001", updated.vouchers.values.single().redeemedByAccount)
+        assertEquals(updated.accounts.getValue("1001").dataBalanceBytes,
+            CybercafeStore(prefs).state.value.accounts.getValue("1001").dataBalanceBytes)
+    }
+
+    @Test fun adminCouponIssueRejectsInvalidAccountAndSuspendedAccount() {
+        val offer = defaultOffers().getValue("eco-12")
+        val store = CybercafeStore(preferences(CybercafeState(
+            accounts = mapOf("1001" to account()),
+            offers = mapOf(offer.id to offer),
+        )))
+        assertFalse(store.issueCouponForAccount("9999", offer.id, 1_000L).success)
+        assertFalse(store.issueCouponForAccount("1001", "absent", 1_000L).success)
+        assertTrue(store.setAccountEnabled("1001", false).success)
+        assertFalse(store.issueCouponForAccount("1001", offer.id, 1_000L).success)
+        assertTrue(store.state.value.vouchers.isEmpty())
+    }
+
+    @Test fun adminCouponWriteFailureDoesNotChangeAccountOrInventory() {
+        val offer = defaultOffers().getValue("eco-12")
+        val prefs = preferences(CybercafeState(
+            accounts = mapOf("1001" to account()),
+            offers = mapOf(offer.id to offer),
+        ))
+        val store = CybercafeStore(prefs)
+        val before = store.state.value
+        prefs.failWrites = true
+        assertThrows(IllegalStateException::class.java) {
+            store.issueCouponForAccount("1001", offer.id, 1_000L)
+        }
+        assertEquals(before, store.state.value)
+    }
+
     @Test fun failedCommitDoesNotReportRechargeSuccess() {
         val voucher = Voucher("CODE", "data-2gb", 1)
         val prefs = preferences(CybercafeState(accounts = mapOf("1001" to account()), vouchers = mapOf("CODE" to voucher)))

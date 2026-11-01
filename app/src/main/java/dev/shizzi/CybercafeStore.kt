@@ -232,6 +232,46 @@ class CybercafeStore internal constructor(private val preferences: SharedPrefere
         )
     }
 
+    /**
+     * Issue one Internet data coupon directly to an existing account. Generation, redemption
+     * and persistence are one transaction: a failed redemption never leaves a spare code.
+     */
+    @Synchronized
+    fun issueCouponForAccount(numberRaw: String, offerId: String, nowMillis: Long): RuleOutcome {
+        val current = state.value
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        val account = current.accounts[number]
+            ?: return RuleOutcome(current, false, "Compte introuvable.")
+        if (!account.enabled) return RuleOutcome(current, false, "Compte suspendu.")
+        val offer = current.offers[offerId]
+            ?: return RuleOutcome(current, false, "Offre de coupon introuvable.")
+        if (offer.kind != VoucherKind.DATA || offer.quotaBytes <= 0L) {
+            return RuleOutcome(current, false, "Choisissez une offre de données valide.")
+        }
+
+        var code: String
+        do {
+            code = newVoucherCode()
+        } while (current.vouchers.containsKey(code) || current.mediaVouchers.containsKey(code))
+        val voucher = Voucher(
+            code = code,
+            offerId = offer.id,
+            createdAtMillis = nowMillis,
+            snapshotVersion = 1,
+            snapshotName = offer.name,
+            snapshotKind = offer.kind,
+            snapshotDownloadBps = offer.downloadBps,
+            snapshotUploadBps = offer.uploadBps,
+            snapshotQuotaBytes = offer.quotaBytes,
+            snapshotDurationDays = offer.durationDays,
+            snapshotPriceXpf = offer.priceXpf,
+        )
+        val issued = current.copy(vouchers = current.vouchers + (code to voucher))
+        val redeemed = CybercafeRules.redeemVoucher(issued, number, code, nowMillis)
+        if (!redeemed.success) return RuleOutcome(current, false, redeemed.message)
+        return commit(redeemed.copy(message = "Coupon ${offer.name} ajouté au compte $number (code $code)."))
+    }
+
     @Synchronized
     fun redeemVoucherForAccount(
         numberRaw: String,

@@ -341,7 +341,12 @@ class MainActivity : Activity() {
             info(AdminBatteryLabel.format(battery.optBoolean("available"), battery.optInt("percent", -1), battery.optBoolean("charging")))
         } else info("Batterie : information indisponible sur cette version de Shizzi.")
 
-        if (capabilities.accounts) renderAccounts(state.getJSONArray("accounts"), traffic.optJSONArray("associatedClients") ?: JSONArray())
+        if (capabilities.accounts) renderAccounts(
+            state.getJSONArray("accounts"),
+            traffic.optJSONArray("associatedClients") ?: JSONArray(),
+            state.optJSONArray("offers") ?: JSONArray(),
+            state.optJSONArray("vouchers") ?: JSONArray(),
+        )
         updateAccountSessions(response.optJSONObject("traffic"))
         updateAccountPlans(response.optJSONObject("state"))
         if (capabilities.devices) {
@@ -379,7 +384,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun renderAccounts(accounts: JSONArray, associated: JSONArray) {
+    private fun renderAccounts(accounts: JSONArray, associated: JSONArray, offers: JSONArray, vouchers: JSONArray) {
         section("Comptes")
         val number = field("N° de compte")
         val name = field("Nom")
@@ -479,6 +484,9 @@ class MainActivity : Activity() {
                 weighted(),
             )
             root.addView(row2)
+            if (capabilities.offers) {
+                button("Ajouter un coupon au compte $n") { showAddCouponDialog(n, offers, vouchers) }
+            }
             if (capabilities.cameras) {
                 val cameraMac = account.optString("cameraMac")
                 if (cameraMac.isNotBlank()) {
@@ -501,6 +509,59 @@ class MainActivity : Activity() {
             }
             divider()
         }
+    }
+
+    private fun showAddCouponDialog(number: String, offers: JSONArray, vouchers: JSONArray) {
+        val choices = mutableListOf<Pair<String, () -> Unit>>()
+        choices.add("Saisir un code de coupon" to {
+            prompt("Code du coupon pour le compte $number") { raw ->
+                val code = raw.trim().uppercase()
+                if (code.isBlank()) {
+                    toast("Saisissez un code de coupon.")
+                } else {
+                    confirm("Utiliser le coupon $code pour le compte $number ? Le code ne pourra plus être utilisé.") {
+                        command("account.coupon.redeem", JSONObject().put("number", number).put("code", code))
+                    }
+                }
+            }
+        })
+
+        for (i in 0 until offers.length()) {
+            val offer = offers.optJSONObject(i) ?: continue
+            if (offer.optString("kind") != "DATA" || offer.optLong("quotaBytes") <= 0L) continue
+            val id = offer.optString("id")
+            if (id.isBlank()) continue
+            val label = offer.optString("name").ifBlank { id } + " · " +
+                formatBytes(offer.optLong("quotaBytes")) + " · " +
+                offer.optInt("durationDays") + " j"
+            choices.add("Créer et attribuer : $label" to {
+                confirm("Attribuer $label au compte $number ? Cette opération crédite le compte sans enregistrer de paiement.") {
+                    command("account.coupon.issue", JSONObject().put("number", number).put("offerId", id))
+                }
+            })
+        }
+
+        var displayed = 0
+        for (i in 0 until vouchers.length()) {
+            if (displayed >= 25) break
+            val voucher = vouchers.optJSONObject(i) ?: continue
+            if (!voucher.optBoolean("enabled", true) || voucher.optString("redeemedByAccount").isNotBlank()) continue
+            if (voucher.optString("snapshotKind", "DATA") != "DATA") continue
+            val code = voucher.optString("code")
+            if (code.isBlank()) continue
+            displayed++
+            val name = voucher.optString("snapshotName").ifBlank { voucher.optString("offerId") }
+            choices.add("Coupon disponible : $name ($code)" to {
+                confirm("Attribuer le coupon $code au compte $number ?") {
+                    command("account.coupon.redeem", JSONObject().put("number", number).put("code", code))
+                }
+            })
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Ajouter un coupon — compte $number")
+            .setItems(choices.map { it.first }.toTypedArray()) { _, index -> choices[index].second() }
+            .setNegativeButton("Annuler", null)
+            .show()
     }
 
     private fun updateAccountSessions(traffic: JSONObject?) {
