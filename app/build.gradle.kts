@@ -59,6 +59,11 @@ val embeddedShizziAdminDebugDir =
 val embeddedShizziAdminReleaseDir =
     layout.buildDirectory.dir("generated/shizziAdminAssets/release")
 
+// A signed companion keeps its exact bytes and Android version across router updates.
+// Release CI provides a directory of immutable, hash-verified APKs.
+val prebuiltShizziClientDir = providers.environmentVariable("SHIZZI_PREBUILT_CLIENT_DIR")
+    .orNull?.let { rootProject.file(it) }
+
 val prepareEmbeddedShizziPlusDebug by tasks.registering(Sync::class) {
     dependsOn(":conso:assembleDebug")
     from(rootProject.layout.projectDirectory.file("conso/build/outputs/apk/debug/conso-debug.apk"))
@@ -68,8 +73,9 @@ val prepareEmbeddedShizziPlusDebug by tasks.registering(Sync::class) {
 }
 
 val prepareEmbeddedShizziPlusRelease by tasks.registering(Sync::class) {
-    dependsOn(":conso:assembleRelease")
-    from(rootProject.layout.projectDirectory.file("conso/build/outputs/apk/release/conso-release.apk"))
+    if (prebuiltShizziClientDir == null) dependsOn(":conso:assembleRelease")
+    from(prebuiltShizziClientDir?.resolve("Shizzi-conso-0.3.0-background-calls.apk")
+        ?: rootProject.layout.projectDirectory.file("conso/build/outputs/apk/release/conso-release.apk").asFile)
     into(embeddedShizziPlusReleaseDir.map { it.dir("shizzi") })
     rename { "Shizzi-Plus.apk" }
     outputs.dir(embeddedShizziPlusReleaseDir)
@@ -84,8 +90,9 @@ val prepareEmbeddedShizziAdminDebug by tasks.registering(Sync::class) {
 }
 
 val prepareEmbeddedShizziAdminRelease by tasks.registering(Sync::class) {
-    dependsOn(":admin:assembleRelease")
-    from(rootProject.layout.projectDirectory.file("admin/build/outputs/apk/release/admin-release.apk"))
+    if (prebuiltShizziClientDir == null) dependsOn(":admin:assembleRelease")
+    from(prebuiltShizziClientDir?.resolve("Shizzi-admin-0.3.4-coupons.apk")
+        ?: rootProject.layout.projectDirectory.file("admin/build/outputs/apk/release/admin-release.apk").asFile)
     into(embeddedShizziAdminReleaseDir.map { it.dir("shizzi") })
     rename { "Shizzi-Admin.apk" }
     outputs.dir(embeddedShizziAdminReleaseDir)
@@ -100,8 +107,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 40
-        versionName = "0.4.3.5.10.2"
+        versionCode = 41
+        versionName = "0.4.3.5.10.3"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 
