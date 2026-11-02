@@ -91,7 +91,7 @@ val prepareEmbeddedShizziAdminDebug by tasks.registering(Sync::class) {
 
 val prepareEmbeddedShizziAdminRelease by tasks.registering(Sync::class) {
     if (prebuiltShizziClientDir == null) dependsOn(":admin:assembleRelease")
-    from(prebuiltShizziClientDir?.resolve("Shizzi-admin-0.3.4-coupons.apk")
+    from(prebuiltShizziClientDir?.resolve("Shizzi-admin-0.3.5-media-folders.apk")
         ?: rootProject.layout.projectDirectory.file("admin/build/outputs/apk/release/admin-release.apk").asFile)
     into(embeddedShizziAdminReleaseDir.map { it.dir("shizzi") })
     rename { "Shizzi-Admin.apk" }
@@ -107,8 +107,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 42
-        versionName = "0.4.3.5.10.4"
+        versionCode = 43
+        versionName = "0.4.3.5.10.5"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 

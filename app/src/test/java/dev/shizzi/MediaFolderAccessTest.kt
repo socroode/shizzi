@@ -10,8 +10,7 @@ import org.junit.Test
 class MediaFolderAccessTest {
 
     @Test
-    fun supportsTenCustomFoldersAndEightConcurrentClients() {
-        assertEquals(10, MediaFolderStore.MAX_FOLDERS)
+    fun supportsEightConcurrentClients() {
         assertTrue(MediaHttpServer.MAX_CLIENTS >= 8)
     }
 
@@ -122,7 +121,7 @@ class MediaFolderAccessTest {
 
     @Test
     fun crossProcessSnapshotIsolatesOneToEightRealAccountNumbers() {
-        val source = (1..10).map { index ->
+        val source = (1..100).map { index ->
             MediaFolderConfig(
                 id = "folder-$index",
                 name = "Dossier $index",
@@ -137,6 +136,8 @@ class MediaFolderAccessTest {
         val transported = MediaFolderStore.decodeSnapshot(
             MediaFolderStore.encodeSnapshot(source),
         )
+
+        assertEquals(source, transported)
 
         for (userCount in 1..8) {
             for (user in 1..userCount) {
@@ -160,7 +161,7 @@ class MediaFolderAccessTest {
 
     @Test
     fun virtualRouterAndOneToEightAndroidClientsStayIsolated() {
-        val folders = (1..10).map { index ->
+        val folders = (1..100).map { index ->
             MediaFolderConfig(
                 id = "folder-$index",
                 name = "Dossier $index",

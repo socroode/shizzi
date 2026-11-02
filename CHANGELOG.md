@@ -3,6 +3,13 @@
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3.5.10.5] - 2026-11-01
+
+- Remove the custom Media folder-count limit from local creation, remote Admin commands, storage and cross-process snapshots.
+- Preserve existing folders and per-account access rules when loading, editing or removing folders beyond the former ten-folder boundary.
+- HOTSPOT is version 0.4.3.5.10.5 (43); Admin is version 0.3.5-media-folders (20), displays the unrestricted folder count and respects older routers' advertised limits.
+- Embed the new signed Admin APK and retain the exact signed Shizzi+ 0.3.0-background-calls (17) bytes.
+
 ## [0.4.3.5.1] - 2026-10-07
 - Forked from the exact Shizzi 0.4.3.5 Media baseline.
 - Imports the later 0.4.4 feature set while preserving the pre-reconnect client identification and captive-session behavior.

@@ -909,7 +909,7 @@ class MainActivity : Activity() {
         val enabled = media.optBoolean("enabled", false)
         val summary = media.optJSONObject("summary") ?: JSONObject()
         val folders = media.optJSONArray("folders") ?: JSONArray()
-        val maxFolders = media.optInt("maxFolders", 10)
+        val folderCapacity = MediaFolderCapacity.from(media)
 
         info(
             (if (enabled) "Serveur Media : ACTIF" else "Serveur Media : ARRÊTÉ") +
@@ -917,7 +917,7 @@ class MainActivity : Activity() {
                 " · " + summary.optInt("films") + " films" +
                 " · " + summary.optInt("series") + " séries" +
                 " · " + summary.optInt("music") + " musiques" +
-                "\nDossiers : " + folders.length() + "/" + maxFolders,
+                "\n" + folderCapacity.label(folders.length()),
         )
 
         val serverRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -945,7 +945,7 @@ class MainActivity : Activity() {
             )
         }
 
-        if (folders.length() < maxFolders) {
+        if (folderCapacity.canAdd(folders.length())) {
             button("Ajouter un dossier Media") {
                 prompt("Nom du dossier", "Dossier Media") { value ->
                     command(

@@ -13,8 +13,8 @@ android {
         applicationId = "dev.shizzi.admin"
         minSdk = 30
         targetSdk = 35
-        versionCode = 19
-        versionName = "0.3.4-coupons"
+        versionCode = 20
+        versionName = "0.3.5-media-folders"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

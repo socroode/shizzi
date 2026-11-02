@@ -56,7 +56,6 @@ fun mediaAccountOptions(state: CybercafeState): List<MediaAccountOption> =
         )
 
 object MediaFolderStore {
-    const val MAX_FOLDERS = 10
     private const val PREFS = "shizzi_media"
     private const val KEY_FOLDERS = "folders_v2"
 
@@ -67,7 +66,7 @@ object MediaFolderStore {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val raw = prefs.getString(KEY_FOLDERS, null)
         if (!raw.isNullOrBlank()) {
-            return decode(raw).take(MAX_FOLDERS)
+            return decode(raw)
         }
 
         val migrated = MediaKind.entries.mapNotNull { kind ->
@@ -85,10 +84,8 @@ object MediaFolderStore {
     }
 
     fun save(context: Context, folders: List<MediaFolderConfig>) {
-        require(folders.size <= MAX_FOLDERS) { "Maximum $MAX_FOLDERS dossiers Media" }
         val sanitized = folders
             .distinctBy { it.id }
-            .take(MAX_FOLDERS)
             .map(::sanitize)
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
@@ -103,7 +100,6 @@ object MediaFolderStore {
         if (index >= 0) {
             current[index] = clean
         } else {
-            require(current.size < MAX_FOLDERS) { "Maximum $MAX_FOLDERS dossiers Media" }
             current += clean
         }
         save(context, current)
@@ -168,7 +164,7 @@ object MediaFolderStore {
         encode(folders)
 
     internal fun decodeSnapshot(raw: String): List<MediaFolderConfig> =
-        decode(raw).take(MAX_FOLDERS)
+        decode(raw)
 
     private fun encode(folders: List<MediaFolderConfig>): String =
         JSONArray().apply {

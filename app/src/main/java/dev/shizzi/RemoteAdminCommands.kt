@@ -206,24 +206,19 @@ fun processRemoteAdminCommand(
             }
 
             "media.folder.create" -> {
-                val current = MediaFolderStore.load(context)
-                if (current.size >= MediaFolderStore.MAX_FOLDERS) {
-                    AdminCommandResult(command.id, false, "Maximum de dossiers Media atteint.")
-                } else {
-                    val kind = MediaKind.fromKey(params.optString("kind")) ?: MediaKind.FILMS
-                    val created = MediaFolderStore.create(
-                        params.optString("name").ifBlank { "Dossier Media" },
-                        kind,
-                    )
-                    MediaFolderStore.upsert(context, created)
-                    if (MediaPrefs.isEnabled(context)) MediaServerService.restart(context)
-                    AdminCommandResult(
-                        command.id,
-                        true,
-                        "Dossier Media créé.",
-                        JSONObject().put("id", created.id).toString(),
-                    )
-                }
+                val kind = MediaKind.fromKey(params.optString("kind")) ?: MediaKind.FILMS
+                val created = MediaFolderStore.create(
+                    params.optString("name").ifBlank { "Dossier Media" },
+                    kind,
+                )
+                MediaFolderStore.upsert(context, created)
+                if (MediaPrefs.isEnabled(context)) MediaServerService.restart(context)
+                AdminCommandResult(
+                    command.id,
+                    true,
+                    "Dossier Media créé.",
+                    JSONObject().put("id", created.id).toString(),
+                )
             }
 
             "media.folder.update" -> {

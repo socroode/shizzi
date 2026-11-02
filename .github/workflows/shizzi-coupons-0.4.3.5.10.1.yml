@@ -1,4 +1,4 @@
-name: Shizzi 0.4.3.5.10.4 account coupon validation
+name: Shizzi 0.4.3.5.10.5 Media folders and coupon validation
 on:
   push:
     branches: [feature/0.4.3.5.10.1-admin-coupons]
@@ -49,25 +49,27 @@ jobs:
           EOF
       - name: Test Android modules
         run: ./gradlew :app:testDebugUnitTest :admin:testDebugUnitTest :conso:testDebugUnitTest --no-daemon
-      - name: Restore immutable signed companion APKs
+      - name: Restore immutable signed Shizzi+ APK
         uses: actions/download-artifact@v5
         with:
           name: Shizzi-0.4.3.5.10.1-coupons-signed
           run-id: 41270368599
           github-token: ${{ github.token }}
           path: pinned-client-apks
-      - name: Verify companion provenance and byte identity
+      - name: Verify Shizzi+ provenance and byte identity
         run: |
           set -euo pipefail
           git fetch --no-tags --depth=1 origin 49917bb4ca2baab856a9be08a0b3b7d113904fbb
           git diff --exit-code 49917bb4ca2baab856a9be08a0b3b7d113904fbb HEAD -- \
-            admin/src/main admin/build.gradle.kts admin/proguard-rules.pro \
             conso/src/main conso/build.gradle.kts conso/proguard-rules.pro \
             build.gradle.kts settings.gradle.kts gradle.properties
           cd pinned-client-apks
           printf '%s\n' \
-            '0e43bf0a427b5c8d83f6002431493f3b1890d015d29a74361b8349b522f1afd6  Shizzi-admin-0.3.4-coupons.apk' \
             'd2fcce9993ffcc32ba78329f18c0bb27a480de1ed7b7c93fea8e3d5894c6265d  Shizzi-conso-0.3.0-background-calls.apk' | sha256sum -c -
+      - name: Build updated signed Admin APK
+        run: |
+          ./gradlew :admin:assembleRelease --no-daemon
+          cp admin/build/outputs/apk/release/admin-release.apk pinned-client-apks/Shizzi-admin-0.3.5-media-folders.apk
       - name: Build signed router with embedded client APKs
         env:
           SHIZZI_PREBUILT_CLIENT_DIR: ${{ github.workspace }}/pinned-client-apks
@@ -79,7 +81,7 @@ jobs:
           set -euo pipefail
           BUILD_TOOLS=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | grep -v -- '-rc' | sort -V | tail -1)
           mkdir -p verified-apks
-          for item in "app:dev.shizzi:0.4.3.5.10.4:42" "admin:dev.shizzi.admin:0.3.4-coupons:19" "conso:dev.shizzi.conso:0.3.0-background-calls:17"; do
+          for item in "app:dev.shizzi:0.4.3.5.10.5:43" "admin:dev.shizzi.admin:0.3.5-media-folders:20" "conso:dev.shizzi.conso:0.3.0-background-calls:17"; do
             IFS=: read -r module package expected_name expected_code <<< "$item"
             APK="$module/build/outputs/apk/release/$module-release.apk"
             if [ "$module" != app ]; then APK="pinned-client-apks/Shizzi-$module-$expected_name.apk"; fi
@@ -95,20 +97,20 @@ jobs:
           done
           unzip -p app/build/outputs/apk/release/app-release.apk assets/shizzi/Shizzi-Admin.apk >/tmp/shizzi-embedded-admin.apk
           unzip -p app/build/outputs/apk/release/app-release.apk assets/shizzi/Shizzi-Plus.apk >/tmp/shizzi-embedded-plus.apk
-          cmp /tmp/shizzi-embedded-admin.apk pinned-client-apks/Shizzi-admin-0.3.4-coupons.apk
+          cmp /tmp/shizzi-embedded-admin.apk pinned-client-apks/Shizzi-admin-0.3.5-media-folders.apk
           cmp /tmp/shizzi-embedded-plus.apk pinned-client-apks/Shizzi-conso-0.3.0-background-calls.apk
           (cd verified-apks && sha256sum *.apk > SHA256SUMS.txt)
       - name: Upload verified APKs
         uses: actions/upload-artifact@v5
         with:
-          name: Shizzi-0.4.3.5.10.4-coupons-signed
+          name: Shizzi-0.4.3.5.10.5-media-folders-signed
           path: verified-apks/
           if-no-files-found: error
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: Shizzi-0.4.3.5.10.4-test-reports
+          name: Shizzi-0.4.3.5.10.5-test-reports
           path: |
             app/build/test-results/
             admin/build/test-results/
