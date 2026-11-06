@@ -13,8 +13,8 @@ android {
         applicationId = "dev.shizzi.admin"
         minSdk = 30
         targetSdk = 35
-        versionCode = 20
-        versionName = "0.3.5-media-folders"
+        versionCode = 21
+        versionName = "0.3.6-recharge-history"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -50,6 +50,8 @@ android {
             }
         }
     }
+
+    sourceSets.getByName("main").java.srcDir(rootProject.file("shared/src/main/java"))
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

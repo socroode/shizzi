@@ -35,6 +35,7 @@ import java.util.ArrayDeque
 import kotlin.concurrent.thread
 import org.json.JSONArray
 import org.json.JSONObject
+import dev.shizzi.history.RechargeHistory
 
 class MainActivity : Activity() {
 
@@ -316,6 +317,7 @@ class MainActivity : Activity() {
     }
 
     private fun showDashboard(response: JSONObject) {
+        lastState = response
         accountCards.clear()
         root.removeAllViews()
         routerName = response.optString("routerName", routerName)
@@ -493,6 +495,7 @@ class MainActivity : Activity() {
                 weighted(),
             )
             root.addView(row2)
+            button("Historique des recharges") { showAccountRechargeHistory(n) }
             if (capabilities.offers || capabilities.mediaOffers) {
                 button("Ajouter un coupon au compte $n") {
                     showAddCouponDialog(n, offers, vouchers, mediaOffers, mediaVouchers)
@@ -651,6 +654,64 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("Détails de l'appareil")
             .setMessage(summary.details)
+            .setPositiveButton("Fermer", null)
+            .show()
+    }
+
+    private fun showAccountRechargeHistory(number: String) {
+        val history = RechargeHistory.read(number, lastState?.optJSONObject("state"))
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), 0)
+        }
+        container.addView(TextView(this).apply {
+            text = history.summary
+            textSize = 14f
+            setPadding(0, 0, 0, dp(12))
+        })
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val viewport = ScrollView(this).apply { addView(content) }
+        container.addView(viewport, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            (resources.displayMetrics.heightPixels * 0.45f).toInt(),
+        ))
+        var page = 0
+        val navigation = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val previous = makeButton("Précédent") {}
+        val pageLabel = TextView(this).apply { gravity = Gravity.CENTER }
+        val next = makeButton("Suivant") {}
+        navigation.addView(previous, weighted())
+        navigation.addView(pageLabel, weighted())
+        navigation.addView(next, weighted())
+        navigation.visibility = if (history.pageCount > 1) View.VISIBLE else View.GONE
+        container.addView(navigation)
+
+        fun renderPage() {
+            content.removeAllViews()
+            history.page(page).forEach { entry ->
+                content.addView(TextView(this).apply {
+                    text = entry.format(::formatDateTime)
+                    textSize = 14f
+                    setTextIsSelectable(true)
+                    setPadding(0, dp(8), 0, dp(12))
+                })
+                content.addView(View(this).apply { setBackgroundColor(0x33616161) },
+                    LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)))
+            }
+            pageLabel.text = "${page + 1}/${history.pageCount}"
+            previous.isEnabled = page > 0
+            next.isEnabled = page + 1 < history.pageCount
+            viewport.scrollTo(0, 0)
+        }
+        previous.setOnClickListener { page--; renderPage() }
+        next.setOnClickListener { page++; renderPage() }
+        renderPage()
+        AlertDialog.Builder(this)
+            .setTitle("Historique des recharges · N° $number")
+            .setView(container)
             .setPositiveButton("Fermer", null)
             .show()
     }

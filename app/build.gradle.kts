@@ -8,7 +8,8 @@ plugins {
 }
 
 fun sourceFingerprint(projectDir: File): Int {
-    val roots = listOf(File(projectDir, "src/main"), File(projectDir.parentFile, "datapath"))
+    val roots = listOf(File(projectDir, "src/main"), File(projectDir.parentFile, "datapath"),
+        File(projectDir.parentFile, "shared/src/main"))
     return roots.flatMap { root -> root.walkTopDown().filter { it.isFile &&
         it.extension in setOf("kt", "go", "aidl", "xml", "mod", "sum", "js", "txt") }.toList() }
         .sortedBy { it.relativeTo(projectDir.parentFile).path }
@@ -91,7 +92,7 @@ val prepareEmbeddedShizziAdminDebug by tasks.registering(Sync::class) {
 
 val prepareEmbeddedShizziAdminRelease by tasks.registering(Sync::class) {
     if (prebuiltShizziClientDir == null) dependsOn(":admin:assembleRelease")
-    from(prebuiltShizziClientDir?.resolve("Shizzi-admin-0.3.5-media-folders.apk")
+    from(prebuiltShizziClientDir?.resolve("Shizzi-admin-0.3.6-recharge-history.apk")
         ?: rootProject.layout.projectDirectory.file("admin/build/outputs/apk/release/admin-release.apk").asFile)
     into(embeddedShizziAdminReleaseDir.map { it.dir("shizzi") })
     rename { "Shizzi-Admin.apk" }
@@ -107,8 +108,8 @@ android {
 
         minSdk = 30
         targetSdk = 35
-        versionCode = 43
-        versionName = "0.4.3.5.10.5"
+        versionCode = 44
+        versionName = "0.4.3.5.10.6"
 
         buildConfigField("int", "SERVICE_BUILD_ID", "${sourceFingerprint(projectDir)}")
 
@@ -135,6 +136,7 @@ android {
     }
 
     sourceSets {
+        getByName("main").java.srcDir(rootProject.file("shared/src/main/java"))
         getByName("debug").assets.srcDir(embeddedShizziPlusDebugDir)
         getByName("debug").assets.srcDir(embeddedShizziAdminDebugDir)
         getByName("release").assets.srcDir(embeddedShizziPlusReleaseDir)

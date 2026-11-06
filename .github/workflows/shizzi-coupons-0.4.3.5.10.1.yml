@@ -1,4 +1,4 @@
-name: Shizzi 0.4.3.5.10.5 Media folders and coupon validation
+name: Shizzi 0.4.3.5.10.6 account recharge history
 on:
   push:
     branches: [feature/0.4.3.5.10.1-admin-coupons]
@@ -69,7 +69,7 @@ jobs:
       - name: Build updated signed Admin APK
         run: |
           ./gradlew :admin:assembleRelease --no-daemon
-          cp admin/build/outputs/apk/release/admin-release.apk pinned-client-apks/Shizzi-admin-0.3.5-media-folders.apk
+          cp admin/build/outputs/apk/release/admin-release.apk pinned-client-apks/Shizzi-admin-0.3.6-recharge-history.apk
       - name: Build signed router with embedded client APKs
         env:
           SHIZZI_PREBUILT_CLIENT_DIR: ${{ github.workspace }}/pinned-client-apks
@@ -81,7 +81,7 @@ jobs:
           set -euo pipefail
           BUILD_TOOLS=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | grep -v -- '-rc' | sort -V | tail -1)
           mkdir -p verified-apks
-          for item in "app:dev.shizzi:0.4.3.5.10.5:43" "admin:dev.shizzi.admin:0.3.5-media-folders:20" "conso:dev.shizzi.conso:0.3.0-background-calls:17"; do
+          for item in "app:dev.shizzi:0.4.3.5.10.6:44" "admin:dev.shizzi.admin:0.3.6-recharge-history:21" "conso:dev.shizzi.conso:0.3.0-background-calls:17"; do
             IFS=: read -r module package expected_name expected_code <<< "$item"
             APK="$module/build/outputs/apk/release/$module-release.apk"
             if [ "$module" != app ]; then APK="pinned-client-apks/Shizzi-$module-$expected_name.apk"; fi
@@ -97,20 +97,20 @@ jobs:
           done
           unzip -p app/build/outputs/apk/release/app-release.apk assets/shizzi/Shizzi-Admin.apk >/tmp/shizzi-embedded-admin.apk
           unzip -p app/build/outputs/apk/release/app-release.apk assets/shizzi/Shizzi-Plus.apk >/tmp/shizzi-embedded-plus.apk
-          cmp /tmp/shizzi-embedded-admin.apk pinned-client-apks/Shizzi-admin-0.3.5-media-folders.apk
+          cmp /tmp/shizzi-embedded-admin.apk pinned-client-apks/Shizzi-admin-0.3.6-recharge-history.apk
           cmp /tmp/shizzi-embedded-plus.apk pinned-client-apks/Shizzi-conso-0.3.0-background-calls.apk
           (cd verified-apks && sha256sum *.apk > SHA256SUMS.txt)
       - name: Upload verified APKs
         uses: actions/upload-artifact@v5
         with:
-          name: Shizzi-0.4.3.5.10.5-media-folders-signed
+          name: Shizzi-0.4.3.5.10.6-recharge-history-signed
           path: verified-apks/
           if-no-files-found: error
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: Shizzi-0.4.3.5.10.5-test-reports
+          name: Shizzi-0.4.3.5.10.6-test-reports
           path: |
             app/build/test-results/
             admin/build/test-results/
