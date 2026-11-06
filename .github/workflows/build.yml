@@ -33,10 +33,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          # Matches the toolchain line in datapath/go.mod. Pinned rather than
-          # left to auto-download so a CI build uses the same compiler the
-          # release does.
-          go-version: '1.26.3'
+          # Resolve the compiler from the same pinned module as the signed build.
+          go-version-file: datapath/go.mod
           cache-dependency-path: datapath/go.sum
 
       - name: Set up Android SDK
@@ -49,10 +47,10 @@ jobs:
         run: sdkmanager --install "ndk;27.0.12077973"
 
       - name: Install gomobile
-        # The gomobileBind task looks for the binary at ~/go/bin specifically,
-        # so installing it anywhere else on PATH is not enough.
+        working-directory: datapath
         run: |
-          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gomobile
+          go install golang.org/x/mobile/cmd/gobind
           gomobile init
 
       - name: Set up Gradle

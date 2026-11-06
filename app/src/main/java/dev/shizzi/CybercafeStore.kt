@@ -232,6 +232,86 @@ class CybercafeStore internal constructor(private val preferences: SharedPrefere
         )
     }
 
+    /**
+     * Issue one Internet coupon (data or unlimited) directly to an existing account. Generation, redemption
+     * and persistence are one transaction: a failed redemption never leaves a spare code.
+     */
+    @Synchronized
+    fun issueCouponForAccount(numberRaw: String, offerId: String, nowMillis: Long): RuleOutcome {
+        val current = state.value
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        val account = current.accounts[number]
+            ?: return RuleOutcome(current, false, "Compte introuvable.")
+        if (!account.enabled) return RuleOutcome(current, false, "Compte suspendu.")
+        val offer = current.offers[offerId]
+            ?: return RuleOutcome(current, false, "Offre de coupon introuvable.")
+        val validOffer = when (offer.kind) {
+            VoucherKind.DATA -> offer.quotaBytes > 0L
+            VoucherKind.UNLIMITED -> offer.durationDays > 0
+        }
+        if (!validOffer) {
+            return RuleOutcome(current, false, "Choisissez une offre Internet valide.")
+        }
+
+        var code: String
+        do {
+            code = newVoucherCode()
+        } while (current.vouchers.containsKey(code) || current.mediaVouchers.containsKey(code))
+        val voucher = Voucher(
+            code = code,
+            offerId = offer.id,
+            createdAtMillis = nowMillis,
+            snapshotVersion = 1,
+            snapshotName = offer.name,
+            snapshotKind = offer.kind,
+            snapshotDownloadBps = offer.downloadBps,
+            snapshotUploadBps = offer.uploadBps,
+            snapshotQuotaBytes = offer.quotaBytes,
+            snapshotDurationDays = offer.durationDays,
+            snapshotPriceXpf = offer.priceXpf,
+        )
+        val issued = current.copy(vouchers = current.vouchers + (code to voucher))
+        val redeemed = CybercafeRules.redeemVoucher(issued, number, code, nowMillis)
+        if (!redeemed.success) return RuleOutcome(current, false, redeemed.message)
+        return commit(redeemed.copy(message = "Coupon ${offer.name} ajouté au compte $number (code $code)."))
+    }
+
+    /**
+     * Atomically issue an already-consumed Media voucher to the selected account,
+     * adding time to any remaining Media access without modifying Internet balances.
+     */
+    @Synchronized
+    fun issueMediaCouponForAccount(numberRaw: String, offerId: String, nowMillis: Long): RuleOutcome {
+        val current = state.value
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        val account = current.accounts[number]
+            ?: return RuleOutcome(current, false, "Compte introuvable.")
+        if (!account.enabled) return RuleOutcome(current, false, "Compte suspendu.")
+        val offer = current.mediaOffers[offerId]
+            ?: return RuleOutcome(current, false, "Offre Media introuvable.")
+        if (offer.durationMinutes <= 0L) {
+            return RuleOutcome(current, false, "Durée du coupon Media invalide.")
+        }
+
+        var code: String
+        do {
+            code = newVoucherCode()
+        } while (current.vouchers.containsKey(code) || current.mediaVouchers.containsKey(code))
+        val voucher = MediaVoucher(
+            code = code,
+            offerId = offer.id,
+            createdAtMillis = nowMillis,
+            snapshotVersion = 1,
+            snapshotName = offer.name,
+            snapshotDurationMinutes = offer.durationMinutes,
+            snapshotPriceXpf = offer.priceXpf,
+        )
+        val issued = current.copy(mediaVouchers = current.mediaVouchers + (code to voucher))
+        val redeemed = CybercafeRules.redeemMediaVoucher(issued, number, code, nowMillis)
+        if (!redeemed.success) return RuleOutcome(current, false, redeemed.message)
+        return commit(redeemed.copy(message = "Coupon Media ${offer.name} ajouté au compte $number (code $code)."))
+    }
+
     @Synchronized
     fun redeemVoucherForAccount(
         numberRaw: String,

@@ -7,24 +7,32 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import dev.shizzi.encodeCybercafeState
+import dev.shizzi.history.RechargeHistory
+import org.json.JSONObject
 import dev.shizzi.flowEndReasonLabel
 import dev.shizzi.App
 import dev.shizzi.CybercafeState
@@ -272,6 +280,11 @@ private fun AccountEditor(
     var pin by remember { mutableStateOf("") }
     var editingPinFor by remember { mutableStateOf("") }
     var newPin by remember { mutableStateOf("") }
+    var historyAccount by remember { mutableStateOf<String?>(null) }
+
+    historyAccount?.let { selected ->
+        AccountRechargeHistoryDialog(selected, state) { historyAccount = null }
+    }
 
     SectionTitle("Account Editor")
     OutlinedTextField(
@@ -317,6 +330,9 @@ private fun AccountEditor(
 
     state.accounts.values.sortedBy(PrepaidAccount::number).forEach { account ->
         AccountRow(account)
+        TextButton(onClick = { historyAccount = account.number }) {
+            Text("Historique des recharges")
+        }
         val accountSessions = sessions.filter { it.accountNumber == account.number }
         val onlineCount = accountSessions.count { it.presence == "online" }
         Text(
@@ -399,6 +415,47 @@ private fun AccountEditor(
 
         HorizontalDivider(modifier = Modifier.padding(vertical = ShizziTheme.spacing.md))
     }
+}
+
+@Composable
+private fun AccountRechargeHistoryDialog(number: String, state: CybercafeState, onDismiss: () -> Unit) {
+    val history = remember(number, state) {
+        RechargeHistory.read(number, JSONObject(encodeCybercafeState(state)))
+    }
+    var requestedPage by remember(number) { mutableIntStateOf(0) }
+    val page = requestedPage.coerceIn(0, history.pageCount - 1)
+    val scroll = rememberScrollState()
+    LaunchedEffect(page) { scroll.scrollTo(0) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Historique des recharges · N° $number") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(history.summary)
+                Column(
+                    Modifier.heightIn(max = 340.dp).verticalScroll(scroll),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    history.page(page).forEach { entry ->
+                        Text(entry.format(::formatDate))
+                        HorizontalDivider()
+                    }
+                }
+                if (history.pageCount > 1) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(enabled = page > 0, onClick = { requestedPage = page - 1 }) {
+                            Text("Précédent")
+                        }
+                        Text("${page + 1}/${history.pageCount}")
+                        TextButton(enabled = page + 1 < history.pageCount, onClick = { requestedPage = page + 1 }) {
+                            Text("Suivant")
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Fermer") } },
+    )
 }
 
 @Composable

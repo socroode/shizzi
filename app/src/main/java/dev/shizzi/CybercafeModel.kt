@@ -279,6 +279,14 @@ object CybercafeRules {
         val updatedVoucher = voucher.copy(
             redeemedByAccount = number,
             redeemedAtMillis = nowMillis,
+            snapshotVersion = 1,
+            snapshotName = offer.name,
+            snapshotKind = offer.kind,
+            snapshotDownloadBps = offer.downloadBps,
+            snapshotUploadBps = offer.uploadBps,
+            snapshotQuotaBytes = offer.quotaBytes,
+            snapshotDurationDays = offer.durationDays,
+            snapshotPriceXpf = offer.priceXpf,
         )
 
         return RuleOutcome(
@@ -345,6 +353,10 @@ object CybercafeRules {
         val updatedVoucher = voucher.copy(
             redeemedByAccount = number,
             redeemedAtMillis = nowMillis,
+            snapshotVersion = 1,
+            snapshotName = offer.name,
+            snapshotDurationMinutes = offer.durationMinutes,
+            snapshotPriceXpf = offer.priceXpf,
         )
 
         return RuleOutcome(

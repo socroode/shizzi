@@ -82,7 +82,8 @@ class CybercafeTrafficBridgeTest {
             .getJSONObject("adminState")
             .getJSONObject("media")
         assertTrue(media.getBoolean("enabled"))
-        assertEquals(10, media.getInt("maxFolders"))
+        assertTrue(media.getBoolean("unlimitedFolders"))
+        assertEquals(Int.MAX_VALUE, media.getInt("maxFolders"))
         assertEquals(20, media.getJSONObject("summary").getInt("total"))
 
         val serialized = media.getJSONArray("folders")

@@ -35,6 +35,7 @@ import java.util.ArrayDeque
 import kotlin.concurrent.thread
 import org.json.JSONArray
 import org.json.JSONObject
+import dev.shizzi.history.RechargeHistory
 
 class MainActivity : Activity() {
 
@@ -316,6 +317,7 @@ class MainActivity : Activity() {
     }
 
     private fun showDashboard(response: JSONObject) {
+        lastState = response
         accountCards.clear()
         root.removeAllViews()
         routerName = response.optString("routerName", routerName)
@@ -341,7 +343,14 @@ class MainActivity : Activity() {
             info(AdminBatteryLabel.format(battery.optBoolean("available"), battery.optInt("percent", -1), battery.optBoolean("charging")))
         } else info("Batterie : information indisponible sur cette version de Shizzi.")
 
-        if (capabilities.accounts) renderAccounts(state.getJSONArray("accounts"), traffic.optJSONArray("associatedClients") ?: JSONArray())
+        if (capabilities.accounts) renderAccounts(
+            state.getJSONArray("accounts"),
+            traffic.optJSONArray("associatedClients") ?: JSONArray(),
+            state.optJSONArray("offers") ?: JSONArray(),
+            state.optJSONArray("vouchers") ?: JSONArray(),
+            state.optJSONArray("mediaOffers") ?: JSONArray(),
+            state.optJSONArray("mediaVouchers") ?: JSONArray(),
+        )
         updateAccountSessions(response.optJSONObject("traffic"))
         updateAccountPlans(response.optJSONObject("state"))
         if (capabilities.devices) {
@@ -379,7 +388,14 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun renderAccounts(accounts: JSONArray, associated: JSONArray) {
+    private fun renderAccounts(
+        accounts: JSONArray,
+        associated: JSONArray,
+        offers: JSONArray,
+        vouchers: JSONArray,
+        mediaOffers: JSONArray,
+        mediaVouchers: JSONArray,
+    ) {
         section("Comptes")
         val number = field("N° de compte")
         val name = field("Nom")
@@ -479,6 +495,12 @@ class MainActivity : Activity() {
                 weighted(),
             )
             root.addView(row2)
+            button("Historique des recharges") { showAccountRechargeHistory(n) }
+            if (capabilities.offers || capabilities.mediaOffers) {
+                button("Ajouter un coupon au compte $n") {
+                    showAddCouponDialog(n, offers, vouchers, mediaOffers, mediaVouchers)
+                }
+            }
             if (capabilities.cameras) {
                 val cameraMac = account.optString("cameraMac")
                 if (cameraMac.isNotBlank()) {
@@ -501,6 +523,97 @@ class MainActivity : Activity() {
             }
             divider()
         }
+    }
+
+    private fun showAddCouponDialog(
+        number: String,
+        offers: JSONArray,
+        vouchers: JSONArray,
+        mediaOffers: JSONArray,
+        mediaVouchers: JSONArray,
+    ) {
+        val choices = mutableListOf<Pair<String, () -> Unit>>()
+        choices.add("Saisir un code de coupon" to {
+            prompt("Code du coupon pour le compte $number") { raw ->
+                val code = raw.trim().uppercase()
+                if (code.isBlank()) {
+                    toast("Saisissez un code de coupon.")
+                } else {
+                    confirm("Utiliser le coupon $code pour le compte $number ? Le code ne pourra plus être utilisé.") {
+                        command("account.coupon.redeem", JSONObject().put("number", number).put("code", code))
+                    }
+                }
+            }
+        })
+
+        for (i in 0 until offers.length()) {
+            val offer = offers.optJSONObject(i) ?: continue
+            val kind = offer.optString("kind")
+            if (kind != "DATA" && kind != "UNLIMITED") continue
+            if (kind == "DATA" && offer.optLong("quotaBytes") <= 0L) continue
+            if (kind == "UNLIMITED" && offer.optInt("durationDays") <= 0) continue
+            val id = offer.optString("id")
+            if (id.isBlank()) continue
+            val volume = if (kind == "DATA") formatBytes(offer.optLong("quotaBytes")) else "Illimité"
+            val label = "Internet · " + offer.optString("name").ifBlank { id } + " · " +
+                volume + " · " + offer.optInt("durationDays") + " j"
+            choices.add("Créer et attribuer : $label" to {
+                confirm("Attribuer $label au compte $number ? Cette opération crédite le compte sans enregistrer de paiement.") {
+                    command("account.coupon.issue", JSONObject().put("number", number).put("offerId", id))
+                }
+            })
+        }
+
+        var displayed = 0
+        for (i in 0 until vouchers.length()) {
+            if (displayed >= 25) break
+            val voucher = vouchers.optJSONObject(i) ?: continue
+            if (!voucher.optBoolean("enabled", true) || voucher.optString("redeemedByAccount").isNotBlank()) continue
+            val code = voucher.optString("code")
+            if (code.isBlank()) continue
+            displayed++
+            val name = voucher.optString("snapshotName").ifBlank { voucher.optString("offerId") }
+            choices.add("Coupon Internet disponible : $name ($code)" to {
+                confirm("Attribuer le coupon $code au compte $number ?") {
+                    command("account.coupon.redeem", JSONObject().put("number", number).put("code", code))
+                }
+            })
+        }
+        // A Media coupon extends local Media access only; it never changes Internet data.
+        for (i in 0 until mediaOffers.length()) {
+            val offer = mediaOffers.optJSONObject(i) ?: continue
+            val id = offer.optString("id")
+            if (id.isBlank() || offer.optLong("durationMinutes") <= 0L) continue
+            val label = "Media · " + offer.optString("name").ifBlank { id } + " · " +
+                formatMediaDuration(offer.optLong("durationMinutes"))
+            choices.add("Créer et attribuer : $label" to {
+                confirm("Attribuer $label au compte $number ? Cette opération ne crée pas d'encaissement.") {
+                    command("account.coupon.media.issue", JSONObject().put("number", number).put("offerId", id))
+                }
+            })
+        }
+
+        var displayedMedia = 0
+        for (i in 0 until mediaVouchers.length()) {
+            if (displayedMedia >= 25) break
+            val voucher = mediaVouchers.optJSONObject(i) ?: continue
+            if (!voucher.optBoolean("enabled", true) || voucher.optString("redeemedByAccount").isNotBlank()) continue
+            val code = voucher.optString("code")
+            if (code.isBlank()) continue
+            displayedMedia++
+            val name = voucher.optString("snapshotName").ifBlank { voucher.optString("offerId") }
+            choices.add("Coupon Media disponible : $name ($code)" to {
+                confirm("Attribuer le coupon Media $code au compte $number ?") {
+                    command("account.coupon.redeem", JSONObject().put("number", number).put("code", code))
+                }
+            })
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Ajouter un coupon — compte $number")
+            .setItems(choices.map { it.first }.toTypedArray()) { _, index -> choices[index].second() }
+            .setNegativeButton("Annuler", null)
+            .show()
     }
 
     private fun updateAccountSessions(traffic: JSONObject?) {
@@ -541,6 +654,64 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle("Détails de l'appareil")
             .setMessage(summary.details)
+            .setPositiveButton("Fermer", null)
+            .show()
+    }
+
+    private fun showAccountRechargeHistory(number: String) {
+        val history = RechargeHistory.read(number, lastState?.optJSONObject("state"))
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), 0)
+        }
+        container.addView(TextView(this).apply {
+            text = history.summary
+            textSize = 14f
+            setPadding(0, 0, 0, dp(12))
+        })
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val viewport = ScrollView(this).apply { addView(content) }
+        container.addView(viewport, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            (resources.displayMetrics.heightPixels * 0.45f).toInt(),
+        ))
+        var page = 0
+        val navigation = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val previous = makeButton("Précédent") {}
+        val pageLabel = TextView(this).apply { gravity = Gravity.CENTER }
+        val next = makeButton("Suivant") {}
+        navigation.addView(previous, weighted())
+        navigation.addView(pageLabel, weighted())
+        navigation.addView(next, weighted())
+        navigation.visibility = if (history.pageCount > 1) View.VISIBLE else View.GONE
+        container.addView(navigation)
+
+        fun renderPage() {
+            content.removeAllViews()
+            history.page(page).forEach { entry ->
+                content.addView(TextView(this).apply {
+                    text = entry.format(::formatDateTime)
+                    textSize = 14f
+                    setTextIsSelectable(true)
+                    setPadding(0, dp(8), 0, dp(12))
+                })
+                content.addView(View(this).apply { setBackgroundColor(0x33616161) },
+                    LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)))
+            }
+            pageLabel.text = "${page + 1}/${history.pageCount}"
+            previous.isEnabled = page > 0
+            next.isEnabled = page + 1 < history.pageCount
+            viewport.scrollTo(0, 0)
+        }
+        previous.setOnClickListener { page--; renderPage() }
+        next.setOnClickListener { page++; renderPage() }
+        renderPage()
+        AlertDialog.Builder(this)
+            .setTitle("Historique des recharges · N° $number")
+            .setView(container)
             .setPositiveButton("Fermer", null)
             .show()
     }
@@ -799,7 +970,7 @@ class MainActivity : Activity() {
         val enabled = media.optBoolean("enabled", false)
         val summary = media.optJSONObject("summary") ?: JSONObject()
         val folders = media.optJSONArray("folders") ?: JSONArray()
-        val maxFolders = media.optInt("maxFolders", 10)
+        val folderCapacity = MediaFolderCapacity.from(media)
 
         info(
             (if (enabled) "Serveur Media : ACTIF" else "Serveur Media : ARRÊTÉ") +
@@ -807,7 +978,7 @@ class MainActivity : Activity() {
                 " · " + summary.optInt("films") + " films" +
                 " · " + summary.optInt("series") + " séries" +
                 " · " + summary.optInt("music") + " musiques" +
-                "\nDossiers : " + folders.length() + "/" + maxFolders,
+                "\n" + folderCapacity.label(folders.length()),
         )
 
         val serverRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -835,7 +1006,7 @@ class MainActivity : Activity() {
             )
         }
 
-        if (folders.length() < maxFolders) {
+        if (folderCapacity.canAdd(folders.length())) {
             button("Ajouter un dossier Media") {
                 prompt("Nom du dossier", "Dossier Media") { value ->
                     command(

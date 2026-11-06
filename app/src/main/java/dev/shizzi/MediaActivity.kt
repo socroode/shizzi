@@ -190,7 +190,7 @@ private fun MediaScreen(onBack: () -> Unit) {
             HorizontalDivider()
 
             Text(
-                "Dossiers Media personnalisés (${folders.size}/${MediaFolderStore.MAX_FOLDERS})",
+                "Dossiers Media personnalisés (${folders.size}) · sans limite",
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
@@ -237,16 +237,14 @@ private fun MediaScreen(onBack: () -> Unit) {
                 HorizontalDivider()
             }
 
-            if (folders.size < MediaFolderStore.MAX_FOLDERS) {
-                Button(
-                    onClick = {
-                        val created = MediaFolderStore.create("Dossier ${folders.size + 1}")
-                        MediaFolderStore.upsert(context, created)
-                        revision++
-                    },
-                ) {
-                    Text("Ajouter un dossier")
-                }
+            Button(
+                onClick = {
+                    val created = MediaFolderStore.create("Dossier ${folders.size + 1}")
+                    MediaFolderStore.upsert(context, created)
+                    revision++
+                },
+            ) {
+                Text("Ajouter un dossier")
             }
 
             Button(

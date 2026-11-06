@@ -683,6 +683,7 @@ func adminProof(passwordHash, nonce string) string {
 func adminActionAllowed(action string) bool {
 	switch action {
 	case "camera.enroll", "camera.remove", "account.create",
+		"account.coupon.redeem", "account.coupon.issue", "account.coupon.media.issue",
 		"account.rename",
 		"account.pin",
 		"account.enable",

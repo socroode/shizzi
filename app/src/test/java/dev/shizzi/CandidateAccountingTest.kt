@@ -22,6 +22,147 @@ class CandidateAccountingTest {
         assertEquals(migrated.pinHash, CybercafeStore(prefs).state.value.accounts.getValue("1001").pinHash)
     }
 
+    @Test fun adminCanRedeemCouponOnceWithoutOverwritingBalance() {
+        val offer = defaultOffers().getValue("eco-12")
+        val voucher = Voucher(
+            code = "CODE123",
+            offerId = offer.id,
+            createdAtMillis = 1L,
+            snapshotVersion = 1,
+            snapshotName = offer.name,
+            snapshotKind = offer.kind,
+            snapshotDownloadBps = offer.downloadBps,
+            snapshotUploadBps = offer.uploadBps,
+            snapshotQuotaBytes = offer.quotaBytes,
+            snapshotDurationDays = offer.durationDays,
+        )
+        val store = CybercafeStore(preferences(CybercafeState(
+            accounts = mapOf("1001" to account()),
+            offers = mapOf(offer.id to offer),
+            vouchers = mapOf(voucher.code to voucher),
+        )))
+        assertTrue(store.redeemVoucherForAccount("1001", " code123 ", 1_000L).success)
+        val newBalance = 1_000L + offer.quotaBytes
+        assertEquals(newBalance, store.state.value.accounts.getValue("1001").dataBalanceBytes)
+        assertEquals("1001", store.state.value.vouchers.getValue("CODE123").redeemedByAccount)
+        assertFalse(store.redeemVoucherForAccount("1001", "CODE123", 1_100L).success)
+        assertEquals(newBalance, store.state.value.accounts.getValue("1001").dataBalanceBytes)
+    }
+
+    @Test fun adminCanIssueCouponAtomicallyAndPersistAcrossRestart() {
+        val offer = defaultOffers().getValue("eco-12")
+        val prefs = preferences(CybercafeState(
+            accounts = mapOf("1001" to account()),
+            offers = mapOf(offer.id to offer),
+        ))
+        val store = CybercafeStore(prefs)
+        val result = store.issueCouponForAccount("1001", offer.id, 1_000L)
+        assertTrue(result.message, result.success)
+        val updated = store.state.value
+        assertEquals(1_000L + offer.quotaBytes, updated.accounts.getValue("1001").dataBalanceBytes)
+        assertEquals(1, updated.vouchers.size)
+        assertEquals("1001", updated.vouchers.values.single().redeemedByAccount)
+        assertEquals(updated.accounts.getValue("1001").dataBalanceBytes,
+            CybercafeStore(prefs).state.value.accounts.getValue("1001").dataBalanceBytes)
+    }
+
+    @Test fun adminCanAssignExistingMediaVoucherWithoutChangingInternet() {
+        val media = MediaOffer("media-1", "Media 7j", 7L * 24 * 60, 500)
+        val voucher = MediaVoucher("MEDIACODE", media.id, 1L, snapshotVersion = 1,
+            snapshotName = media.name, snapshotDurationMinutes = media.durationMinutes)
+        val store = CybercafeStore(preferences(CybercafeState(
+            accounts = mapOf("1001" to account().copy(mediaUntilMillis = 10_000L)),
+            mediaOffers = mapOf(media.id to media),
+            mediaVouchers = mapOf(voucher.code to voucher),
+        )))
+        assertTrue(store.redeemVoucherForAccount("1001", " mediacode ", 2_000L).success)
+        val updated = store.state.value.accounts.getValue("1001")
+        assertEquals(1_000L, updated.dataBalanceBytes)
+        assertEquals(10_000L + media.durationMinutes * 60_000L, updated.mediaUntilMillis)
+        assertEquals("1001", store.state.value.mediaVouchers.getValue("MEDIACODE").redeemedByAccount)
+        assertFalse(store.redeemVoucherForAccount("1001", "MEDIACODE", 2_100L).success)
+        assertEquals(updated, store.state.value.accounts.getValue("1001"))
+    }
+
+    @Test fun adminCanIssueMediaCouponAndStackRemainingDuration() {
+        val media = MediaOffer("media-1", "Media 24h", 1_440L, 200)
+        val prefs = preferences(CybercafeState(
+            accounts = mapOf("1001" to account()),
+            mediaOffers = mapOf(media.id to media),
+        ))
+        val store = CybercafeStore(prefs)
+        assertTrue(store.issueMediaCouponForAccount("1001", media.id, 1_000L).success)
+        val firstExpiry = store.state.value.accounts.getValue("1001").mediaUntilMillis
+        assertEquals(1_000L + 1_440L * 60_000L, firstExpiry)
+        assertTrue(store.issueMediaCouponForAccount("1001", media.id, 2_000L).success)
+        assertEquals(firstExpiry + 1_440L * 60_000L,
+            store.state.value.accounts.getValue("1001").mediaUntilMillis)
+        assertEquals(1_000L, store.state.value.accounts.getValue("1001").dataBalanceBytes)
+        assertEquals(2, store.state.value.mediaVouchers.size)
+        assertTrue(store.state.value.mediaVouchers.values.all { it.redeemedByAccount == "1001" })
+        assertEquals(store.state.value,
+            CybercafeStore(prefs).state.value)
+    }
+
+    @Test fun adminCanIssueUnlimitedWithoutReplacingMediaOrData() {
+        val unlimited = defaultOffers().getValue("unlimited-comfort")
+        val store = CybercafeStore(preferences(CybercafeState(
+            accounts = mapOf("1001" to account().copy(mediaUntilMillis = 9_000L)),
+            offers = mapOf(unlimited.id to unlimited),
+        )))
+        assertTrue(store.issueCouponForAccount("1001", unlimited.id, 1_000L).success)
+        val first = store.state.value.accounts.getValue("1001")
+        assertEquals(1_000L, first.dataBalanceBytes)
+        assertEquals(9_000L, first.mediaUntilMillis)
+        assertEquals(1_000L + unlimited.durationDays * 86_400_000L, first.unlimitedUntilMillis)
+        assertTrue(store.issueCouponForAccount("1001", unlimited.id, 2_000L).success)
+        assertEquals(first.unlimitedUntilMillis + unlimited.durationDays * 86_400_000L,
+            store.state.value.accounts.getValue("1001").unlimitedUntilMillis)
+    }
+
+    @Test fun adminCouponIssueRejectsInvalidAccountAndSuspendedAccount() {
+        val offer = defaultOffers().getValue("eco-12")
+        val store = CybercafeStore(preferences(CybercafeState(
+            accounts = mapOf("1001" to account()),
+            offers = mapOf(offer.id to offer),
+        )))
+        assertFalse(store.issueCouponForAccount("9999", offer.id, 1_000L).success)
+        assertFalse(store.issueCouponForAccount("1001", "absent", 1_000L).success)
+        assertTrue(store.setAccountEnabled("1001", false).success)
+        assertFalse(store.issueCouponForAccount("1001", offer.id, 1_000L).success)
+        assertTrue(store.state.value.vouchers.isEmpty())
+    }
+
+    @Test fun adminCouponWriteFailureDoesNotChangeAccountOrInventory() {
+        val offer = defaultOffers().getValue("eco-12")
+        val prefs = preferences(CybercafeState(
+            accounts = mapOf("1001" to account()),
+            offers = mapOf(offer.id to offer),
+        ))
+        val store = CybercafeStore(prefs)
+        val before = store.state.value
+        prefs.failWrites = true
+        assertThrows(IllegalStateException::class.java) {
+            store.issueCouponForAccount("1001", offer.id, 1_000L)
+        }
+        assertEquals(before, store.state.value)
+    }
+
+    @Test fun failedMediaCouponCommitDoesNotChangeAccountOrInventory() {
+        val media = MediaOffer("media-1", "Media jour", 1_440L, 200)
+        val prefs = preferences(CybercafeState(
+            accounts = mapOf("1001" to account()),
+            mediaOffers = mapOf(media.id to media),
+        ))
+        val store = CybercafeStore(prefs)
+        val before = store.state.value
+        prefs.failWrites = true
+        assertThrows(IllegalStateException::class.java) {
+            store.issueMediaCouponForAccount("1001", media.id, 1_000L)
+        }
+        assertEquals(before, store.state.value)
+    }
+
     @Test fun failedCommitDoesNotReportRechargeSuccess() {
         val voucher = Voucher("CODE", "data-2gb", 1)
         val prefs = preferences(CybercafeState(accounts = mapOf("1001" to account()), vouchers = mapOf("CODE" to voucher)))
