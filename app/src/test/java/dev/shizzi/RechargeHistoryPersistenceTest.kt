@@ -74,7 +74,9 @@ class RechargeHistoryPersistenceTest {
     @Test fun failedOrRepeatedRechargesNeverCreatePhantomHistoryEntries() {
         val (prefs, store) = fixture()
         prefs.failWrites = true
-        assertFalse(store.issueCouponForAccount("1001", "eco-12", now).success)
+        assertThrows(IllegalStateException::class.java) {
+            store.issueCouponForAccount("1001", "eco-12", now)
+        }
         assertTrue(history(store.state.value).entries.isEmpty())
         assertTrue(history(CybercafeStore(prefs).state.value).entries.isEmpty())
         prefs.failWrites = false
