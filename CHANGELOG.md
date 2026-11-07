@@ -3,6 +3,13 @@
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3.5.10.7] - 2026-11-07
+
+- Add Data validity coupons with configurable days and tariff. Codes can be generated for the captive portal or assigned from an Admin account card.
+- Extend the active Data deadline, or start a fresh validity period when unused expired Data is still recorded. The account keeps its volume and speed settings.
+- Protect the purchased Data deadline when a standard Data recharge is applied to a remaining balance. Record each extension in recharge history and show recoverable expired Data on the portal.
+- HOTSPOT is version 0.4.3.5.10.7 (45) and Admin is version 0.3.7-data-extension (22).
+
 ## [0.4.3.5.10.6] - 2026-11-05
 
 - Add per-account recharge history to Admin and the router's local account management: Internet DATA, unlimited Internet and Media in one chronological list with access to every page.

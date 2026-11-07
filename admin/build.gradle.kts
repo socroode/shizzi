@@ -13,8 +13,8 @@ android {
         applicationId = "dev.shizzi.admin"
         minSdk = 30
         targetSdk = 35
-        versionCode = 21
-        versionName = "0.3.6-recharge-history"
+        versionCode = 22
+        versionName = "0.3.7-data-extension"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

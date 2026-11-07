@@ -1782,6 +1782,7 @@ type portalStatusPayload struct {
 	UploadBps         int64  `json:"uploadBps"`
 	Unlimited         bool   `json:"unlimited"`
 	StoredDataBytes   int64  `json:"storedDataBytes"`
+	RecoverableBytes  int64  `json:"recoverableDataBytes,omitempty"`
 	MediaActive       bool   `json:"mediaActive"`
 	MediaUntilMillis  int64  `json:"mediaUntilMillis"`
 	ClaimMessage      string `json:"claimMessage,omitempty"`
@@ -1818,7 +1819,11 @@ func (m *TrafficManager) portalStatus(ip string) portalStatusPayload {
 
 	unlimited := account.hasUnlimited(now)
 	remaining := m.remainingDataLocked(account)
+	recoverable := int64(0)
 	if !account.dataValid(now) {
+		if account.Enabled && account.DataValidUntilMillis > 0 && account.DataValidUntilMillis <= now {
+			recoverable = remaining
+		}
 		remaining = 0
 	}
 
@@ -1851,6 +1856,7 @@ func (m *TrafficManager) portalStatus(ip string) portalStatusPayload {
 		UploadBps:         account.uploadBps(now),
 		Unlimited:         unlimited,
 		StoredDataBytes:   remaining,
+		RecoverableBytes:  recoverable,
 		MediaActive:       account.hasMedia(now),
 		MediaUntilMillis:  account.MediaUntilMillis,
 	}
@@ -1909,13 +1915,20 @@ func (m *TrafficManager) writePortalHTML(
 			remaining = "Illimité"
 		}
 		reserveStyle := " style=\"display:none\""
-		if status.Unlimited && status.StoredDataBytes > 0 {
+		reserveLabel := "Data en réserve"
+		reserveBytes := status.StoredDataBytes
+		if status.RecoverableBytes > 0 {
+			reserveStyle = ""
+			reserveLabel = "Data récupérable"
+			reserveBytes = status.RecoverableBytes
+		} else if status.Unlimited && reserveBytes > 0 {
 			reserveStyle = ""
 		}
 		reserve := fmt.Sprintf(
-			`<div id="shizzi-reserve-wrap"%s><span>Data en réserve</span><strong id="shizzi-reserve">%s</strong></div>`,
+			`<div id="shizzi-reserve-wrap"%s><span id="shizzi-reserve-label">%s</span><strong id="shizzi-reserve">%s</strong></div>`,
 			reserveStyle,
-			html.EscapeString(formatPortalBytes(status.StoredDataBytes)),
+			reserveLabel,
+			html.EscapeString(formatPortalBytes(reserveBytes)),
 		)
 		access := `<div id="shizzi-access" class="alert ok">Internet actif sur cet appareil.</div>`
 		if status.Authorized && !status.InternetAvailable {
@@ -2194,9 +2207,11 @@ func injectPortalAutoRefresh(page string) string {
 
       var reserveWrap=byId("shizzi-reserve-wrap");
       if(reserveWrap){
-        var showReserve=Boolean(s.unlimited && Number(s.storedDataBytes||0)>0);
+        var recoverable=Number(s.recoverableDataBytes||0);
+        var showReserve=recoverable>0 || Boolean(s.unlimited && Number(s.storedDataBytes||0)>0);
         reserveWrap.style.display=showReserve ? "" : "none";
-        setText("shizzi-reserve",bytes(s.storedDataBytes));
+        setText("shizzi-reserve-label",recoverable>0 ? "Data récupérable" : "Data en réserve");
+        setText("shizzi-reserve",bytes(recoverable>0 ? recoverable : s.storedDataBytes));
       }
 
       var claim=byId("shizzi-claim");

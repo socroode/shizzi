@@ -236,8 +236,8 @@ class ClientAppDistributionServer(
         const val CLIENT_VERSION = "0.3.0-background-calls"
         const val CLIENT_FILE_NAME = "Shizzi-Plus-0.3.0-background-calls.apk"
         const val ASSET_PATH = "shizzi/Shizzi-Plus.apk"
-        const val ADMIN_VERSION = "0.3.6-recharge-history"
-        const val ADMIN_FILE_NAME = "Shizzi-Admin-0.3.6-recharge-history.apk"
+        const val ADMIN_VERSION = "0.3.7-data-extension"
+        const val ADMIN_FILE_NAME = "Shizzi-Admin-0.3.7-data-extension.apk"
         const val ADMIN_ASSET_PATH = "shizzi/Shizzi-Admin.apk"
     }
 }

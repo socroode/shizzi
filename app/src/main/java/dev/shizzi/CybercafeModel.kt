@@ -10,9 +10,10 @@ private const val DAY_MILLIS = 86_400_000L
 private const val MINUTE_MILLIS = 60_000L
 private const val GB = 1_000_000_000L
 
-enum class VoucherKind {
-    DATA,
-    UNLIMITED,
+enum class VoucherKind(val label: String) {
+    DATA("Data"),
+    UNLIMITED("Illimité"),
+    DATA_EXTENSION("Prolongation Data"),
 }
 
 data class Offer(
@@ -65,6 +66,8 @@ data class PrepaidAccount(
     val totalDownBytes: Long = 0L,
     val createdAtMillis: Long = 0L,
     val pinKdfIterations: Int = 0,
+    // A subsequent Data top-up must honor the deadline paid for by a prolongation coupon.
+    val dataExtensionUntilMillis: Long = 0L,
 ) {
     fun hasUnlimited(nowMillis: Long): Boolean =
         enabled && unlimitedUntilMillis > nowMillis
@@ -254,16 +257,41 @@ object CybercafeRules {
 
         val durationMillis = offer.durationDays.coerceAtLeast(0) * DAY_MILLIS
         val updatedAccount = when (offer.kind) {
-            VoucherKind.DATA -> account.copy(
-                dataBalanceBytes = account.dataBalanceBytes + offer.quotaBytes.coerceAtLeast(0L),
-                dataValidUntilMillis = if (durationMillis > 0L) {
-                    nowMillis + durationMillis
-                } else {
-                    0L
-                },
-                dataDownloadBps = offer.downloadBps,
-                dataUploadBps = offer.uploadBps,
-            )
+            VoucherKind.DATA -> {
+                val paidDeadline = account.dataExtensionUntilMillis.takeIf {
+                    account.dataBalanceBytes > 0L && it > nowMillis
+                } ?: 0L
+                account.copy(
+                    dataBalanceBytes = account.dataBalanceBytes + offer.quotaBytes.coerceAtLeast(0L),
+                    dataValidUntilMillis = if (durationMillis > 0L) {
+                        max(nowMillis + durationMillis, paidDeadline)
+                    } else {
+                        0L
+                    },
+                    dataDownloadBps = offer.downloadBps,
+                    dataUploadBps = offer.uploadBps,
+                    dataExtensionUntilMillis = paidDeadline,
+                )
+            }
+
+            VoucherKind.DATA_EXTENSION -> {
+                if (durationMillis <= 0L) {
+                    return RuleOutcome(state, false, "Durée de prolongation Data invalide.")
+                }
+                if (account.dataBalanceBytes <= 0L) {
+                    return RuleOutcome(state, false, "Aucun volume Data restant à prolonger.")
+                }
+                if (account.dataValidUntilMillis <= 0L) {
+                    return RuleOutcome(state, false, "Votre solde Data est déjà valable sans échéance.")
+                }
+                val start = max(nowMillis, account.dataValidUntilMillis)
+                val until = try {
+                    Math.addExact(start, durationMillis)
+                } catch (_: ArithmeticException) {
+                    return RuleOutcome(state, false, "Durée de prolongation Data trop grande.")
+                }
+                account.copy(dataValidUntilMillis = until, dataExtensionUntilMillis = until)
+            }
 
             VoucherKind.UNLIMITED -> {
                 val start = max(nowMillis, account.unlimitedUntilMillis)
@@ -295,7 +323,11 @@ object CybercafeRules {
                 vouchers = state.vouchers + (code to updatedVoucher),
             ),
             success = true,
-            message = "Recharge appliquée.",
+            message = if (offer.kind == VoucherKind.DATA_EXTENSION) {
+                "Validité Data prolongée de ${offer.durationDays} j."
+            } else {
+                "Recharge appliquée."
+            },
         )
     }
 

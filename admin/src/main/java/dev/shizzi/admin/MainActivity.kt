@@ -549,16 +549,30 @@ class MainActivity : Activity() {
         for (i in 0 until offers.length()) {
             val offer = offers.optJSONObject(i) ?: continue
             val kind = offer.optString("kind")
-            if (kind != "DATA" && kind != "UNLIMITED") continue
-            if (kind == "DATA" && offer.optLong("quotaBytes") <= 0L) continue
-            if (kind == "UNLIMITED" && offer.optInt("durationDays") <= 0) continue
+            val days = offer.optInt("durationDays")
+            val details = when (kind) {
+                "DATA" -> {
+                    val volume = offer.optLong("quotaBytes")
+                    if (volume <= 0L) continue
+                    "${formatBytes(volume)} · $days j"
+                }
+                "UNLIMITED" -> if (days > 0) "Illimité · $days j" else continue
+                "DATA_EXTENSION" -> {
+                    if (!capabilities.dataExtensionCoupons || days <= 0) continue
+                    "Prolongation Data · +$days j · ${offer.optInt("priceXpf")} F CFP"
+                }
+                else -> continue
+            }
             val id = offer.optString("id")
             if (id.isBlank()) continue
-            val volume = if (kind == "DATA") formatBytes(offer.optLong("quotaBytes")) else "Illimité"
-            val label = "Internet · " + offer.optString("name").ifBlank { id } + " · " +
-                volume + " · " + offer.optInt("durationDays") + " j"
+            val label = "Internet · ${offer.optString("name").ifBlank { id }} · $details"
             choices.add("Créer et attribuer : $label" to {
-                confirm("Attribuer $label au compte $number ? Cette opération crédite le compte sans enregistrer de paiement.") {
+                val confirmation = if (kind == "DATA_EXTENSION") {
+                    "Attribuer $label au compte $number ?"
+                } else {
+                    "Attribuer $label au compte $number ? Cette opération crédite le compte sans enregistrer de paiement."
+                }
+                confirm(confirmation) {
                     command("account.coupon.issue", JSONObject().put("number", number).put("offerId", id))
                 }
             })
@@ -573,7 +587,12 @@ class MainActivity : Activity() {
             if (code.isBlank()) continue
             displayed++
             val name = voucher.optString("snapshotName").ifBlank { voucher.optString("offerId") }
-            choices.add("Coupon Internet disponible : $name ($code)" to {
+            val label = if (voucher.optString("snapshotKind") == "DATA_EXTENSION") {
+                "Prolongation Data · +${voucher.optInt("snapshotDurationDays")} j · $name ($code)"
+            } else {
+                "Coupon Internet disponible : $name ($code)"
+            }
+            choices.add(label to {
                 confirm("Attribuer le coupon $code au compte $number ?") {
                     command("account.coupon.redeem", JSONObject().put("number", number).put("code", code))
                 }
@@ -721,26 +740,58 @@ class MainActivity : Activity() {
 
         val id = field("ID offre (ex: promo-30)")
         val name = field("Nom de l'offre")
-        val kind = field("Type : DATA ou UNLIMITED", "DATA")
+        val kinds = buildList {
+            add("DATA" to "Data")
+            add("UNLIMITED" to "Illimité")
+            if (capabilities.dataExtensionCoupons) add("DATA_EXTENSION" to "Prolongation Data")
+        }
+        var selectedKind = "DATA"
+        val kindPicker = field("Type d’offre", "Type d’offre · Data ▾").apply {
+            keyListener = null
+            isFocusable = false
+            isCursorVisible = false
+        }
         val down = field("Débit ↓ Mbps", "2")
         val up = field("Débit ↑ Mbps", "1")
-        val quota = field("Volume Go (0 si illimité)", "12")
+        val quota = field("Volume Data (Go)", "12")
         val days = field("Validité jours", "30")
-        val price = field("Prix FCFP", "1000")
+        val price = field("Prix F CFP", "1000")
+
+        fun selectKind(kind: String) {
+            selectedKind = kind
+            val label = kinds.firstOrNull { it.first == kind }?.second ?: kind
+            kindPicker.setText("Type d’offre · $label ▾")
+            val extension = kind == "DATA_EXTENSION"
+            down.visibility = if (extension) View.GONE else View.VISIBLE
+            up.visibility = down.visibility
+            quota.visibility = if (kind == "DATA") View.VISIBLE else View.GONE
+            days.hint = if (extension) "Jours de validité à ajouter" else "Validité jours"
+        }
+        kindPicker.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("Type d’offre")
+                .setItems(kinds.map { it.second }.toTypedArray()) { _, index -> selectKind(kinds[index].first) }
+                .setNegativeButton("Annuler", null)
+                .show()
+        }
 
         button("Créer / modifier l'offre") {
-            val unlimited = kind.text.toString().trim().uppercase() == "UNLIMITED"
+            if (kinds.none { it.first == selectedKind }) {
+                toast("Ce routeur ne prend pas en charge ce type d’offre.")
+                return@button
+            }
+            val extension = selectedKind == "DATA_EXTENSION"
             command(
                 "offer.upsert",
                 JSONObject()
                     .put("id", id.text.toString().trim())
                     .put("name", name.text.toString().trim())
-                    .put("kind", if (unlimited) "UNLIMITED" else "DATA")
-                    .put("downloadBps", (down.text.toString().toLongOrNull() ?: 0L) * 1_000_000L)
-                    .put("uploadBps", (up.text.toString().toLongOrNull() ?: 0L) * 1_000_000L)
+                    .put("kind", selectedKind)
+                    .put("downloadBps", if (extension) 0L else (down.text.toString().toLongOrNull() ?: 0L) * 1_000_000L)
+                    .put("uploadBps", if (extension) 0L else (up.text.toString().toLongOrNull() ?: 0L) * 1_000_000L)
                     .put(
                         "quotaBytes",
-                        if (unlimited) 0L else
+                        if (selectedKind != "DATA") 0L else
                             (quota.text.toString().toLongOrNull() ?: 0L) * 1_000_000_000L,
                     )
                     .put("durationDays", days.text.toString().toIntOrNull() ?: 0)
@@ -751,20 +802,24 @@ class MainActivity : Activity() {
         for (i in 0 until offers.length()) {
             val offer = offers.optJSONObject(i) ?: continue
             val offerId = offer.optString("id")
-            info(
+            val kind = offer.optString("kind", "DATA")
+            val label = if (kind == "DATA_EXTENSION") {
+                "${offer.optString("name")} · Prolongation Data · +${offer.optInt("durationDays")} j · ${offer.optInt("priceXpf")} F CFP"
+            } else {
                 offer.optString("name") + " — " +
                     (offer.optLong("downloadBps") / 1_000_000L) + "/" +
                     (offer.optLong("uploadBps") / 1_000_000L) + " Mbps · " +
                     offer.optString("kind") + " · " +
                     offer.optInt("durationDays") + " j · " +
-                    offer.optInt("priceXpf") + " FCFP",
-            )
+                    offer.optInt("priceXpf") + " FCFP"
+            }
+            info(label)
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             row.addView(
                 makeButton("Charger") {
                     id.setText(offerId)
                     name.setText(offer.optString("name"))
-                    kind.setText(offer.optString("kind"))
+                    selectKind(kind)
                     down.setText((offer.optLong("downloadBps") / 1_000_000L).toString())
                     up.setText((offer.optLong("uploadBps") / 1_000_000L).toString())
                     quota.setText((offer.optLong("quotaBytes") / 1_000_000_000L).toString())
@@ -805,10 +860,15 @@ class MainActivity : Activity() {
             val code = voucher.optString("code")
             val redeemed = voucher.optString("redeemedByAccount")
             val enabled = voucher.optBoolean("enabled", true)
+            val extension = if (voucher.optString("snapshotKind") == "DATA_EXTENSION") {
+                " · Prolongation Data +${voucher.optInt("snapshotDurationDays")} j"
+            } else {
+                ""
+            }
             info(
                 "$code — " + voucher.optString("snapshotName").ifBlank {
                     voucher.optString("offerId")
-                } + " — " +
+                } + extension + " — " +
                     if (redeemed.isBlank()) {
                         if (enabled) "Disponible" else "Désactivé"
                     } else {

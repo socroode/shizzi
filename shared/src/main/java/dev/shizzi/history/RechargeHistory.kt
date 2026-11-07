@@ -11,7 +11,7 @@ object RechargeHistory {
     const val PAGE_SIZE = 20
 
     enum class Kind(val label: String) {
-        DATA("DATA"), UNLIMITED("ILLIMITÉ"), MEDIA("MEDIA"), INTERNET("INTERNET"),
+        DATA("DATA"), UNLIMITED("ILLIMITÉ"), DATA_EXTENSION("PROLONGATION DATA"), MEDIA("MEDIA"), INTERNET("INTERNET"),
     }
 
     data class Entry(
@@ -38,10 +38,10 @@ object RechargeHistory {
             }
             if (kind == Kind.DATA && quotaBytes != null) add("Volume ajouté : " + volume(quotaBytes))
             if (kind == Kind.UNLIMITED) add("Accès Internet illimité")
-            if (durationDays != null) add(if (durationDays == 0L && kind == Kind.DATA) {
-                "Validité : sans échéance"
-            } else {
-                "Durée du coupon : $durationDays jour(s)"
+            if (durationDays != null) add(when {
+                kind == Kind.DATA_EXTENSION -> "+$durationDays j de validité Data"
+                durationDays == 0L && kind == Kind.DATA -> "Validité : sans échéance"
+                else -> "Durée du coupon : $durationDays jour(s)"
             })
             if (durationMinutes != null) add("Durée du coupon : " + duration(durationMinutes))
             if (downloadBps != null || uploadBps != null) {
@@ -89,27 +89,32 @@ object RechargeHistory {
             .map { voucher ->
                 val original = voucher.optInt("snapshotVersion") >= 1
                 fun detail(key: String): Long? = if (original) voucher.amount(key) else null
+                val kind = when {
+                    isMedia -> Kind.MEDIA
+                    !original -> Kind.INTERNET
+                    else -> when (voucher.optString("snapshotKind").uppercase(Locale.ROOT)) {
+                        "DATA" -> Kind.DATA
+                        "UNLIMITED" -> Kind.UNLIMITED
+                        "DATA_EXTENSION" -> Kind.DATA_EXTENSION
+                        else -> Kind.INTERNET
+                    }
+                }
+                val hasDataLimits = !isMedia && kind != Kind.DATA_EXTENSION
                 Entry(
                     code = voucher.optString("code"),
-                    kind = if (isMedia) Kind.MEDIA else if (!original) Kind.INTERNET else {
-                        when (voucher.optString("snapshotKind").uppercase(Locale.ROOT)) {
-                            "DATA" -> Kind.DATA
-                            "UNLIMITED" -> Kind.UNLIMITED
-                            else -> Kind.INTERNET
-                        }
-                    },
+                    kind = kind,
                     redeemedAtMillis = voucher.amount("redeemedAtMillis")?.takeIf { it > 0L },
                     originalDetails = original,
                     name = if (original) voucher.optString("snapshotName") else "",
                     currentOfferName = if (original) "" else {
                         (if (isMedia) mediaNames else internetNames)[voucher.optString("offerId")].orEmpty()
                     },
-                    quotaBytes = if (isMedia) null else detail("snapshotQuotaBytes"),
+                    quotaBytes = if (hasDataLimits) detail("snapshotQuotaBytes") else null,
                     durationDays = if (isMedia) null else detail("snapshotDurationDays"),
                     durationMinutes = if (isMedia) detail("snapshotDurationMinutes") else null,
                     priceXpf = detail("snapshotPriceXpf"),
-                    downloadBps = if (isMedia) null else detail("snapshotDownloadBps"),
-                    uploadBps = if (isMedia) null else detail("snapshotUploadBps"),
+                    downloadBps = if (hasDataLimits) detail("snapshotDownloadBps") else null,
+                    uploadBps = if (hasDataLimits) detail("snapshotUploadBps") else null,
                 )
             }
         return Snapshot(

@@ -388,6 +388,7 @@ fun CybercafeState.toPortalConfigJson(
         })
         put("adminState", JSONObject().apply {
             put("schemaVersion", schemaVersion)
+            put("dataExtensionCoupons", true)
             put("routerName", portal.title)
             put("tlsFingerprint", tlsIdentity?.optString("fingerprint").orEmpty())
             put("remoteAdmin", JSONObject().apply {

@@ -1,6 +1,7 @@
 package dev.shizzi
 
 import android.content.Context
+import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -91,9 +92,9 @@ fun processRemoteAdminCommand(
             }
 
             "offer.upsert" -> {
-                val kind = runCatching {
-                    VoucherKind.valueOf(params.optString("kind", VoucherKind.DATA.name))
-                }.getOrDefault(VoucherKind.DATA)
+                val kindName = params.optString("kind", VoucherKind.DATA.name).trim().uppercase(Locale.ROOT)
+                val kind = VoucherKind.entries.firstOrNull { it.name == kindName }
+                    ?: return AdminCommandResult(command.id, false, "Type d'offre Internet invalide.")
                 outcome(
                     store.upsertOffer(
                         Offer(

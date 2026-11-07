@@ -1,6 +1,7 @@
 package dev.shizzi
 
 import android.content.ContextWrapper
+import dev.shizzi.history.RechargeHistory
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
@@ -11,6 +12,8 @@ class RemoteAdminCouponTest {
     private val now = 1_000_000L
     private val context = ContextWrapper(null)
     private val mediaOffer = MediaOffer("media-day", "Media 24 h", 24L * 60L, 300)
+    private val extension = Offer("validite-15", "Validité 15 jours", VoucherKind.DATA_EXTENSION,
+        downloadBps = 0L, uploadBps = 0L, quotaBytes = 0L, durationDays = 15, priceXpf = 300)
 
     private fun account(enabled: Boolean = true) = PrepaidAccount(
         number = "1001", name = "Test", pinSalt = "salt", pinHash = "hash",
@@ -169,9 +172,95 @@ class RemoteAdminCouponTest {
     }
 
     @Test
+    fun dataExtensionWorksThroughAdminAndPortalAndKeepsThePaidDeadline() {
+        val original = account().copy(unlimitedUntilMillis = now + 5L * day,
+            unlimitedDownloadBps = 4_000_000L, unlimitedUploadBps = 2_000_000L,
+            mediaUntilMillis = now + 3L * day)
+        val (prefs, store) = fixture(CybercafeState(accounts = mapOf("1001" to original)))
+        val created = command(store, "offer.upsert", JSONObject()
+            .put("id", extension.id).put("name", extension.name).put("kind", extension.kind.name)
+            .put("durationDays", extension.durationDays).put("priceXpf", extension.priceXpf)
+            .put("downloadBps", 900_000L).put("uploadBps", 400_000L).put("quotaBytes", 8_000_000_000L))
+        assertTrue(created.message, created.success)
+        assertEquals(extension, store.state.value.offers.getValue(extension.id))
+        assertTrue(issue(store, extension.id).success)
+        val firstDeadline = now + 105L * day
+        assertEquals(original.copy(dataValidUntilMillis = firstDeadline, dataExtensionUntilMillis = firstDeadline),
+            store.state.value.accounts.getValue("1001"))
+
+        assertTrue(command(store, "voucher.generate", JSONObject().put("offerId", extension.id).put("count", 1)).success)
+        val code = store.state.value.vouchers.values.single { it.redeemedByAccount.isBlank() }.code
+        assertTrue(store.upsertOffer(extension.copy(durationDays = 1, priceXpf = 999)).success)
+        assertTrue(store.redeemVoucherClaim("extension-claim", "1001", code, now + day).success)
+        val deadline = now + 120L * day
+        val expected = original.copy(dataValidUntilMillis = deadline, dataExtensionUntilMillis = deadline)
+        val reloaded = CybercafeStore(prefs)
+        val state = reloaded.state.value
+        assertEquals(expected, state.accounts.getValue("1001"))
+        assertTrue(reloaded.redeemVoucherClaim("extension-claim", "1001", code, now + 2L * day).success)
+        assertFalse(reloaded.redeemVoucherClaim("duplicate-claim", "1001", code, now + 2L * day).success)
+        assertEquals(state, reloaded.state.value)
+
+        val adminState = JSONObject(state.toPortalConfigJson()).getJSONObject("adminState")
+        assertTrue(adminState.getBoolean("dataExtensionCoupons"))
+        val history = RechargeHistory.read("1001", adminState).entries
+        assertEquals(2, history.size)
+        for (entry in history) {
+            assertEquals(RechargeHistory.Kind.DATA_EXTENSION, entry.kind)
+            assertEquals(15L, entry.durationDays)
+            assertEquals(300L, entry.priceXpf)
+            assertNull(entry.quotaBytes)
+            assertNull(entry.downloadBps)
+            assertTrue(entry.format { "$it" }.contains("+15 j de validité Data"))
+        }
+        assertTrue(issue(reloaded, "eco-12", at = now + 2L * day).success)
+        assertEquals(expected.copy(dataBalanceBytes = 17_000_000_000L), reloaded.state.value.accounts.getValue("1001"))
+    }
+
+    @Test
+    fun extensionRestartsValidityForAnExpiredRecordedBalance() {
+        val original = account().copy(dataValidUntilMillis = now - 1L)
+        val (_, store) = fixture(CybercafeState(
+            accounts = mapOf("1001" to original), offers = defaultOffers() + (extension.id to extension),
+        ))
+        assertFalse(original.hasData(now))
+        val code = store.generateVouchers(extension.id, 1, now).single().code
+        assertTrue(store.redeemVoucherClaim("expired-claim", "1001", code, now).success)
+        val deadline = now + 15L * day
+        val account = store.state.value.accounts.getValue("1001")
+        assertEquals(original.copy(dataValidUntilMillis = deadline, dataExtensionUntilMillis = deadline), account)
+        assertTrue(account.hasData(now))
+    }
+
+    @Test
+    fun ineligibleBalancesLeaveTheExtensionCouponAvailable() {
+        val ineligible = listOf(
+            account().copy(dataBalanceBytes = 0L, unlimitedUntilMillis = now + day),
+            account().copy(dataValidUntilMillis = 0L),
+            account(enabled = false),
+        )
+        for (account in ineligible) {
+            val (prefs, store) = fixture(CybercafeState(
+                accounts = mapOf("1001" to account), offers = defaultOffers() + (extension.id to extension),
+            ))
+            val code = store.generateVouchers(extension.id, 1, now).single().code
+            val before = store.state.value
+            assertFalse(redeem(store, code).success)
+            assertFalse(issue(store, extension.id).success)
+            assertEquals(before, store.state.value)
+            assertEquals(before, CybercafeStore(prefs).state.value)
+        }
+    }
+
+    @Test
     fun storageFailureNeverReportsSuccessOrCreditsAnUnsavedCoupon() {
-        for ((offer, media) in listOf("eco-12" to false, "unlimited-eco" to false, mediaOffer.id to true)) {
-            val (prefs, store) = fixture()
+        val offers = listOf("eco-12" to false, "unlimited-eco" to false, mediaOffer.id to true, extension.id to false)
+        for ((offer, media) in offers) {
+            val (prefs, store) = fixture(CybercafeState(
+                accounts = mapOf("1001" to account()),
+                offers = defaultOffers() + (extension.id to extension),
+                mediaOffers = mapOf(mediaOffer.id to mediaOffer),
+            ))
             val before = store.state.value
             val stored = prefs.getString("state", null)
             prefs.failWrites = true
