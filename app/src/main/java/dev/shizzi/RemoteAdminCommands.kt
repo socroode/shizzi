@@ -1,6 +1,7 @@
 package dev.shizzi
 
 import android.content.Context
+import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -50,6 +51,30 @@ fun processRemoteAdminCommand(
 
             "account.delete" -> outcome(store.deleteAccount(params.optString("number")))
 
+            "account.coupon.redeem" -> outcome(
+                store.redeemVoucherForAccount(
+                    params.optString("number"),
+                    params.optString("code"),
+                    nowMillis,
+                ),
+            )
+
+            "account.coupon.issue" -> outcome(
+                store.issueCouponForAccount(
+                    params.optString("number"),
+                    params.optString("offerId"),
+                    nowMillis,
+                ),
+            )
+
+            "account.coupon.media.issue" -> outcome(
+                store.issueMediaCouponForAccount(
+                    params.optString("number"),
+                    params.optString("offerId"),
+                    nowMillis,
+                ),
+            )
+
             "account.disconnect" -> {
                 val number = params.optString("number")
                 SessionService.disconnectAccount(number)
@@ -67,9 +92,9 @@ fun processRemoteAdminCommand(
             }
 
             "offer.upsert" -> {
-                val kind = runCatching {
-                    VoucherKind.valueOf(params.optString("kind", VoucherKind.DATA.name))
-                }.getOrDefault(VoucherKind.DATA)
+                val kindName = params.optString("kind", VoucherKind.DATA.name).trim().uppercase(Locale.ROOT)
+                val kind = VoucherKind.entries.firstOrNull { it.name == kindName }
+                    ?: return AdminCommandResult(command.id, false, "Type d'offre Internet invalide.")
                 outcome(
                     store.upsertOffer(
                         Offer(
@@ -182,24 +207,19 @@ fun processRemoteAdminCommand(
             }
 
             "media.folder.create" -> {
-                val current = MediaFolderStore.load(context)
-                if (current.size >= MediaFolderStore.MAX_FOLDERS) {
-                    AdminCommandResult(command.id, false, "Maximum de dossiers Media atteint.")
-                } else {
-                    val kind = MediaKind.fromKey(params.optString("kind")) ?: MediaKind.FILMS
-                    val created = MediaFolderStore.create(
-                        params.optString("name").ifBlank { "Dossier Media" },
-                        kind,
-                    )
-                    MediaFolderStore.upsert(context, created)
-                    if (MediaPrefs.isEnabled(context)) MediaServerService.restart(context)
-                    AdminCommandResult(
-                        command.id,
-                        true,
-                        "Dossier Media créé.",
-                        JSONObject().put("id", created.id).toString(),
-                    )
-                }
+                val kind = MediaKind.fromKey(params.optString("kind")) ?: MediaKind.FILMS
+                val created = MediaFolderStore.create(
+                    params.optString("name").ifBlank { "Dossier Media" },
+                    kind,
+                )
+                MediaFolderStore.upsert(context, created)
+                if (MediaPrefs.isEnabled(context)) MediaServerService.restart(context)
+                AdminCommandResult(
+                    command.id,
+                    true,
+                    "Dossier Media créé.",
+                    JSONObject().put("id", created.id).toString(),
+                )
             }
 
             "media.folder.update" -> {

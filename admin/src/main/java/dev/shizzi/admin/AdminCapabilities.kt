@@ -8,6 +8,7 @@ internal class AdminCapabilities(response: JSONObject) {
     private val traffic = response.optJSONObject("traffic") ?: JSONObject()
     val accounts = state.optJSONArray("accounts") != null
     val offers = state.optJSONArray("offers") != null && state.optJSONArray("vouchers") != null
+    val dataExtensionCoupons = offers && state.optBoolean("dataExtensionCoupons")
     val mediaOffers = state.optJSONArray("mediaOffers") != null && state.optJSONArray("mediaVouchers") != null
     val media = state.optJSONObject("media") != null
     val modules = state.optJSONObject("modules") != null

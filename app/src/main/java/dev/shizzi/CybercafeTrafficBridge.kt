@@ -388,6 +388,7 @@ fun CybercafeState.toPortalConfigJson(
         })
         put("adminState", JSONObject().apply {
             put("schemaVersion", schemaVersion)
+            put("dataExtensionCoupons", true)
             put("routerName", portal.title)
             put("tlsFingerprint", tlsIdentity?.optString("fingerprint").orEmpty())
             put("remoteAdmin", JSONObject().apply {
@@ -488,7 +489,10 @@ fun CybercafeState.toPortalConfigJson(
             })
             put("media", JSONObject().apply {
                 put("enabled", mediaEnabled)
-                put("maxFolders", MediaFolderStore.MAX_FOLDERS)
+                put("unlimitedFolders", true)
+                // Older Admin APKs require a positive integer to show the Add button.
+                // Storage itself has no configured folder-count limit.
+                put("maxFolders", Int.MAX_VALUE)
                 put("summary", JSONObject().apply {
                     put("films", mediaSummary?.films ?: 0)
                     put("series", mediaSummary?.series ?: 0)

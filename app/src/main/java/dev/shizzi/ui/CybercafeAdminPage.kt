@@ -1,30 +1,41 @@
 package dev.shizzi.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import dev.shizzi.encodeCybercafeState
+import dev.shizzi.history.RechargeHistory
+import org.json.JSONObject
 import dev.shizzi.flowEndReasonLabel
 import dev.shizzi.App
 import dev.shizzi.CybercafeState
@@ -272,6 +283,11 @@ private fun AccountEditor(
     var pin by remember { mutableStateOf("") }
     var editingPinFor by remember { mutableStateOf("") }
     var newPin by remember { mutableStateOf("") }
+    var historyAccount by remember { mutableStateOf<String?>(null) }
+
+    historyAccount?.let { selected ->
+        AccountRechargeHistoryDialog(selected, state) { historyAccount = null }
+    }
 
     SectionTitle("Account Editor")
     OutlinedTextField(
@@ -317,6 +333,9 @@ private fun AccountEditor(
 
     state.accounts.values.sortedBy(PrepaidAccount::number).forEach { account ->
         AccountRow(account)
+        TextButton(onClick = { historyAccount = account.number }) {
+            Text("Historique des recharges")
+        }
         val accountSessions = sessions.filter { it.accountNumber == account.number }
         val onlineCount = accountSessions.count { it.presence == "online" }
         Text(
@@ -402,6 +421,47 @@ private fun AccountEditor(
 }
 
 @Composable
+private fun AccountRechargeHistoryDialog(number: String, state: CybercafeState, onDismiss: () -> Unit) {
+    val history = remember(number, state) {
+        RechargeHistory.read(number, JSONObject(encodeCybercafeState(state)))
+    }
+    var requestedPage by remember(number) { mutableIntStateOf(0) }
+    val page = requestedPage.coerceIn(0, history.pageCount - 1)
+    val scroll = rememberScrollState()
+    LaunchedEffect(page) { scroll.scrollTo(0) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Historique des recharges · N° $number") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(history.summary)
+                Column(
+                    Modifier.heightIn(max = 340.dp).verticalScroll(scroll),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    history.page(page).forEach { entry ->
+                        Text(entry.format(::formatDate))
+                        HorizontalDivider()
+                    }
+                }
+                if (history.pageCount > 1) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(enabled = page > 0, onClick = { requestedPage = page - 1 }) {
+                            Text("Précédent")
+                        }
+                        Text("${page + 1}/${history.pageCount}")
+                        TextButton(enabled = page + 1 < history.pageCount, onClick = { requestedPage = page + 1 }) {
+                            Text("Suivant")
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Fermer") } },
+    )
+}
+
+@Composable
 private fun AccountRow(account: PrepaidAccount) {
     val now = System.currentTimeMillis()
     Text(
@@ -431,8 +491,10 @@ private fun AccountRow(account: PrepaidAccount) {
     Text("Consommation : " + formatBytes(account.totalUpBytes + account.totalDownBytes))
     if (account.hasUnlimited(now)) {
         Text("Illimité jusqu'au " + formatDate(account.unlimitedUntilMillis))
-    } else if (account.dataValidUntilMillis > 0L) {
-        Text("Data valable jusqu'au " + formatDate(account.dataValidUntilMillis))
+    }
+    if (account.dataBalanceBytes > 0L && account.dataValidUntilMillis > 0L) {
+        val label = if (now >= account.dataValidUntilMillis) "Data expirée le " else "Data valable jusqu'au "
+        Text(label + formatDate(account.dataValidUntilMillis))
     }
     Text(
         if (account.hasMedia(now)) {
@@ -456,7 +518,8 @@ private fun VoucherEditor(
     var quota by remember { mutableStateOf("12") }
     var days by remember { mutableStateOf("30") }
     var price by remember { mutableStateOf("") }
-    var unlimited by remember { mutableStateOf(false) }
+    var kind by remember { mutableStateOf(VoucherKind.DATA) }
+    var choosingKind by remember { mutableStateOf(false) }
     var voucherCount by remember { mutableStateOf("1") }
     var lastGenerated by remember { mutableStateOf("") }
 
@@ -468,7 +531,7 @@ private fun VoucherEditor(
         quota = (offer.quotaBytes / 1_000_000_000L).toString()
         days = offer.durationDays.toString()
         price = if (offer.priceXpf == 0) "" else offer.priceXpf.toString()
-        unlimited = offer.kind == VoucherKind.UNLIMITED
+        kind = offer.kind
     }
 
     fun resetOfferForm() {
@@ -479,7 +542,7 @@ private fun VoucherEditor(
         quota = "12"
         days = "30"
         price = ""
-        unlimited = false
+        kind = VoucherKind.DATA
     }
 
     SectionTitle("Vouchers Internet")
@@ -487,10 +550,21 @@ private fun VoucherEditor(
         if (editingOfferId.isBlank()) "Créer une offre personnalisée" else "Modifier l'offre",
         style = ShizziTheme.typography.heading,
     )
-    Text(
-        "Nom, débits, volume et validité sont entièrement personnalisables.",
-        color = ShizziTheme.colors.onSurfaceMuted,
-    )
+    Box {
+        TextButton(onClick = { choosingKind = true }) { Text("Type d’offre · ${kind.label} ▾") }
+        DropdownMenu(expanded = choosingKind, onDismissRequest = { choosingKind = false }) {
+            for (option in VoucherKind.entries) {
+                DropdownMenuItem(text = { Text(option.label) }, onClick = {
+                    kind = option
+                    choosingKind = false
+                })
+            }
+        }
+    }
+    val extension = kind == VoucherKind.DATA_EXTENSION
+    if (extension) {
+        Text("Ajoute des jours de validité aux Go restants.", color = ShizziTheme.colors.onSurfaceMuted)
+    }
 
     OutlinedTextField(
         value = offerName,
@@ -499,30 +573,24 @@ private fun VoucherEditor(
         modifier = Modifier.fillMaxWidth(),
     )
 
-    Row(horizontalArrangement = Arrangement.spacedBy(ShizziTheme.spacing.xs)) {
-        OutlinedTextField(
-            value = down,
-            onValueChange = { down = it.filter(Char::isDigit) },
-            label = { Text("Débit ↓ Mbps") },
-            modifier = Modifier.weight(1f),
-        )
-        OutlinedTextField(
-            value = up,
-            onValueChange = { up = it.filter(Char::isDigit) },
-            label = { Text("Débit ↑ Mbps") },
-            modifier = Modifier.weight(1f),
-        )
+    if (!extension) {
+        Row(horizontalArrangement = Arrangement.spacedBy(ShizziTheme.spacing.xs)) {
+            OutlinedTextField(
+                value = down,
+                onValueChange = { down = it.filter(Char::isDigit) },
+                label = { Text("Débit ↓ Mbps") },
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = up,
+                onValueChange = { up = it.filter(Char::isDigit) },
+                label = { Text("Débit ↑ Mbps") },
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Text("Volume illimité", modifier = Modifier.weight(1f))
-        Switch(checked = unlimited, onCheckedChange = { unlimited = it })
-    }
-
-    if (!unlimited) {
+    if (kind == VoucherKind.DATA) {
         OutlinedTextField(
             value = quota,
             onValueChange = { quota = it.filter(Char::isDigit) },
@@ -534,7 +602,7 @@ private fun VoucherEditor(
     OutlinedTextField(
         value = days,
         onValueChange = { days = it.filter(Char::isDigit) },
-        label = { Text("Validité (jours)") },
+        label = { Text(if (extension) "Jours de validité à ajouter" else "Validité (jours)") },
         modifier = Modifier.fillMaxWidth(),
     )
     OutlinedTextField(
@@ -554,10 +622,10 @@ private fun VoucherEditor(
                 Offer(
                     id = id,
                     name = name,
-                    kind = if (unlimited) VoucherKind.UNLIMITED else VoucherKind.DATA,
-                    downloadBps = (down.toLongOrNull() ?: 0L) * 1_000_000L,
-                    uploadBps = (up.toLongOrNull() ?: 0L) * 1_000_000L,
-                    quotaBytes = if (unlimited) {
+                    kind = kind,
+                    downloadBps = if (extension) 0L else (down.toLongOrNull() ?: 0L) * 1_000_000L,
+                    uploadBps = if (extension) 0L else (up.toLongOrNull() ?: 0L) * 1_000_000L,
+                    quotaBytes = if (kind != VoucherKind.DATA) {
                         0L
                     } else {
                         (quota.toLongOrNull() ?: 0L) * 1_000_000_000L
@@ -593,17 +661,14 @@ private fun VoucherEditor(
     state.offers.values.sortedBy(Offer::name).forEach { offer ->
         Text(offer.name, style = ShizziTheme.typography.heading)
         Text(
-            formatMbps(offer.downloadBps) + " ↓ / " +
-                formatMbps(offer.uploadBps) + " ↑ · " +
-                if (offer.kind == VoucherKind.UNLIMITED) {
-                    "Illimité"
-                } else {
-                    formatBytes(offer.quotaBytes)
-                },
-        )
-        Text(
-            offer.durationDays.toString() + " jours" +
-                if (offer.priceXpf > 0) " · " + formatXpf(offer.priceXpf) else "",
+            if (offer.kind == VoucherKind.DATA_EXTENSION) {
+                "Prolongation Data · +${offer.durationDays} j · ${formatXpf(offer.priceXpf)}"
+            } else {
+                val volume = if (offer.kind == VoucherKind.UNLIMITED) "Illimité" else formatBytes(offer.quotaBytes)
+                val rate = "${formatMbps(offer.downloadBps)} ↓ / ${formatMbps(offer.uploadBps)} ↑"
+                val priceLabel = if (offer.priceXpf > 0) " · ${formatXpf(offer.priceXpf)}" else ""
+                "$rate · $volume\n${offer.durationDays} jours$priceLabel"
+            },
         )
 
         Row(horizontalArrangement = Arrangement.spacedBy(ShizziTheme.spacing.xs)) {
@@ -693,12 +758,16 @@ private fun VoucherEditor(
 
             Text(voucher.code, style = ShizziTheme.typography.heading)
             Text(voucherName)
-            Text(
-                formatMbps(voucherDown) + " ↓ / " +
-                    formatMbps(voucherUp) + " ↑ · " +
-                    if (voucherKind == VoucherKind.UNLIMITED) "Illimité" else formatBytes(voucherQuota),
-            )
-            Text("Validité : " + voucherDays + " jours")
+            if (voucherKind == VoucherKind.DATA_EXTENSION) {
+                Text("Prolongation Data · +$voucherDays j")
+            } else {
+                Text(
+                    formatMbps(voucherDown) + " ↓ / " +
+                        formatMbps(voucherUp) + " ↑ · " +
+                        if (voucherKind == VoucherKind.UNLIMITED) "Illimité" else formatBytes(voucherQuota),
+                )
+                Text("Validité : " + voucherDays + " jours")
+            }
             Text(
                 if (voucher.redeemedByAccount.isBlank()) {
                     if (voucher.enabled) "Disponible" else "Désactivé"

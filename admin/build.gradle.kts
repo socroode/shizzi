@@ -13,8 +13,8 @@ android {
         applicationId = "dev.shizzi.admin"
         minSdk = 30
         targetSdk = 35
-        versionCode = 18
-        versionName = "0.3.3-universal"
+        versionCode = 22
+        versionName = "0.3.7-data-extension"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -50,6 +50,8 @@ android {
             }
         }
     }
+
+    sourceSets.getByName("main").java.srcDir(rootProject.file("shared/src/main/java"))
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

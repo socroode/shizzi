@@ -232,6 +232,91 @@ class CybercafeStore internal constructor(private val preferences: SharedPrefere
         )
     }
 
+    /**
+     * Issue one Internet coupon directly to an existing account. Generation, redemption
+     * and persistence are one transaction: a failed redemption never leaves a spare code.
+     */
+    @Synchronized
+    fun issueCouponForAccount(numberRaw: String, offerId: String, nowMillis: Long): RuleOutcome {
+        val current = state.value
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        val account = current.accounts[number]
+            ?: return RuleOutcome(current, false, "Compte introuvable.")
+        if (!account.enabled) return RuleOutcome(current, false, "Compte suspendu.")
+        val offer = current.offers[offerId]
+            ?: return RuleOutcome(current, false, "Offre de coupon introuvable.")
+        val validOffer = when (offer.kind) {
+            VoucherKind.DATA -> offer.quotaBytes > 0L
+            VoucherKind.UNLIMITED, VoucherKind.DATA_EXTENSION -> offer.durationDays > 0
+        }
+        if (!validOffer) {
+            return RuleOutcome(current, false, "Choisissez une offre Internet valide.")
+        }
+
+        var code: String
+        do {
+            code = newVoucherCode()
+        } while (current.vouchers.containsKey(code) || current.mediaVouchers.containsKey(code))
+        val voucher = Voucher(
+            code = code,
+            offerId = offer.id,
+            createdAtMillis = nowMillis,
+            snapshotVersion = 1,
+            snapshotName = offer.name,
+            snapshotKind = offer.kind,
+            snapshotDownloadBps = offer.downloadBps,
+            snapshotUploadBps = offer.uploadBps,
+            snapshotQuotaBytes = offer.quotaBytes,
+            snapshotDurationDays = offer.durationDays,
+            snapshotPriceXpf = offer.priceXpf,
+        )
+        val issued = current.copy(vouchers = current.vouchers + (code to voucher))
+        val redeemed = CybercafeRules.redeemVoucher(issued, number, code, nowMillis)
+        if (!redeemed.success) return RuleOutcome(current, false, redeemed.message)
+        val message = if (offer.kind == VoucherKind.DATA_EXTENSION) {
+            "${redeemed.message} Compte $number · coupon $code."
+        } else {
+            "Coupon ${offer.name} ajouté au compte $number (code $code)."
+        }
+        return commit(redeemed.copy(message = message))
+    }
+
+    /**
+     * Atomically issue an already-consumed Media voucher to the selected account,
+     * adding time to any remaining Media access without modifying Internet balances.
+     */
+    @Synchronized
+    fun issueMediaCouponForAccount(numberRaw: String, offerId: String, nowMillis: Long): RuleOutcome {
+        val current = state.value
+        val number = CybercafeRules.normalizeAccountNumber(numberRaw)
+        val account = current.accounts[number]
+            ?: return RuleOutcome(current, false, "Compte introuvable.")
+        if (!account.enabled) return RuleOutcome(current, false, "Compte suspendu.")
+        val offer = current.mediaOffers[offerId]
+            ?: return RuleOutcome(current, false, "Offre Media introuvable.")
+        if (offer.durationMinutes <= 0L) {
+            return RuleOutcome(current, false, "Durée du coupon Media invalide.")
+        }
+
+        var code: String
+        do {
+            code = newVoucherCode()
+        } while (current.vouchers.containsKey(code) || current.mediaVouchers.containsKey(code))
+        val voucher = MediaVoucher(
+            code = code,
+            offerId = offer.id,
+            createdAtMillis = nowMillis,
+            snapshotVersion = 1,
+            snapshotName = offer.name,
+            snapshotDurationMinutes = offer.durationMinutes,
+            snapshotPriceXpf = offer.priceXpf,
+        )
+        val issued = current.copy(mediaVouchers = current.mediaVouchers + (code to voucher))
+        val redeemed = CybercafeRules.redeemMediaVoucher(issued, number, code, nowMillis)
+        if (!redeemed.success) return RuleOutcome(current, false, redeemed.message)
+        return commit(redeemed.copy(message = "Coupon Media ${offer.name} ajouté au compte $number (code $code)."))
+    }
+
     @Synchronized
     fun redeemVoucherForAccount(
         numberRaw: String,
@@ -374,7 +459,9 @@ class CybercafeStore internal constructor(private val preferences: SharedPrefere
         val normalized = offer.copy(
             id = id,
             name = offer.name.trim(),
-            quotaBytes = if (offer.kind == VoucherKind.UNLIMITED) 0L else offer.quotaBytes,
+            quotaBytes = if (offer.kind == VoucherKind.DATA) offer.quotaBytes else 0L,
+            downloadBps = if (offer.kind == VoucherKind.DATA_EXTENSION) 0L else offer.downloadBps,
+            uploadBps = if (offer.kind == VoucherKind.DATA_EXTENSION) 0L else offer.uploadBps,
         )
         return commit(
             RuleOutcome(
@@ -697,6 +784,9 @@ internal fun encodeCybercafeState(state: CybercafeState): String =
                     put("enabled", account.enabled)
                     put("dataBalanceBytes", account.dataBalanceBytes)
                     put("dataValidUntilMillis", account.dataValidUntilMillis)
+                    if (account.dataExtensionUntilMillis > 0L) {
+                        put("dataExtensionUntilMillis", account.dataExtensionUntilMillis)
+                    }
                     put("dataDownloadBps", account.dataDownloadBps)
                     put("dataUploadBps", account.dataUploadBps)
                     put("unlimitedUntilMillis", account.unlimitedUntilMillis)
@@ -804,6 +894,7 @@ internal fun decodeCybercafeState(raw: String?): CybercafeState {
             enabled = item.optBoolean("enabled", true),
             dataBalanceBytes = item.optLong("dataBalanceBytes"),
             dataValidUntilMillis = item.optLong("dataValidUntilMillis"),
+            dataExtensionUntilMillis = item.optLong("dataExtensionUntilMillis"),
             dataDownloadBps = item.optLong("dataDownloadBps"),
             dataUploadBps = item.optLong("dataUploadBps"),
             unlimitedUntilMillis = item.optLong("unlimitedUntilMillis"),

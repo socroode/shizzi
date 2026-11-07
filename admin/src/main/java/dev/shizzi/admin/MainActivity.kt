@@ -35,6 +35,7 @@ import java.util.ArrayDeque
 import kotlin.concurrent.thread
 import org.json.JSONArray
 import org.json.JSONObject
+import dev.shizzi.history.RechargeHistory
 
 class MainActivity : Activity() {
 
@@ -316,6 +317,7 @@ class MainActivity : Activity() {
     }
 
     private fun showDashboard(response: JSONObject) {
+        lastState = response
         accountCards.clear()
         root.removeAllViews()
         routerName = response.optString("routerName", routerName)
@@ -341,7 +343,14 @@ class MainActivity : Activity() {
             info(AdminBatteryLabel.format(battery.optBoolean("available"), battery.optInt("percent", -1), battery.optBoolean("charging")))
         } else info("Batterie : information indisponible sur cette version de Shizzi.")
 
-        if (capabilities.accounts) renderAccounts(state.getJSONArray("accounts"), traffic.optJSONArray("associatedClients") ?: JSONArray())
+        if (capabilities.accounts) renderAccounts(
+            state.getJSONArray("accounts"),
+            traffic.optJSONArray("associatedClients") ?: JSONArray(),
+            state.optJSONArray("offers") ?: JSONArray(),
+            state.optJSONArray("vouchers") ?: JSONArray(),
+            state.optJSONArray("mediaOffers") ?: JSONArray(),
+            state.optJSONArray("mediaVouchers") ?: JSONArray(),
+        )
         updateAccountSessions(response.optJSONObject("traffic"))
         updateAccountPlans(response.optJSONObject("state"))
         if (capabilities.devices) {
@@ -379,7 +388,14 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun renderAccounts(accounts: JSONArray, associated: JSONArray) {
+    private fun renderAccounts(
+        accounts: JSONArray,
+        associated: JSONArray,
+        offers: JSONArray,
+        vouchers: JSONArray,
+        mediaOffers: JSONArray,
+        mediaVouchers: JSONArray,
+    ) {
         section("Comptes")
         val number = field("N° de compte")
         val name = field("Nom")
@@ -479,6 +495,12 @@ class MainActivity : Activity() {
                 weighted(),
             )
             root.addView(row2)
+            button("Historique des recharges") { showAccountRechargeHistory(n) }
+            if (capabilities.offers || capabilities.mediaOffers) {
+                button("Ajouter un coupon au compte $n") {
+                    showAddCouponDialog(n, offers, vouchers, mediaOffers, mediaVouchers)
+                }
+            }
             if (capabilities.cameras) {
                 val cameraMac = account.optString("cameraMac")
                 if (cameraMac.isNotBlank()) {
@@ -501,6 +523,116 @@ class MainActivity : Activity() {
             }
             divider()
         }
+    }
+
+    private fun showAddCouponDialog(
+        number: String,
+        offers: JSONArray,
+        vouchers: JSONArray,
+        mediaOffers: JSONArray,
+        mediaVouchers: JSONArray,
+    ) {
+        val choices = mutableListOf<Pair<String, () -> Unit>>()
+        choices.add("Saisir un code de coupon" to {
+            prompt("Code du coupon pour le compte $number") { raw ->
+                val code = raw.trim().uppercase()
+                if (code.isBlank()) {
+                    toast("Saisissez un code de coupon.")
+                } else {
+                    confirm("Utiliser le coupon $code pour le compte $number ? Le code ne pourra plus être utilisé.") {
+                        command("account.coupon.redeem", JSONObject().put("number", number).put("code", code))
+                    }
+                }
+            }
+        })
+
+        for (i in 0 until offers.length()) {
+            val offer = offers.optJSONObject(i) ?: continue
+            val kind = offer.optString("kind")
+            val days = offer.optInt("durationDays")
+            val details = when (kind) {
+                "DATA" -> {
+                    val volume = offer.optLong("quotaBytes")
+                    if (volume <= 0L) continue
+                    "${formatBytes(volume)} · $days j"
+                }
+                "UNLIMITED" -> if (days > 0) "Illimité · $days j" else continue
+                "DATA_EXTENSION" -> {
+                    if (!capabilities.dataExtensionCoupons || days <= 0) continue
+                    "Prolongation Data · +$days j · ${offer.optInt("priceXpf")} F CFP"
+                }
+                else -> continue
+            }
+            val id = offer.optString("id")
+            if (id.isBlank()) continue
+            val label = "Internet · ${offer.optString("name").ifBlank { id }} · $details"
+            choices.add("Créer et attribuer : $label" to {
+                val confirmation = if (kind == "DATA_EXTENSION") {
+                    "Attribuer $label au compte $number ?"
+                } else {
+                    "Attribuer $label au compte $number ? Cette opération crédite le compte sans enregistrer de paiement."
+                }
+                confirm(confirmation) {
+                    command("account.coupon.issue", JSONObject().put("number", number).put("offerId", id))
+                }
+            })
+        }
+
+        var displayed = 0
+        for (i in 0 until vouchers.length()) {
+            if (displayed >= 25) break
+            val voucher = vouchers.optJSONObject(i) ?: continue
+            if (!voucher.optBoolean("enabled", true) || voucher.optString("redeemedByAccount").isNotBlank()) continue
+            val code = voucher.optString("code")
+            if (code.isBlank()) continue
+            displayed++
+            val name = voucher.optString("snapshotName").ifBlank { voucher.optString("offerId") }
+            val label = if (voucher.optString("snapshotKind") == "DATA_EXTENSION") {
+                "Prolongation Data · +${voucher.optInt("snapshotDurationDays")} j · $name ($code)"
+            } else {
+                "Coupon Internet disponible : $name ($code)"
+            }
+            choices.add(label to {
+                confirm("Attribuer le coupon $code au compte $number ?") {
+                    command("account.coupon.redeem", JSONObject().put("number", number).put("code", code))
+                }
+            })
+        }
+        // A Media coupon extends local Media access only; it never changes Internet data.
+        for (i in 0 until mediaOffers.length()) {
+            val offer = mediaOffers.optJSONObject(i) ?: continue
+            val id = offer.optString("id")
+            if (id.isBlank() || offer.optLong("durationMinutes") <= 0L) continue
+            val label = "Media · " + offer.optString("name").ifBlank { id } + " · " +
+                formatMediaDuration(offer.optLong("durationMinutes"))
+            choices.add("Créer et attribuer : $label" to {
+                confirm("Attribuer $label au compte $number ? Cette opération ne crée pas d'encaissement.") {
+                    command("account.coupon.media.issue", JSONObject().put("number", number).put("offerId", id))
+                }
+            })
+        }
+
+        var displayedMedia = 0
+        for (i in 0 until mediaVouchers.length()) {
+            if (displayedMedia >= 25) break
+            val voucher = mediaVouchers.optJSONObject(i) ?: continue
+            if (!voucher.optBoolean("enabled", true) || voucher.optString("redeemedByAccount").isNotBlank()) continue
+            val code = voucher.optString("code")
+            if (code.isBlank()) continue
+            displayedMedia++
+            val name = voucher.optString("snapshotName").ifBlank { voucher.optString("offerId") }
+            choices.add("Coupon Media disponible : $name ($code)" to {
+                confirm("Attribuer le coupon Media $code au compte $number ?") {
+                    command("account.coupon.redeem", JSONObject().put("number", number).put("code", code))
+                }
+            })
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Ajouter un coupon — compte $number")
+            .setItems(choices.map { it.first }.toTypedArray()) { _, index -> choices[index].second() }
+            .setNegativeButton("Annuler", null)
+            .show()
     }
 
     private fun updateAccountSessions(traffic: JSONObject?) {
@@ -545,31 +677,121 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun showAccountRechargeHistory(number: String) {
+        val history = RechargeHistory.read(number, lastState?.optJSONObject("state"))
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), 0)
+        }
+        container.addView(TextView(this).apply {
+            text = history.summary
+            textSize = 14f
+            setPadding(0, 0, 0, dp(12))
+        })
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val viewport = ScrollView(this).apply { addView(content) }
+        container.addView(viewport, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            (resources.displayMetrics.heightPixels * 0.45f).toInt(),
+        ))
+        var page = 0
+        val navigation = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val previous = makeButton("Précédent") {}
+        val pageLabel = TextView(this).apply { gravity = Gravity.CENTER }
+        val next = makeButton("Suivant") {}
+        navigation.addView(previous, weighted())
+        navigation.addView(pageLabel, weighted())
+        navigation.addView(next, weighted())
+        navigation.visibility = if (history.pageCount > 1) View.VISIBLE else View.GONE
+        container.addView(navigation)
+
+        fun renderPage() {
+            content.removeAllViews()
+            history.page(page).forEach { entry ->
+                content.addView(TextView(this).apply {
+                    text = entry.format(::formatDateTime)
+                    textSize = 14f
+                    setTextIsSelectable(true)
+                    setPadding(0, dp(8), 0, dp(12))
+                })
+                content.addView(View(this).apply { setBackgroundColor(0x33616161) },
+                    LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)))
+            }
+            pageLabel.text = "${page + 1}/${history.pageCount}"
+            previous.isEnabled = page > 0
+            next.isEnabled = page + 1 < history.pageCount
+            viewport.scrollTo(0, 0)
+        }
+        previous.setOnClickListener { page--; renderPage() }
+        next.setOnClickListener { page++; renderPage() }
+        renderPage()
+        AlertDialog.Builder(this)
+            .setTitle("Historique des recharges · N° $number")
+            .setView(container)
+            .setPositiveButton("Fermer", null)
+            .show()
+    }
+
     private fun renderOffersAndVouchers(offers: JSONArray, vouchers: JSONArray) {
         section("Vouchers Internet")
 
         val id = field("ID offre (ex: promo-30)")
         val name = field("Nom de l'offre")
-        val kind = field("Type : DATA ou UNLIMITED", "DATA")
+        val kinds = buildList {
+            add("DATA" to "Data")
+            add("UNLIMITED" to "Illimité")
+            if (capabilities.dataExtensionCoupons) add("DATA_EXTENSION" to "Prolongation Data")
+        }
+        var selectedKind = "DATA"
+        val kindPicker = field("Type d’offre", "Type d’offre · Data ▾").apply {
+            keyListener = null
+            isFocusable = false
+            isCursorVisible = false
+        }
         val down = field("Débit ↓ Mbps", "2")
         val up = field("Débit ↑ Mbps", "1")
-        val quota = field("Volume Go (0 si illimité)", "12")
+        val quota = field("Volume Data (Go)", "12")
         val days = field("Validité jours", "30")
-        val price = field("Prix FCFP", "1000")
+        val price = field("Prix F CFP", "1000")
+
+        fun selectKind(kind: String) {
+            selectedKind = kind
+            val label = kinds.firstOrNull { it.first == kind }?.second ?: kind
+            kindPicker.setText("Type d’offre · $label ▾")
+            val extension = kind == "DATA_EXTENSION"
+            down.visibility = if (extension) View.GONE else View.VISIBLE
+            up.visibility = down.visibility
+            quota.visibility = if (kind == "DATA") View.VISIBLE else View.GONE
+            days.hint = if (extension) "Jours de validité à ajouter" else "Validité jours"
+        }
+        kindPicker.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("Type d’offre")
+                .setItems(kinds.map { it.second }.toTypedArray()) { _, index -> selectKind(kinds[index].first) }
+                .setNegativeButton("Annuler", null)
+                .show()
+        }
 
         button("Créer / modifier l'offre") {
-            val unlimited = kind.text.toString().trim().uppercase() == "UNLIMITED"
+            if (kinds.none { it.first == selectedKind }) {
+                toast("Ce routeur ne prend pas en charge ce type d’offre.")
+                return@button
+            }
+            val extension = selectedKind == "DATA_EXTENSION"
             command(
                 "offer.upsert",
                 JSONObject()
                     .put("id", id.text.toString().trim())
                     .put("name", name.text.toString().trim())
-                    .put("kind", if (unlimited) "UNLIMITED" else "DATA")
-                    .put("downloadBps", (down.text.toString().toLongOrNull() ?: 0L) * 1_000_000L)
-                    .put("uploadBps", (up.text.toString().toLongOrNull() ?: 0L) * 1_000_000L)
+                    .put("kind", selectedKind)
+                    .put("downloadBps", if (extension) 0L else (down.text.toString().toLongOrNull() ?: 0L) * 1_000_000L)
+                    .put("uploadBps", if (extension) 0L else (up.text.toString().toLongOrNull() ?: 0L) * 1_000_000L)
                     .put(
                         "quotaBytes",
-                        if (unlimited) 0L else
+                        if (selectedKind != "DATA") 0L else
                             (quota.text.toString().toLongOrNull() ?: 0L) * 1_000_000_000L,
                     )
                     .put("durationDays", days.text.toString().toIntOrNull() ?: 0)
@@ -580,20 +802,24 @@ class MainActivity : Activity() {
         for (i in 0 until offers.length()) {
             val offer = offers.optJSONObject(i) ?: continue
             val offerId = offer.optString("id")
-            info(
+            val kind = offer.optString("kind", "DATA")
+            val label = if (kind == "DATA_EXTENSION") {
+                "${offer.optString("name")} · Prolongation Data · +${offer.optInt("durationDays")} j · ${offer.optInt("priceXpf")} F CFP"
+            } else {
                 offer.optString("name") + " — " +
                     (offer.optLong("downloadBps") / 1_000_000L) + "/" +
                     (offer.optLong("uploadBps") / 1_000_000L) + " Mbps · " +
                     offer.optString("kind") + " · " +
                     offer.optInt("durationDays") + " j · " +
-                    offer.optInt("priceXpf") + " FCFP",
-            )
+                    offer.optInt("priceXpf") + " FCFP"
+            }
+            info(label)
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             row.addView(
                 makeButton("Charger") {
                     id.setText(offerId)
                     name.setText(offer.optString("name"))
-                    kind.setText(offer.optString("kind"))
+                    selectKind(kind)
                     down.setText((offer.optLong("downloadBps") / 1_000_000L).toString())
                     up.setText((offer.optLong("uploadBps") / 1_000_000L).toString())
                     quota.setText((offer.optLong("quotaBytes") / 1_000_000_000L).toString())
@@ -634,10 +860,15 @@ class MainActivity : Activity() {
             val code = voucher.optString("code")
             val redeemed = voucher.optString("redeemedByAccount")
             val enabled = voucher.optBoolean("enabled", true)
+            val extension = if (voucher.optString("snapshotKind") == "DATA_EXTENSION") {
+                " · Prolongation Data +${voucher.optInt("snapshotDurationDays")} j"
+            } else {
+                ""
+            }
             info(
                 "$code — " + voucher.optString("snapshotName").ifBlank {
                     voucher.optString("offerId")
-                } + " — " +
+                } + extension + " — " +
                     if (redeemed.isBlank()) {
                         if (enabled) "Disponible" else "Désactivé"
                     } else {
@@ -799,7 +1030,7 @@ class MainActivity : Activity() {
         val enabled = media.optBoolean("enabled", false)
         val summary = media.optJSONObject("summary") ?: JSONObject()
         val folders = media.optJSONArray("folders") ?: JSONArray()
-        val maxFolders = media.optInt("maxFolders", 10)
+        val folderCapacity = MediaFolderCapacity.from(media)
 
         info(
             (if (enabled) "Serveur Media : ACTIF" else "Serveur Media : ARRÊTÉ") +
@@ -807,7 +1038,7 @@ class MainActivity : Activity() {
                 " · " + summary.optInt("films") + " films" +
                 " · " + summary.optInt("series") + " séries" +
                 " · " + summary.optInt("music") + " musiques" +
-                "\nDossiers : " + folders.length() + "/" + maxFolders,
+                "\n" + folderCapacity.label(folders.length()),
         )
 
         val serverRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -835,7 +1066,7 @@ class MainActivity : Activity() {
             )
         }
 
-        if (folders.length() < maxFolders) {
+        if (folderCapacity.canAdd(folders.length())) {
             button("Ajouter un dossier Media") {
                 prompt("Nom du dossier", "Dossier Media") { value ->
                     command(

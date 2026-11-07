@@ -98,6 +98,48 @@ func TestPortalRechargeClaimCarriesAccountAndClient(t *testing.T) {
 	}
 }
 
+func TestPortalDisplaysRecoverableExpiredData(t *testing.T) {
+	manager := newPortalManager(t)
+	account := accountForTest("1001", "1234", 5_000_000_000)
+	account.DataValidUntilMillis = time.Now().Add(-time.Hour).UnixMilli()
+	pushConfig(t, manager, account)
+	if ok, message := manager.submitPortalAccountLogin(phoneA, "1001", "1234"); !ok {
+		t.Fatalf("expired account could not open the portal: %s", message)
+	}
+	status := manager.portalStatus(phoneA)
+	if !status.Authenticated || status.Authorized || status.RemainingBytes != 0 || status.RecoverableBytes != account.DataBalanceBytes {
+		t.Fatalf("expired status = %+v", status)
+	}
+	if manager.portalStatus(phoneB).RecoverableBytes != 0 {
+		t.Fatal("another device saw the account's expired Data")
+	}
+
+	server, client := net.Pipe()
+	defer client.Close()
+	_ = client.SetDeadline(time.Now().Add(3 * time.Second))
+	go func() {
+		defer server.Close()
+		manager.writePortalHTML(server, phoneA, "", false)
+	}()
+	page, err := io.ReadAll(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(page), `<span id="shizzi-reserve-label">Data récupérable</span>`) {
+		t.Fatal("recoverable Data was missing from the account page")
+	}
+	if ok, message := manager.submitPortalRecharge(phoneA, "VALIDITE15"); !ok {
+		t.Fatalf("expired account could not submit a coupon: %s", message)
+	}
+
+	account.DataValidUntilMillis = time.Now().Add(15 * 24 * time.Hour).UnixMilli()
+	pushConfig(t, manager, account)
+	status = manager.portalStatus(phoneA)
+	if !status.Authorized || status.RecoverableBytes != 0 || status.RemainingBytes != account.DataBalanceBytes {
+		t.Fatalf("restored validity status = %+v", status)
+	}
+}
+
 func TestSameAccountTransfersToSecondAuthenticatedClient(t *testing.T) {
  manager := newTrafficManager()
  manager.setPortalConfig(true, portalConfigForTest(t))

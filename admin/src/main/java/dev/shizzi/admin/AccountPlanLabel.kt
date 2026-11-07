@@ -9,10 +9,16 @@ import org.json.JSONObject
 internal object AccountPlanLabel {
     private data class Recharge(val kind: String, val name: String, val time: Long, val currentOfferName: Boolean) {
         val label: String get() {
-            val type = when (kind) { "DATA" -> "Data"; "UNLIMITED" -> "Illimité"; else -> "Offre" }
+            val type = when (kind) {
+                "DATA" -> "Data"
+                "UNLIMITED" -> "Illimité"
+                "DATA_EXTENSION" -> "Prolongation Data"
+                else -> "Offre"
+            }
             val value = if (name.isBlank()) type else if (
                 (kind == "DATA" && name.contains("data", true)) ||
-                (kind == "UNLIMITED" && name.contains("illimit", true))
+                (kind == "UNLIMITED" && name.contains("illimit", true)) ||
+                (kind == "DATA_EXTENSION" && name.contains(type, true))
             ) name else "$type · $name"
             return value + if (currentOfferName) " (nom actuel de l'offre)" else ""
         }
