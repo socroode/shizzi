@@ -28,8 +28,18 @@ class TetherSession(private val context: Context) {
 
     val isActive: Boolean get() = state == SessionState.ACTIVE
 
+    @Synchronized
     fun start(mode: VpnMode = VpnMode.AUTO, ipv4Only: Boolean = false): String {
         if (isActive) return status()
+        // A failed startup may have left a datapath running to protect an
+        // incompletely stopped hotspot. Never stack another TUN on top of it.
+        if (resources != null || interfaceName != null) {
+            SessionLog.warn("cleaning up previous session before restart")
+            stop()
+            check(resources == null && interfaceName == null) {
+                "previous hotspot could not be stopped; refusing to create a second TUN"
+            }
+        }
         finalTrafficStats = "{}"
 
         vpnMode = mode
@@ -57,6 +67,13 @@ class TetherSession(private val context: Context) {
     }
 
     private fun bringUp(): String {
+        // OPPO may keep the previous testtun selected until the downstream
+        // has really stopped. The successful device probe stopped tethering
+        // *before* creating the TUN; mirror that ordering here.
+        val oldDownstream = teardown.releaseDownstream()
+        check(oldDownstream == null) {
+            "old hotspot is still tethered ($oldDownstream); refusing unsafe restart"
+        }
         val group = SessionResources(testNetworkApi, context.connectivityManager())
         resources = group
 
@@ -113,16 +130,21 @@ class TetherSession(private val context: Context) {
     }
 
     private fun startWatchdog(name: String) {
-        val guard = SessionWatchdog(
+        lateinit var guard: SessionWatchdog
+        guard = SessionWatchdog(
             name,
             onDrift = { problem ->
-                SessionLog.warn("upstream drift: $problem")
-                tearDownAfter(problem)
+                // An old watchdog must never shut down the replacement session.
+                if (watchdog === guard) {
+                    SessionLog.warn("upstream drift: $problem")
+                    tearDownAfter(problem)
+                }
             },
             onReselect = {
-                // Re-select the owned TUN without dropping Wi-Fi or accounts.
-                TetheringPreferenceApi(context).setPreferTestNetworks(true)
-                SessionLog.info("upstream selection requested again for $name")
+                if (watchdog === guard) {
+                    TetheringPreferenceApi(context).setPreferTestNetworks(true)
+                    SessionLog.info("upstream selection requested again for $name")
+                }
             },
         )
         watchdog = guard
@@ -148,9 +170,8 @@ class TetherSession(private val context: Context) {
     }
 
     private fun restartDownstream() {
+        // bringUp() has already verified that the old downstream is down.
         val control = DownstreamControl(context)
-        control.stopWifiTethering()
-
         val outcome = startDownstreamWith(
             start = {
                 val (accepted, detail) = control.startWifiTethering()
@@ -201,11 +222,18 @@ class TetherSession(private val context: Context) {
 
     private var finalTrafficStats = "{}"
 
+    @Synchronized
     fun stopAndTrafficStats(): String {
         stop()
+        // The app must not terminate this shell process while Android still
+        // has a tethered downstream: that would remove captive-portal policy.
+        check(state == SessionState.IDLE) {
+            "hotspot shutdown not confirmed: $detail"
+        }
         return finalTrafficStats
     }
 
+    @Synchronized
     fun stop(): String {
         presenceMonitor?.stop(); presenceMonitor = null
         watchdog?.stop()
@@ -216,6 +244,14 @@ class TetherSession(private val context: Context) {
         val summary = if (activeSince == 0L) null else sessionSummary()
 
         val downstreamProblem = teardown.releaseDownstream()
+        if (downstreamProblem != null) {
+            // Do not release the enforcing datapath while Android still
+            // forwards traffic: doing so could expose unpaid Internet.
+            state = SessionState.ERROR
+            detail = "hotspot stop not confirmed ($downstreamProblem); datapath retained"
+            SessionLog.error("teardown unsafe: $detail")
+            return status()
+        }
 
         teardown.releaseUpstreamSelection(interfaceName)
 
