@@ -225,6 +225,11 @@ class TetherSession(private val context: Context) {
     @Synchronized
     fun stopAndTrafficStats(): String {
         stop()
+        // The app must not terminate this shell process while Android still
+        // has a tethered downstream: that would remove captive-portal policy.
+        check(state == SessionState.IDLE) {
+            "hotspot shutdown not confirmed: $detail"
+        }
         return finalTrafficStats
     }
 

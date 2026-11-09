@@ -392,7 +392,7 @@ class SessionService : Service() {
         clearLiveSessions()
 
         internalState.update {
-            it.asStopped()
+            it.copy(isBusy = true, status = UiStatus.LOADING, detail = "Arrêt du hotspot en cours…")
         }
 
         publishState()
@@ -402,20 +402,36 @@ class SessionService : Service() {
             abandoned?.cancelAndJoin()
             abandonedSync?.cancelAndJoin()
 
-            sessionLock.withLock {
+            val shutdown = sessionLock.withLock {
                 runCatching {
                     val store = (application as App).cybercafeStore
                     val snapshot = parseLiveTrafficSnapshot(controller.stopAndTrafficStats())
                     usageLedger?.let { store.absorbUsage(it, snapshot.epoch, snapshot.accountUsage) }
                     store.flushUsage(System.currentTimeMillis(), force = true)
-                }
-                    .onFailure { SessionLog.error("teardown failed: ${it.message}") }
-
-                controller.unbindAndStopDaemon()
+                }.onSuccess {
+                    // Only terminate the privileged daemon after the downstream
+                    // has been confirmed stopped by TetherSession.
+                    controller.unbindAndStopDaemon()
+                }.onFailure { SessionLog.error("teardown failed: ${it.message}") }
             }
 
+            if (shutdown.isFailure) {
+                // Keep the foreground app and privileged datapath alive rather
+                // than leaving a potentially open Wi-Fi with no policies.
+                isStopping = false
+                internalState.update {
+                    it.copy(
+                        isBusy = false,
+                        status = UiStatus.ERROR,
+                        lastError = "Arrêt non confirmé : moteur réseau conservé pour la sécurité.",
+                    )
+                }
+                publishState()
+                return@launch
+            }
+            internalState.update { it.asStopped() }
+            publishState()
             announceOutcome()
-
             if (stopped == generation) stopSelf()
         }
     }
