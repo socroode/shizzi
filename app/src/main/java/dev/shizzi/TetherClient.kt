@@ -10,6 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import rikka.shizuku.Shizuku
 
@@ -91,8 +93,10 @@ private fun statusFor(sessionState: String): UiStatus = when (sessionState) {
 
 class TetherClient {
 
-    private var boundService: ITetherService? = null
-    private var pendingBind: CompletableDeferred<ITetherService>? = null
+    @Volatile private var boundService: ITetherService? = null
+    @Volatile private var pendingBind: CompletableDeferred<ITetherService>? = null
+    private val bindMutex = Mutex()
+    @Volatile private var observedBinder: IBinder? = null
 
     var onSessionLost: (() -> Unit)? = null
 
@@ -130,19 +134,27 @@ class TetherClient {
         }
     }
 
-    private suspend fun service(): ITetherService {
+    private suspend fun service(): ITetherService = bindMutex.withLock {
+        // Status poller, portal sync and recovery may otherwise each start a
+        // separate Shizuku binding, overwriting pendingBind.
         boundService?.let { existing ->
-            if (existing.asBinder().pingBinder()) return existing
+            if (existing.asBinder().pingBinder()) {
+                if (observedBinder !== existing.asBinder()) observeDeath(existing)
+                return@withLock existing
+            }
             boundService = null
         }
 
         val deferred = CompletableDeferred<ITetherService>()
         pendingBind = deferred
-        Shizuku.bindUserService(userServiceArgs, connection)
-
-        val bound = awaitBind(deferred)
-        observeDeath(bound)
-        return bound
+        try {
+            Shizuku.bindUserService(userServiceArgs, connection)
+            val bound = awaitBind(deferred)
+            observeDeath(bound)
+            bound
+        } finally {
+            if (pendingBind === deferred) pendingBind = null
+        }
     }
 
     private suspend fun awaitBind(deferred: CompletableDeferred<ITetherService>): ITetherService =
@@ -160,18 +172,24 @@ class TetherClient {
         }
 
     private fun observeDeath(bound: ITetherService) {
-        deathRecipient = null
-
         val binder = bound.asBinder()
-        val recipient = IBinder.DeathRecipient {
-            boundService = null
-            onSessionLost?.invoke()
+        if (observedBinder === binder) return
+        deathRecipient?.let { recipient ->
+            runCatching { observedBinder?.unlinkToDeath(recipient, 0) }
         }
-
+        deathRecipient = null
+        observedBinder = binder
+        val recipient = IBinder.DeathRecipient {
+            if (observedBinder === binder) {
+                observedBinder = null
+                boundService = null
+                onSessionLost?.invoke()
+            }
+        }
         runCatching { binder.linkToDeath(recipient, 0) }
             .onSuccess { deathRecipient = recipient }
             .onFailure {
-
+                observedBinder = null
                 boundService = null
             }
     }
@@ -238,7 +256,12 @@ class TetherClient {
     suspend fun releaseOrphanedDownstream(): String? = withContext(Dispatchers.IO) {
         runCatching { service().stop() }
             .fold(
-                onSuccess = { null },
+                onSuccess = { response ->
+                    val result = runCatching { JSONObject(response) }.getOrNull()
+                    if (result?.optString("state") == "ERROR") {
+                        result.optString("detail", "hotspot shutdown failed")
+                    } else null
+                },
                 onFailure = { failure ->
                     "could not reach Shizuku to drop the hotspot: ${failure.message}"
                 },
@@ -337,9 +360,11 @@ class TetherClient {
 
     private fun releaseBinding(shouldTerminate: Boolean) {
         deathRecipient?.let { recipient ->
-            runCatching { boundService?.asBinder()?.unlinkToDeath(recipient, 0) }
+            runCatching { observedBinder?.unlinkToDeath(recipient, 0) }
         }
+        observedBinder = null
         deathRecipient = null
+        pendingBind = null
 
         runCatching { Shizuku.unbindUserService(userServiceArgs, connection, shouldTerminate) }
         boundService = null

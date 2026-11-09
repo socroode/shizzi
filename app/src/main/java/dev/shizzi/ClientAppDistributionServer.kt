@@ -60,17 +60,21 @@ class ClientAppDistributionServer(
         if (!running.compareAndSet(false, true)) return true
 
         val socket = runCatching {
-            ServerSocket().apply {
-                reuseAddress = true
-                bind(
-                    InetSocketAddress(
-                        InetAddress.getByName(LOOPBACK_HOST),
-                        PORT,
-                    ),
-                )
+            val candidate = ServerSocket()
+            try {
+                candidate.reuseAddress = true
+                candidate.bind(InetSocketAddress(InetAddress.getByName(LOOPBACK_HOST), PORT))
+                candidate
+            } catch (failure: Exception) {
+                runCatching { candidate.close() }
+                throw failure
             }
         }.getOrElse { failure ->
             running.set(false)
+            if (failure is java.net.BindException && compatibleDistributionIsAlive()) {
+                SessionLog.info("compatible Shizzi+ distribution already serving on 127.0.0.1:$PORT")
+                return true
+            }
             SessionLog.warn(
                 "Shizzi+ distribution server failed: " +
                     "${failure.javaClass.simpleName}: ${failure.message}",
@@ -92,6 +96,38 @@ class ClientAppDistributionServer(
         )
         return true
     }
+
+    // Another shell process may still own 8091 after Shizuku rebinds.
+    // Reuse only if BOTH embedded APKs match by hash. Never accept an
+    // unrelated listener, or one serving stale client/admin binaries.
+    private fun compatibleDistributionIsAlive(): Boolean =
+        servesSameApk("/shizzi-plus.apk", info.sha256) &&
+            servesSameApk("/shizzi-admin.apk", adminInfo.sha256)
+
+    private fun servesSameApk(path: String, expectedSha: String): Boolean = runCatching {
+        Socket().use { peer ->
+            peer.connect(InetSocketAddress(InetAddress.getByName(LOOPBACK_HOST), PORT), 1_200)
+            peer.soTimeout = 1_200
+            peer.getOutputStream().apply {
+                write("HEAD $path HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
+                flush()
+            }
+            peer.getInputStream().bufferedReader().use { input ->
+                val status = input.readLine().orEmpty()
+                var actualSha = ""
+                while (true) {
+                    val header = input.readLine() ?: break
+                    if (header.isEmpty()) break
+                    if (header.startsWith("X-Shizzi-SHA256:", ignoreCase = true)) {
+                        actualSha = header.substringAfter(':').trim()
+                    }
+                }
+                status.startsWith("HTTP/1.1 200 ") &&
+                    expectedSha.isNotBlank() &&
+                    actualSha.equals(expectedSha, ignoreCase = true)
+            }
+        }
+    }.getOrDefault(false)
 
     fun stop() {
         running.set(false)

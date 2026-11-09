@@ -54,6 +54,7 @@ class SessionService : Service() {
     private var reportTo: AutomationCommand? = null
 
     private var startJob: Job? = null
+    private var recoveryJob: Job? = null
 
     private var cybercafeJob: Job? = null
 
@@ -377,6 +378,8 @@ class SessionService : Service() {
         (application as App).settingsStore
 
     private fun stopSession() {
+        recoveryJob?.cancel()
+        recoveryJob = null
         val stopped = ++generation
 
         val abandoned = startJob
@@ -418,33 +421,49 @@ class SessionService : Service() {
     }
 
     private fun handleSessionLost() {
+        if (isStopping || recoveryJob?.isActive == true) return
+        val attempt = ++generation
+        startJob?.cancel()
+        startJob = null
         statusPoller.stop()
+        cybercafeJob?.cancel()
+        cybercafeJob = null
 
-        isStopping = false
-        SessionLog.error("shell process died; recovering any downstream it left up")
-
+        SessionLog.error("shell process died; retaining foreground recovery monitor")
         internalState.update {
             it.copy(
                 isBusy = false,
                 status = UiStatus.ERROR,
                 interfaceName = "",
-                lastError = "Session ended unexpectedly — dropping the hotspot…",
+                lastError = "Service privilégié perdu — tentative de récupération…",
             )
         }
         publishState()
 
-        scope.launch {
-            val problem = runCatching { controller.releaseOrphanedDownstream() }
-                .getOrElse { failure -> "teardown failed: ${failure.message}" }
-
-            when (problem) {
-                null -> SessionLog.info("orphan recovery: hotspot dropped")
-                else -> SessionLog.error("orphan recovery failed: $problem")
+        // Keep the app foreground service alive so recovery can be attempted
+        // when Shizuku becomes reachable again, without a human restarting
+        // Shizzi. Never start a replacement TUN until the old hotspot is down.
+        recoveryJob = scope.launch {
+            var retries = 0
+            while (attempt == generation && !isStopping) {
+                retries++
+                val problem = runCatching { controller.releaseOrphanedDownstream() }
+                    .getOrElse { failure -> "teardown failed: ${failure.message}" }
+                if (problem == null) {
+                    SessionLog.info("orphan recovery: hotspot stopped; restarting controlled session")
+                    internalState.update { it.asStopped() }
+                    publishState()
+                    recoveryJob = null
+                    startSession()
+                    return@launch
+                }
+                SessionLog.warn("orphan recovery attempt $retries failed: $problem")
+                internalState.update { current ->
+                    current.copy(lastError = notification.describeLoss(problem))
+                }
+                publishState()
+                delay(15_000L)
             }
-
-            internalState.update { current -> current.copy(lastError = notification.describeLoss(problem)) }
-            publishState()
-            stopSelf()
         }
     }
 
@@ -465,6 +484,8 @@ class SessionService : Service() {
         getSystemService(NotificationManager::class.java)
 
     override fun onDestroy() {
+        recoveryJob?.cancel()
+        recoveryJob = null
         controller.onSessionLost = null
         cybercafeJob?.cancel()
         cybercafeJob = null

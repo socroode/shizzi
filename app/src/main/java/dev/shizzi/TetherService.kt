@@ -15,12 +15,15 @@ class TetherService : ITetherService.Stub {
     private val session: TetherSession by lazy { TetherSession(shellContext) }
     private val compatibility: CompatibilityCheck by lazy { CompatibilityCheck(shellContext) }
     private val apexInstaller: ApexInstaller by lazy { ApexInstaller() }
-    private val clientAppDistribution: ClientAppDistributionServer by lazy {
-        ClientAppDistributionServer(
-            readClientAppAssetFromInstalledShizzi(context),
-            readAdminAppAssetFromInstalledShizzi(context),
-        )
-    }
+    private val clientAppDistribution: ClientAppDistributionServer
+        get() = synchronized(DISTRIBUTION_LOCK) {
+            // TetherService objects can be re-created while the shell process
+            // survives; only one socket owner per process is permitted.
+            sharedDistribution ?: ClientAppDistributionServer(
+                readClientAppAssetFromInstalledShizzi(context),
+                readAdminAppAssetFromInstalledShizzi(context),
+            ).also { sharedDistribution = it }
+        }
 
     @Suppress("unused")
     constructor() : this(acquireSystemContext())
@@ -144,7 +147,7 @@ class TetherService : ITetherService.Stub {
         )
 
     private fun ensureClientAppDistribution() {
-        runCatching { clientAppDistribution.start() }
+        runCatching { synchronized(DISTRIBUTION_LOCK) { clientAppDistribution.start() } }
             .onSuccess { started ->
                 if (started) {
                     Log.i(
@@ -196,6 +199,8 @@ class TetherService : ITetherService.Stub {
     }
 
     companion object {
+        private val DISTRIBUTION_LOCK = Any()
+        private var sharedDistribution: ClientAppDistributionServer? = null
 
         val CONTRACT_VERSION = BuildConfig.SERVICE_BUILD_ID
 
