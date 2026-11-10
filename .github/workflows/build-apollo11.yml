@@ -26,6 +26,10 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-35" "build-tools;35.0.0"
       - name: Build debug APK
         run: gradle :app:assembleDebug --no-daemon --stacktrace
+      - name: Verify APK signature, package and version
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | head -8
       - name: Save APK
         uses: actions/upload-artifact@v4
         with:
