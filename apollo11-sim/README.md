@@ -1,20 +1,19 @@
-# APOLLO 11 · Houston — v0.1.0
+# Apollo 11 Houston v0.2.0 — alunissage manuel
 
-Simulateur **pédagogique**, autonome et hors ligne, inspiré de la chronologie réelle de la mission Apollo 11. L'horloge MET et les événements sont référencés sur la documentation historique NASA, mais la représentation du mouvement, les vitesses entre jalons et le budget de carburant sont **des modèles illustratifs**, pas des données de navigation ni de télémétrie authentifiées.
+Jeu Android autonome, sans Internet, avec pilotage réel (simplifié) d'Eagle.
 
-## Utilisation
-- Ouvrir `app/src/main/assets/index.html` dans un navigateur sur mobile/ordinateur : fonctionnel sans installation.
-- Sur Android, ouvrir le projet dans Android Studio, synchroniser Gradle, `Build > Build APK(s)`, puis installer `app-debug.apk`.
-- Pour la version Android, **aucune autorisation Internet** n'est demandée.
+## Piloter
+- Entraînement : départ à 350 m ; Défi Apollo : 1 800 m.
+- Maintenir **MOTEUR** pour ralentir la descente (puissance réglable de 10 à 100 %).
+- Maintenir **GAUCHE** / **DROITE** pour corriger le déplacement horizontal.
+- Atterrir au-dessus de la zone turquoise (±42 m), à une vitesse verticale ≤ 2,3 m/s et horizontale ≤ 1,4 m/s.
+- Accélérer le temps ×1/×2/×4, pause, recommencer.
+- Retour vers la chronologie Houston par **Historique Houston**.
 
-## Commandes
-- **Démarrer / Pause** : temps de simulation.
-- **×1 / ×60 / ×3 600 / ×21 600** : vitesse du temps simulé.
-- **Étape suivante** : aller à la prochaine manœuvre ou à l'événement historique suivant sans attendre les longues traversées.
-- **Rejouer** : remettre MET à zéro.
-- Appuyer sur une ligne de chronologie pour y aller directement.
+## Précision
+La gravité lunaire vaut 1,62 m/s² (NASA). L'accélération moteur et la consommation sont calibrées pour être jouables ; ce n'est pas un modèle certifié du moteur DPS ni une reproduction des données de télémétrie historiques. Le trajet Terre–Lune est ignoré et l'on commence directement en descente manuelle.
 
-## Limites de v0.1
-La trajectoire est une construction 2D schématique corrélée aux événements. Les indicateurs de vitesse et de carburant sont interpolés et simplifiés. Le calcul de gravitation est issu de GM/r² et la vitesse orbitale circulaire de sqrt(GM/r), mais ce prototype **ne résout pas** les équations de mouvement d'Apollo 11 avec ses véritables conditions initiales et ne pourrait pas guider un vaisseau réel sans Houston. À ne pas utiliser pour la navigation réelle.
+## Développer
+Ouvrir `apollo11-sim` dans Android Studio ou lancer GitHub Actions `Build Apollo 11 Houston APK`. Le package `pf.shizzi.apollo11` reprend l'identifiant v0.1.0 ; `versionCode=2`, `versionName=0.2.0`. APK debug à tester avant toute diffusion.
 
-Sources : https://www.nasa.gov/wp-content/uploads/static/history/SP-4029/Apollo_11a_Summary.htm ; https://www.nasa.gov/history/apollo-11-mission-overview/ ; https://nssdc.gsfc.nasa.gov/planetary/lunar/apollo11info.html
+Sources NASA : https://nssdc.gsfc.nasa.gov/planetary/factsheet/moonfact.html ; https://www.nasa.gov/history/apollo-11-mission-overview/ ; https://www.nasa.gov/wp-content/uploads/static/apollo50th/pdf/A11_MissionReport.pdf
