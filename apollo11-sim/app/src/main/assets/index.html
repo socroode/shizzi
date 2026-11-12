@@ -1,239 +1,184 @@
 <!doctype html>
 <html lang="fr">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
-<meta name="theme-color" content="#050e1c">
-<title>APOLLO 11 · HOUSTON</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#06121e">
+<title>APOLLO 11 · ALUNISSAGE MANUEL</title>
 <style>
-:root{color-scheme:dark;--bg:#050e1c;--panel:#0c1b2c;--panel2:#0e2235;--line:#284057;--muted:#94afc5;--ink:#eff8ff;--teal:#65e2d9;--gold:#f9cb85;--orange:#ed9662;--green:#9ae9b9}
-*{box-sizing:border-box}html{background:var(--bg)}body{margin:0;background:radial-gradient(ellipse at 70% -30%,#153c54 0,#061120 46%,#040b15 100%);font:14px/1.45 system-ui,-apple-system,'Roboto','Noto Sans',sans-serif;color:var(--ink);-webkit-tap-highlight-color:transparent}
-button{font:inherit;cursor:pointer}button:focus-visible,.event:focus-visible{outline:2px solid var(--teal);outline-offset:2px}main{max-width:1080px;margin:0 auto;padding:22px 17px 38px;padding-top:max(22px,env(safe-area-inset-top));padding-bottom:max(38px,env(safe-area-inset-bottom))}
-.eyebrow{color:var(--teal);letter-spacing:.18em;font-weight:800;font-size:10px;text-transform:uppercase;display:flex;align-items:center;gap:9px}.dot{width:7px;height:7px;background:var(--teal);border-radius:50%;box-shadow:0 0 10px var(--teal)}
-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin:10px 0 21px}h1{font-size:clamp(31px,8vw,52px);letter-spacing:-.055em;line-height:1.02;margin:8px 0 9px;font-weight:800}h1 span{color:var(--gold)}.sub{font-size:13px;color:var(--muted);margin:0}.stamp{border:1px solid #39516b;color:#bdd4e4;border-radius:9px;font-size:10px;font-weight:800;letter-spacing:.05em;padding:8px 9px;white-space:nowrap;margin-top:12px}.topline{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:12px}.pill{border:1px solid #2f5770;background:#0a2233;border-radius:20px;padding:6px 11px;color:#b6d6e3;font-size:11px;font-weight:800;letter-spacing:.03em}.pill.active{color:var(--teal);border-color:#267a80;background:#073039}.pill.gld{color:var(--gold);border-color:#766143;background:#292518}
-.panel{background:linear-gradient(155deg,rgba(15,34,52,.95),rgba(8,20,36,.97));border:1px solid var(--line);border-radius:15px;box-shadow:0 10px 35px rgba(0,0,0,.12);overflow:hidden}
-.sectionhead{display:flex;align-items:center;justify-content:space-between;gap:10px;color:#b0c7d8;font-size:10px;letter-spacing:.13em;text-transform:uppercase;font-weight:800}.sectionhead b{color:var(--teal);font-size:11px;letter-spacing:.04em}
-.mission{padding:16px 17px 12px}.missiontop{display:flex;align-items:baseline;justify-content:space-between;gap:12px}.missiontime{font-variant-numeric:tabular-nums;font-weight:800;font-size:clamp(30px,7vw,45px);letter-spacing:-.05em;margin:4px 0 5px}.phase{font-weight:800;font-size:16px;color:var(--ink)}.phaseinfo{font-size:12px;color:var(--muted);margin-top:5px;min-height:35px}.progress{height:5px;border-radius:5px;background:#21354a;overflow:hidden;margin-top:13px}.progress>span{display:block;width:0;height:100%;background:linear-gradient(90deg,#55a7d9,var(--teal));transition:width .13s linear}
-.maphead{padding:14px 16px 0}.map{position:relative;height:260px}.map canvas{width:100%;height:100%;display:block}.mapLegend{display:flex;gap:16px;padding:0 15px 14px;font-size:10px;color:var(--muted);align-items:center;justify-content:space-between}.mapLegend span:nth-child(2){color:var(--gold)}.mapLegend span:last-child{font-size:9px}
-.controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:11px}.control{background:#18354a;border:1px solid #355775;border-radius:10px;padding:11px 14px;color:#eff7fc;font-weight:750}.control.primary{background:var(--teal);color:#03222b;border-color:var(--teal);min-width:120px}.control.gold{background:#302719;border-color:#725735;color:var(--gold)}.control:active{transform:scale(.97)}.ratebox{display:flex;gap:4px;background:#091b2c;border:1px solid #2a445c;border-radius:10px;padding:4px;flex:1;justify-content:space-evenly}.rate{background:transparent;border:0;border-radius:7px;padding:6px 9px;color:#aec7d9;font-size:12px;font-weight:800;min-width:44px}.rate.selected{background:#2c5164;color:white}
-.sectiontitle{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#c0d6e6;font-weight:850;margin:25px 1px 11px;display:flex;align-items:center;justify-content:space-between}.sectiontitle em{font-size:10px;font-style:normal;color:#779db6;letter-spacing:0;font-weight:600;text-transform:none}
-.stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.stat{padding:13px 14px;min-height:102px}.stat .label{color:#a7c1d2;font-size:11px;margin-bottom:8px}.value{font-variant-numeric:tabular-nums;font-size:25px;line-height:1.1;font-weight:800;letter-spacing:-.04em;white-space:nowrap}.value small{font-size:11px;letter-spacing:0;color:#adc9dc;font-weight:600}.hint{font-size:10px;color:#789bb4;margin-top:8px}.teal{color:var(--teal)}.gold{color:var(--gold)}
-.fuel{padding:14px 15px}.fuelline{display:flex;justify-content:space-between;align-items:baseline;margin:12px 0 5px;font-size:12px}.fuelline b{font-variant-numeric:tabular-nums}.fuelbar{height:6px;background:#273747;border-radius:5px;overflow:hidden}.fuelbar div{height:100%;background:linear-gradient(90deg,#d88658,var(--gold));border-radius:5px}.fuelnote{font-size:10px;color:#91a8b9;margin-top:13px}
-.events{padding:8px 0}.event{display:flex;align-items:center;gap:13px;width:100%;text-align:left;border:0;background:transparent;color:#c5d7e4;padding:11px 15px;border-left:3px solid transparent}.event:not(:last-child){border-bottom:1px solid #192d40}.event.current{border-left-color:var(--teal);background:#123147}.event.past .evdot{background:#65e2d9;border-color:#65e2d9}.evdot{flex:0 0 10px;height:10px;border:2px solid #49728c;border-radius:50%}.event .evcopy{min-width:0;flex:1}.event strong{display:block;font-weight:750;font-size:12px}.event small{display:block;font-size:10px;color:#8facbf;margin-top:3px}.event .evt{color:#a8c3d6;font-weight:800;font-size:11px;white-space:nowrap;font-variant-numeric:tabular-nums}
-.details{padding:14px 15px;font-size:12px;color:#bfd3e2}.details strong{color:var(--teal)}.details .row2{display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid #20384c;padding:7px 0}.details .row2:last-child{border:0}.footer{font-size:10px;color:#779bb3;margin:18px 3px 5px}.footer a{color:#7cbfc8;text-decoration:underline}.twocol{display:grid;gap:0} .twocol > div{min-width:0}
-@media(min-width:750px){main{padding-top:42px}.toparea{display:grid;grid-template-columns:1.1fr .9fr;gap:14px;align-items:stretch}.map{height:319px}.mission{height:100%}.stats{grid-template-columns:repeat(4,minmax(0,1fr))}.twocol{grid-template-columns:1fr 1fr;gap:14px}.controls{margin-top:14px}.ratebox{max-width:430px}}
-@media(max-width:390px){main{padding-left:12px;padding-right:12px}.stat{padding:12px}.value{font-size:21px}.control{padding:10px}.rate{min-width:35px;padding:6px}.map{height:230px}}
-@media(prefers-reduced-motion:reduce){.progress>span{transition:none}}
+:root { color-scheme: dark; --bg:#06101c; --panel:#101f31; --edge:#274158; --ink:#f1f7ff; --muted:#98afc4; --cyan:#57e0da; --amber:#f3c47b; --red:#ff8c84; --green:#9de6b4 }
+* { box-sizing:border-box } html,body { margin:0; background:#06101c; color:var(--ink); min-height:100%; font:14px/1.4 system-ui,-apple-system,Roboto,'Noto Sans',sans-serif; overflow-x:hidden }
+body { background: radial-gradient(ellipse 100% 80% at 65% -30%, #1b3958 0, transparent 70%), var(--bg) }
+button,select,input { font:inherit } button { cursor:pointer;-webkit-tap-highlight-color:transparent } button:focus-visible,select:focus-visible,input:focus-visible {outline:2px solid var(--cyan);outline-offset:2px}
+button:disabled { opacity:.45; cursor:not-allowed } .wrap { max-width:970px; margin:auto; padding:13px 14px 22px; padding-top:max(13px,env(safe-area-inset-top)); padding-bottom:max(20px,env(safe-area-inset-bottom)) }
+header {display:flex;justify-content:space-between;gap:12px;align-items:center;padding-bottom:10px}
+.logo {font-size:11px;color:var(--cyan);font-weight:900;letter-spacing:.18em;line-height:1.2}
+h1 {font-size:clamp(20px,4.5vw,29px);letter-spacing:-.045em;margin:2px 0 0;line-height:1.05}
+.meta {display:flex;gap:7px;align-items:center; flex-wrap:wrap;justify-content:flex-end}
+.tag {color:#c5d9ed;border:1px solid var(--edge);background:#112235;border-radius:8px;font-size:10px;font-weight:800;padding:6px 8px;white-space:nowrap}
+button.ghost{border:1px solid #37566e;border-radius:8px;background:#122538;color:#cfebf9;padding:7px 10px;font-size:11px;font-weight:800}
+.hud {display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px;margin-bottom:8px}
+.metric {min-width:0;border:1px solid var(--edge);border-radius:11px;background:linear-gradient(180deg,#14263b,#0c1b2c);padding:7px 9px 6px}
+.metric .label {display:block;color:var(--muted);font-size:10px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.025em}
+.metric strong {display:block;font-size:clamp(15px,2.9vw,25px);letter-spacing:-.04em;white-space:nowrap; font-variant-numeric:tabular-nums;line-height:1.23}
+.metric small {font-size:10px;color:var(--muted);margin-left:2px;font-weight:600}
+.metric strong.critical {color:var(--red)} .metric strong.good {color:var(--green)}
+.stage {position:relative; border:1px solid #3a5570; border-radius:14px;overflow:hidden;background:#030912;isolation:isolate}
+#scene {display:block;width:100%;height:clamp(220px,39vh,415px);touch-action:none}
+.scene-top {position:absolute;top:10px;left:12px;right:12px;display:flex;justify-content:space-between;align-items:flex-start;gap:6px;pointer-events:none}
+.scene-top .live {border:1px solid #38556c;border-radius:7px;background:#071522df;padding:5px 9px;color:#d3edfa;font-size:10px;letter-spacing:.06em;font-weight:900}
+.scene-top .live span {color:var(--cyan)}
+.scene-top .warn {padding:5px 9px;background:#271913d9;border:1px solid #73533f;color:#fbd6a6;font-size:10px;font-weight:800;border-radius:7px;text-align:right}
+#toast {position:absolute;left:11px;bottom:12px;max-width:min(80%,480px);padding:7px 11px;border:1px solid #47617a;border-radius:8px;background:#081522e8;color:#d7edf9;font-size:11px;pointer-events:none;transition:opacity .2s}
+.overlay {position:absolute;inset:0;background:#04101cc9;z-index:2;display:grid;place-items:center;padding:16px;backdrop-filter:blur(4px)}
+.overlay[hidden] {display:none} .modal {width:min(400px,100%);max-height:100%;overflow:auto;text-align:center;border:1px solid #4c6f8a;background:linear-gradient(145deg,#142b41,#0a1828);border-radius:16px;padding:18px 20px 16px;box-shadow:0 13px 40px #0008}
+.modal .eyebrow {color:var(--cyan);font-size:10px;letter-spacing:.14em;font-weight:900}.modal h2 {font-size:25px;line-height:1.1;letter-spacing:-.04em;margin:8px 0}.modal p {color:#bed3e3;font-size:12px;margin:8px 0 12px}
+.selectrow {display:flex;justify-content:space-between;align-items:center;text-align:left;gap:7px;border:1px solid #37566c;border-radius:10px;padding:7px 9px;margin:10px 0;background:#0b1c2b;font-size:12px}
+.selectrow select {border:0;background:transparent;color:#eff8ff;font-weight:900;outline:none;max-width:56%}.selectrow option {background:#13283e}
+.primary {border:1px solid #78efe5;border-radius:10px;background:linear-gradient(125deg,#4ee0d7,#20a6ad);color:#05202b;font-weight:1000;letter-spacing:.035em;padding:12px 16px;font-size:13px;width:100%;min-height:44px}
+.status {display:flex;justify-content:space-between;align-items:center;gap:12px;margin:9px 1px 9px;flex-wrap:wrap}
+#radio {font-size:11px;color:#b4d1de;max-width:80%;font-weight:700}#radio b {color:#79e1dc}
+.speed {display:flex;gap:4px}.speed button {font-size:10px;background:#10273c;color:#cbdfee;border:1px solid #36526b;border-radius:6px;padding:5px 8px;font-weight:800}.speed button.active {color:#052129;background:#68dfd4;border-color:#68dfd4}
+.controls {display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.32fr) minmax(0,1fr);gap:9px;align-items:stretch}
+.pilot {min-height:84px;display:flex;align-items:center;justify-content:center;flex-direction:column;border:1px solid #41627b;border-bottom:4px solid #2b4964;background:linear-gradient(160deg,#1c354c,#122539);border-radius:13px;color:#f1f9ff;font-weight:900;letter-spacing:.02em;user-select:none;touch-action:none;position:relative}
+.pilot .big {font-size:27px;line-height:1}.pilot span.text {font-size:11px;line-height:1.4;margin-top:3px}.pilot small {font-size:9px;color:#a9c6d7;font-weight:600}
+.pilot.engine {background:linear-gradient(160deg,#6c472d,#38281e);border-color:#a77b57;border-bottom-color:#6f4d34;color:#fff3d5}
+.pilot.active {transform:translateY(2px);filter:brightness(1.38);border-bottom-width:2px}
+.engine .big {font-size:22px}.engine small {color:#ffe0b7}
+.throttle {border:1px solid #2c4960;border-radius:11px;margin-top:8px;padding:9px 12px 9px;background:#102132;display:grid;grid-template-columns:100px minmax(30px,1fr) 68px;gap:10px;align-items:center}
+.throttle label {font-size:11px;font-weight:800}.throttle label span {display:block;font-size:9px;color:var(--muted)}
+input[type=range] {width:100%;accent-color:#f7c583; height:25px;touch-action:auto}
+.num {font-weight:900;font-size:16px;color:var(--amber);text-align:right; font-variant-numeric:tabular-nums}
+.hints {display:flex;justify-content:space-between;gap:9px;align-items:center;color:#8ea8bd;font-size:10px;margin-top:10px;line-height:1.3;flex-wrap:wrap}
+.hints strong {color:#d4e5ee}.footerlinks {display:flex;align-items:center;gap:8px}
+a {color:#79e1da;text-decoration:none}.chip {background:#15293b;padding:5px 7px;border-radius:6px;border:1px solid #2a485f;color:#b9d0df;white-space:nowrap}
+@media (max-width:540px){.wrap{padding:9px 9px 16px}header{padding-bottom:8px}.meta .tag {display:none}.hud{gap:4px}.metric{padding:6px 5px}.metric .label{font-size:8px}.metric strong{font-size:clamp(14px,3.2vw,20px)}.metric small{font-size:8px}#scene{height:clamp(235px,42vh,350px)}.pilot{min-height:82px}.throttle{grid-template-columns:75px minmax(20px,1fr) 48px;padding:6px 8px;gap:7px}.hints{font-size:9px}}
+@media (orientation:landscape) and (max-height:540px){.wrap{max-width:1050px;padding:5px 10px 7px}header{padding-bottom:5px}h1{font-size:19px}.logo{font-size:9px}.hud{margin-bottom:5px}.metric{padding:4px 7px}.metric strong{font-size:17px}.metric .label{font-size:9px}#scene{height:clamp(135px,36vh,240px)}.status{margin:4px 0}.pilot{min-height:56px}.pilot .big{font-size:22px}.pilot.engine .big{font-size:18px}.pilot small{display:none}.throttle{margin-top:4px;padding:3px 8px}.hints{margin-top:5px}.modal{padding:9px 14px}.modal p{margin:4px 0}.modal h2{font-size:19px;margin:4px 0}}
 </style>
 </head>
 <body>
-<main>
- <div class="eyebrow"><span class="dot"></span>MISSION CONTROL · SIMULATION HORS LIGNE</div>
- <header><div><h1>APOLLO <span>11</span><br>HOUSTON</h1><p class="sub">Du décollage au retour sur Terre · juillet 1969</p></div><span class="stamp">v0.1.0<br>OFFLINE</span></header>
- <div class="topline"><span class="pill active" id="runningStatus">● PRÊT</span><span class="pill">3 ASTRONAUTES</span><span class="pill gld" id="craftTag">SATURN V</span></div>
- <div class="toparea">
-  <section class="panel mission">
-   <div class="sectionhead"><span>TEMPS ÉCOULÉ DE MISSION (MET)</span><b id="dateText">16 JUL 1969</b></div>
-   <div class="missiontop"><div id="met" class="missiontime">000:00:00</div><div style="font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums"><span id="metPercent">0,0</span> %</div></div>
-   <div id="phaseName" class="phase">Décollage de Saturn V</div>
-   <div id="phaseInfo" class="phaseinfo">La mission quitte le pas de tir 39A, en Floride.</div>
-   <div class="progress"><span id="progress"></span></div>
-   <div style="margin-top:17px" class="sectionhead"><span>PROCHAINE OPÉRATION</span><b id="nextTime">000:11:49</b></div>
-   <div id="nextName" style="margin-top:8px;font-size:13px;font-weight:750">Insertion en orbite terrestre</div>
-   <div id="countdown" style="margin-top:4px;font-size:11px;color:var(--muted)">Dans 11 min 49 s de mission</div>
-  </section>
-  <section class="panel">
-   <div class="maphead sectionhead"><span>TRAJECTOIRE TERRE–LUNE</span><b>VUE SCHÉMATIQUE · 2D</b></div>
-   <div class="map"><canvas id="orbit" aria-label="Vue animée du trajet Terre-Lune de la mission Apollo 11" role="img"></canvas></div>
-   <div class="mapLegend"><span>● Terre · ● Lune · ◆ Vaisseau</span><span id="mapPhase">TRANSIT</span><span>Distances non à l'échelle</span></div>
-  </section>
- </div>
- <div class="controls">
-  <button id="play" class="control primary" type="button">▶ Démarrer</button>
-  <div class="ratebox" role="group" aria-label="Accélération du temps"><button class="rate" data-rate="1">×1</button><button class="rate selected" data-rate="60">×60</button><button class="rate" data-rate="3600">×3 600</button><button class="rate" data-rate="21600">×21 600</button></div>
-  <button id="next" class="control gold" type="button">⏭ Étape suivante</button><button id="reset" class="control" type="button">↺ Rejouer</button>
- </div>
- <div class="sectiontitle">Télémétrie calculée <em>modèle simplifié</em></div>
- <div class="stats">
-  <div class="panel stat"><div class="label">Vitesse estimée</div><div class="value teal" id="speed">0 <small>km/s</small></div><div class="hint" id="speedHint">Référentiel terrestre</div></div>
-  <div class="panel stat"><div class="label">Distance Terre</div><div class="value" id="earthD">6 371 <small>km</small></div><div class="hint">Depuis le centre</div></div>
-  <div class="panel stat"><div class="label">Distance Lune</div><div class="value" id="moonD">378 029 <small>km</small></div><div class="hint">Depuis le centre</div></div>
-  <div class="panel stat"><div class="label">Gravité locale calculée</div><div class="value gold" id="gravity">9,82 <small>m/s²</small></div><div class="hint" id="gravityHint">Attraction de l'astre proche</div></div>
- </div>
- <div class="sectiontitle">Propulsion <em>réserves indicatives, non historiques</em></div>
- <div class="panel fuel">
-  <div class="fuelline"><span id="fuelLabel">Saturn V · phase propulsive</span><b id="fuelNum">100 %</b></div><div class="fuelbar"><div id="fuelBar" style="width:100%"></div></div>
-  <div class="fuelnote">Estimation pédagogique : les niveaux de carburant ne sont pas des mesures de la NASA. Les consommations changent lors des manœuvres représentées.</div>
- </div>
- <div class="twocol">
-  <div><div class="sectiontitle">Chronologie Apollo 11 <em>appuyer pour rejoindre une étape</em></div><div class="panel events" id="timeline"></div></div>
-  <div><div class="sectiontitle">Calculs &amp; contrôle <em>réalisés sur cet appareil</em></div>
-   <div class="panel details">
-    <div class="row2"><span>Vitesse orbitale circulaire théorique</span><strong id="circ">7,79 km/s</strong></div>
-    <div class="row2"><span>Vitesse de libération théorique</span><strong id="esc">11,02 km/s</strong></div>
-    <div class="row2"><span>Altitude (astre le plus proche)</span><strong id="alt">0 km</strong></div>
-    <div class="row2"><span>Prochain rendez-vous / manœuvre</span><strong id="maneuver">Orbite terrestre</strong></div>
-    <div class="row2"><span>Intégration des trajets</span><strong>Animation 2D indicative</strong></div>
-    <p style="font-size:11px;color:#97b6c9;line-height:1.6;margin-top:16px">Gravitation : <strong>g = GM/r²</strong> · Orbite circulaire : <strong>v = √(GM/r)</strong>. Les événements et plusieurs horaires sont historiques ; les positions entre jalons et les vitesses sont approximées. Ce prototype ne reproduit pas les calculateurs AGC/RTCC et ne peut pas guider une fusée réelle.</p>
+<div class="wrap">
+ <header>
+  <div><div class="logo">NASA / APOLLO 11 · SIMULATION</div><h1>EAGLE <span style="color:#f3c47b">/</span> ALUNISSAGE</h1></div>
+  <div class="meta"><span class="tag">MISSION MET 102 h</span><button class="ghost" id="pauseBtn">⏸ Pause</button><button class="ghost" id="restartBtn">↺ Rejouer</button></div>
+ </header>
+ <section class="hud" aria-label="Instruments de vol">
+  <div class="metric"><span class="label">ALTITUDE</span><strong id="alt">350 <small>m</small></strong></div>
+  <div class="metric"><span class="label">DESCENTE ↓</span><strong id="vdown">8,0 <small>m/s</small></strong></div>
+  <div class="metric"><span class="label">HORIZONTALE ↔</span><strong id="vhor">3,0 <small>m/s</small></strong></div>
+  <div class="metric"><span class="label">CARBURANT</span><strong id="fuel">100 <small>%</small></strong></div>
+  <div class="metric"><span class="label">SITE VISÉ</span><strong id="offset">80 <small>m</small></strong></div>
+ </section>
+ <div class="stage">
+  <canvas id="scene" aria-label="Vue interactive de l'atterrisseur Eagle au-dessus de la surface lunaire"></canvas>
+  <div class="scene-top"><div class="live">● <span id="phase">DESCENTE FINALE</span></div><div class="warn" id="warning">ZONE VERTE : VERT. ≤ 2,3 m/s · HORIZ. ≤ 1,4 m/s</div></div>
+  <div id="toast" aria-live="polite">Prends les commandes : ralentis Eagle et vise la zone éclairée.</div>
+  <div id="overlay" class="overlay">
+   <div class="modal"><div class="eyebrow" id="modalType">MISSION 1969 · PILOTAGE MANUEL</div><h2 id="modalTitle">À toi d'alunir.</h2><p id="modalText">Le trajet Terre–Lune est passé. Tu pilotes Eagle à l'approche du sol : <b>maintenir MOTEUR</b> pour freiner, <b>◀ / ▶</b> pour te déplacer. Vise le rectangle turquoise et pose-toi doucement.</p>
+    <label class="selectrow" for="difficulty"><span>Niveau de pilotage</span><select id="difficulty"><option value="training">Entraînement (350 m)</option><option value="challenge">Apollo (1 800 m)</option></select></label>
+    <button id="startBtn" class="primary">▶ PRENDRE LES COMMANDES</button>
    </div>
-   <div class="sectiontitle">Journal de Houston <em>événements déjà atteints</em></div><div class="panel events" id="journal"></div>
   </div>
  </div>
- <div class="footer">Source historique : <a href="https://www.nasa.gov/wp-content/uploads/static/history/SP-4029/Apollo_11a_Summary.htm" rel="noreferrer">NASA — Apollo 11 Mission Summary</a>. Fonctionne intégralement hors connexion, sans autorisation Internet et sans collecte de données. Version 0.1.0 — démonstration technique.</div>
-</main>
+ <div class="status"><div id="radio" aria-live="polite"><b>HOUSTON :</b> « Eagle, vous avez les commandes. »</div><div class="speed"><button data-speed="1" class="active">×1</button><button data-speed="2">×2</button><button data-speed="4">×4</button></div></div>
+ <div class="controls" aria-label="Commandes de pilotage">
+  <button class="pilot" id="leftBtn" data-control="left" aria-label="Pousser Eagle vers la gauche"><span class="big">◀</span><span class="text">VERS LA GAUCHE</span><small>Maintenir · réacteurs latéraux</small></button>
+  <button class="pilot engine" id="engineBtn" data-control="engine" aria-label="Allumer le moteur de descente"><span class="big">🚀</span><span class="text">MAINTENIR POUR FREINER</span><small>Moteur principal · puissance réglable</small></button>
+  <button class="pilot" id="rightBtn" data-control="right" aria-label="Pousser Eagle vers la droite"><span class="big">▶</span><span class="text">VERS LA DROITE</span><small>Maintenir · réacteurs latéraux</small></button>
+ </div>
+ <div class="throttle"><label for="throttle">PUISSANCE <span>du moteur principal</span></label><input id="throttle" type="range" min="10" max="100" step="5" value="65" aria-label="Puissance du moteur"><output id="throttleNum" class="num" for="throttle">65 %</output></div>
+ <div class="hints"><span><strong>Objectif :</strong> atterrir dans la zone marquée · vitesse verticale max. 2,3 m/s · horizontale max. 1,4 m/s. Physique de jeu simplifiée, gravité lunaire 1,62 m/s².</span><div class="footerlinks"><span class="chip">Hors ligne</span><a href="mission.html">Historique Houston</a></div></div>
+</div>
 <script>
 (()=>{'use strict';
-const H=3600, M=60, S=(h,m=0,s=0)=>h*H+m*M+s;
-const END=S(195,18,35), E_RADIUS=6371, L_RADIUS=1737.4, SEPARATION=384400, MU_E=398600.4418, MU_L=4902.8001;
-const events=[
- {t:0, title:'Décollage de Saturn V',brief:'La fusée décolle du centre spatial Kennedy, Floride.',tag:'SATURN V',speed:0,fuel:100},
- {t:S(0,11,49),title:'Orbite terrestre atteinte',brief:'Columbia et Eagle entrent sur une orbite de stationnement de 185 km environ.',tag:'SATURN V',speed:7.79,fuel:12},
- {t:S(2,44,16),title:'Injection translunaire (TLI)',brief:'Le troisième étage S-IVB rallume son moteur et prend la direction de la Lune.',tag:'CSM + LM',speed:10.83,fuel:100},
- {t:S(3,24,4),title:'Arrimage à Eagle',brief:'Columbia extrait le module lunaire du troisième étage.',tag:'CSM + LM',speed:10.40,fuel:99},
- {t:S(26,44,59),title:'Correction de trajectoire',brief:'Petite correction de navigation au cours du trajet vers la Lune.',tag:'CSM + LM',speed:3.30,fuel:95},
- {t:S(75,49,50),title:'Insertion en orbite lunaire (LOI)',brief:'Freinage du moteur principal du module de service ; capture par la Lune.',tag:'CSM + LM',speed:2.40,fuel:72},
- {t:S(80,11,37),title:'Circularisation lunaire',brief:'Une brève manœuvre stabilise l’orbite lunaire.',tag:'CSM + LM',speed:1.63,fuel:69},
- {t:S(100,12),title:'Séparation d’Eagle',brief:'Armstrong et Aldrin se séparent de Columbia, piloté par Collins.',tag:'EAGLE',speed:1.63,fuel:100},
- {t:S(102,33,5),title:'Descente motorisée',brief:'Eagle allume son moteur de descente vers la mer de la Tranquillité.',tag:'EAGLE',speed:1.62,fuel:65},
- {t:S(102,45,40),title:'Alunissage d’Eagle',brief:'Armstrong et Aldrin se posent sur la Lune ; Collins reste en orbite.',tag:'EAGLE',speed:0,fuel:4},
- {t:S(109,24,15),title:'Premiers pas sur la Lune',brief:'Neil Armstrong marche sur la surface lunaire.',tag:'EAGLE',speed:0,fuel:4},
- {t:S(124,22,1),title:'Décollage d’Eagle',brief:'Le module de remontée quitte la surface lunaire pour rejoindre Columbia.',tag:'EAGLE ASC.',speed:0,fuel:100},
- {t:S(128,3),title:'Rendez-vous avec Columbia',brief:'Les modules s’arriment ; les trois astronautes sont réunis.',tag:'COLUMBIA',speed:1.63,fuel:66},
- {t:S(135,23,42),title:'Injection de retour (TEI)',brief:'Le moteur de service accélère Columbia vers la Terre.',tag:'COLUMBIA',speed:2.62,fuel:20},
- {t:S(150,29,57),title:'Correction de retour',brief:'Dernière correction de trajectoire sur le trajet du retour.',tag:'COLUMBIA',speed:3.25,fuel:18},
- {t:S(195,3),title:'Rentrée atmosphérique',brief:'Le module de commande entre dans l’atmosphère terrestre.',tag:'COLUMBIA',speed:11.05,fuel:0},
- {t:END,title:'Amerrissage dans le Pacifique',brief:'Mission accomplie : les trois astronautes sont de retour sur Terre.',tag:'MISSION TERMINÉE',speed:0,fuel:0}
-];
-let simTime=0,rate=60,playing=false,lastFrame=0,currentEvent=-1;
-const $=id=>document.getElementById(id), nf=n=>Math.round(n).toLocaleString('fr-FR'), dec=(x,d=2)=>x.toLocaleString('fr-FR',{minimumFractionDigits:d,maximumFractionDigits:d});
-function met(sec){const a=Math.floor(sec);return String(Math.floor(a/H)).padStart(3,'0')+':'+String(Math.floor((a%H)/M)).padStart(2,'0')+':'+String(a%M).padStart(2,'0')}
-function indexAt(t){let i=0;while(i+1<events.length&&events[i+1].t<=t)i++;return i}
-const clamp=(v,a,b)=>Math.max(a,Math.min(b,v)), mix=(a,b,u)=>a+(b-a)*u, smooth=u=>u*u*(3-2*u), rad=(theta)=>[Math.cos(theta),Math.sin(theta)];
-function pos(t){
- const EARTH_R=E_RADIUS+185,MOON_R=L_RADIUS+110;
- if(t<S(2,50,13)){
-  let altitude=t<S(0,11,49)?mix(0,185,smooth(clamp(t/S(0,11,49),0,1))):185;
-  let angle=-Math.PI*.48+t*(2*Math.PI/5280);
-  return {x:(E_RADIUS+altitude)*Math.cos(angle),y:(E_RADIUS+altitude)*Math.sin(angle),focus:'EARTH'};
- }
- if(t<S(75,49,50)){
-  const u=clamp((t-S(2,50,13))/(S(75,49,50)-S(2,50,13)),0,1);
-  const v=1-Math.pow(1-u,1.25);
-  return {x:mix(EARTH_R,SEPARATION-MOON_R,v),y:64000*Math.sin(Math.PI*u),focus:'TRANSFER'};
- }
- if(t<S(100,12)){
-  const a=Math.PI+(t-S(75,49,50))*2*Math.PI/7200;
-  return {x:SEPARATION+MOON_R*Math.cos(a),y:MOON_R*Math.sin(a),focus:'MOON'};
- }
- if(t<S(102,45,40)){
-  const u=clamp((t-S(100,12))/(S(102,45,40)-S(100,12)),0,1);
-  const R=L_RADIUS+mix(110,0,smooth(u));const a=2.65+u*.55;
-  return {x:SEPARATION+R*Math.cos(a),y:R*Math.sin(a),focus:'LANDING'};
- }
- if(t<S(124,22,1)){
-  return {x:SEPARATION-L_RADIUS,y:0,focus:'LANDING'};
- }
- if(t<S(128,3)){
-  const u=clamp((t-S(124,22,1))/(S(128,3)-S(124,22,1)),0,1);
-  const R=L_RADIUS+mix(0,110,smooth(u));let a=Math.PI+u*2*Math.PI;
-  return {x:SEPARATION+R*Math.cos(a),y:R*Math.sin(a),focus:'MOON'};
- }
- if(t<S(135,23,42)){
-  const a=Math.PI+(t-S(128,3))*2*Math.PI/7200;
-  return {x:SEPARATION+MOON_R*Math.cos(a),y:MOON_R*Math.sin(a),focus:'MOON'};
- }
- if(t<S(195,3)){
-  const u=clamp((t-S(135,23,42))/(S(195,3)-S(135,23,42)),0,1);
-  return {x:mix(SEPARATION-MOON_R,EARTH_R,smooth(u)),y:-65000*Math.sin(Math.PI*u),focus:'RETURN'};
- }
- const u=clamp((t-S(195,3))/(END-S(195,3)),0,1);
- return {x:mix(EARTH_R,E_RADIUS,u),y:0,focus:'EARTH'};
+const $=id=>document.getElementById(id);
+const canvas=$('scene'),ctx=canvas.getContext('2d');
+const g=1.62, PAD_HALF=52, MAX_VY=2.3, MAX_VX=1.4, FULL_THRUST=5.65, SIDE_THRUST=1.75;
+let state={}, controls={left:false,right:false,engine:false},running=false,done=false,speed=1;
+let lastFrame=0,dpr=1,W=500,H=280; let radioText='';
+const stars=Array.from({length:85},(_,i)=>({x: ((i*73+31)*0.61803398875)%1,y: ((i*47+13)*0.414213562)%0.73,r: (i%7===0?1.4:.75)}));
+const profiles={training:{h:350,x:-83,vx:3.2,vy:-8.0,fuel:225},challenge:{h:1800,x:-460,vx:16,vy:-32,fuel:610}};
+const radio=(t)=>{radioText=t;$('radio').innerHTML='<b>HOUSTON :</b> « '+t+' »'};
+function resetProfile(){const p=profiles[$('difficulty').value]||profiles.training; state={h:p.h,x:p.x,vx:p.vx,vy:p.vy,fuel:p.fuel,fuelMax:p.fuel,time:0,initialH:p.h}; controls={left:false,right:false,engine:false};done=false;running=false;lastFrame=0;document.querySelectorAll('.pilot').forEach(e=>e.classList.remove('active'));radio('Eagle, vous avez les commandes.');updateHUD();draw()}
+function formatMET(seconds){let t=Math.floor(102*3600+43*60+seconds);return String(Math.floor(t/3600)).padStart(3,'0')+':'+String(Math.floor(t%3600/60)).padStart(2,'0')+':'+String(t%60).padStart(2,'0')}
+function step(dt){if(!running||done)return; const s=state;const thrustOn=controls.engine&&s.fuel>0;const side=(Number(controls.right)-Number(controls.left));
+  const throttle=Number($('throttle').value)/100;
+  const accel=FULL_THRUST*throttle*(1+0.16*(1-s.fuel/s.fuelMax));
+  let ax=0,ay=-g;
+  if(thrustOn){ay+=accel;s.fuel=Math.max(0,s.fuel-2.6*throttle*dt)}
+  if(side!==0&&s.fuel>0){ax=side*SIDE_THRUST;s.fuel=Math.max(0,s.fuel-.25*dt)}
+  // Semi-implicit Euler: symplectic and stable for small fixed timesteps.
+  s.vx+=ax*dt;s.vy+=ay*dt;s.x+=s.vx*dt;s.h+=s.vy*dt;s.time+=dt;
+  if(s.h<=0){s.h=0;done=true;running=false;releaseAll();
+   const within=Math.abs(s.x)<=PAD_HALF-10,soft=Math.abs(s.vy)<=MAX_VY&&Math.abs(s.vx)<=MAX_VX;
+   if(within&&soft){$('modalType').textContent='HOUSTON · TRANQUILITY BASE';$('modalTitle').textContent='🟢 Eagle a aluni !';$('modalText').textContent='Atterrissage réussi. Descente : '+Math.abs(s.vy).toFixed(2)+' m/s · Déplacement : '+Math.abs(s.vx).toFixed(2)+' m/s · Carburant restant : '+Math.round(s.fuel/s.fuelMax*100)+' %. Tu as piloté Eagle !';radio('La base de la Tranquillité confirme l’alunissage. Félicitations !')}
+   else{$('modalType').textContent='HOUSTON · ÉCHEC DE LA MISSION';$('modalTitle').textContent='🔴 Alunissage raté';const why=!within?'Hors de la zone d’atterrissage.':Math.abs(s.vy)>MAX_VY?'Vitesse de descente trop élevée.':'Vitesse latérale trop élevée.';$('modalText').textContent=why+' Impact : '+Math.abs(s.vy).toFixed(1)+' m/s vert. · '+Math.abs(s.vx).toFixed(1)+' m/s horiz. Recommence et ajuste tes poussées plus tôt.';radio('Eagle, perte de contact. Reprise de simulation nécessaire.')}
+   $('startBtn').textContent='↺ REJOUER L’ALUNISSAGE';$('overlay').hidden=false;
+  }
+  updateHUD();
 }
-function interp(field,t){const i=indexAt(t);if(i>=events.length-1)return events[i][field];const a=events[i],b=events[i+1];return mix(a[field],b[field],clamp((t-a.t)/(b.t-a.t),0,1))}
-function fuelInfo(t){
- let label='Saturn V · carburant (modèle)',percentage=interp('fuel',t);
- if(t>=S(2,44,16)&&t<S(100,12))label='Module de service · SPS (modèle)';
- if(t>=S(100,12)&&t<S(124,22,1))label='Eagle · étage de descente (modèle)';
- if(t>=S(124,22,1)&&t<S(128,3))label='Eagle · étage de remontée (modèle)';
- if(t>=S(128,3))label='Columbia · SPS / réserve indicative';
- if(t>=S(128,3)&&t<S(135,23,42))percentage=66;
- return {label,percentage:clamp(percentage,0,100)};
+function releaseAll(){Object.keys(controls).forEach(k=>controls[k]=false);document.querySelectorAll('.pilot').forEach(b=>b.classList.remove('active'))}
+function updateHUD(){let s=state;if(!s.h&&s.h!==0)return;const fmt=(v,dec=1)=>Math.abs(v).toLocaleString('fr-FR',{maximumFractionDigits:dec,minimumFractionDigits:dec});
+ $('alt').innerHTML=fmt(s.h,0)+' <small>m</small>'; $('vdown').innerHTML=(s.vy<0?'↓':'↑')+fmt(s.vy,1)+' <small>m/s</small>';
+ $('vhor').innerHTML=(s.vx<0?'←':s.vx>0?'→':'·')+fmt(s.vx,1)+' <small>m/s</small>'; $('fuel').innerHTML=Math.round(100*s.fuel/s.fuelMax)+' <small>%</small>'; $('offset').innerHTML=(s.x>0?'←':'→')+fmt(s.x,0)+' <small>m</small>';
+ $('vdown').className=Math.abs(s.vy)>6?'critical':Math.abs(s.vy)<MAX_VY?'good':'';
+ $('vhor').className=Math.abs(s.vx)>6?'critical':Math.abs(s.vx)<MAX_VX?'good':'';
+ $('fuel').className=s.fuel/s.fuelMax<.15?'critical':'';
+ let pred=s.h>0&&s.vy<0 ? s.h/Math.max(.15,-s.vy):0; const predictedX=s.x+s.vx*pred;
+ $('warning').textContent=s.fuel<=0?'⚠ CARBURANT ÉPUISÉ':s.h<80&&Math.abs(s.vy)>MAX_VY?'⚠ FREINE : DESCENTE TROP RAPIDE':s.h<120&&Math.abs(predictedX)>PAD_HALF?'⚠ CORRIGE TA TRAJECTOIRE':s.h<70?'TOUCHER : ≤ 2,3 m/s VERT. · ≤ 1,4 m/s HORIZ.':'CIBLE : ZONE TURQUOISE · AJUSTE LA DESCENTE';
+ $('phase').textContent=formatMET(s.time)+' · '+(s.h<100?'APPROCHE FINALE':'DESCENTE MANUELLE');
 }
-const tl=$('timeline');events.forEach((e,i)=>{let b=document.createElement('button');b.className='event';b.type='button';b.dataset.event=String(i);b.innerHTML='<span class="evdot"></span><span class="evcopy"><strong></strong><small></small></span><span class="evt"></span>';b.querySelector('strong').textContent=e.title;b.querySelector('small').textContent=e.brief;b.querySelector('.evt').textContent=met(e.t);b.addEventListener('click',()=>{simTime=e.t;playing=false;render(true)});tl.appendChild(b)});
-function render(force=false){let i=indexAt(simTime),event=events[i], next=events[i+1];
- $('met').textContent=met(simTime);$('metPercent').textContent=dec(simTime/END*100,1);$('progress').style.width=(simTime/END*100)+'%';
- $('phaseName').textContent=event.title;$('phaseInfo').textContent=event.brief;$('craftTag').textContent=event.tag;
- let date=new Date(Date.UTC(1969,6,16,13,32,0)+Math.floor(simTime)*1000);
- $('dateText').textContent=date.toLocaleDateString('fr-FR',{timeZone:'UTC',day:'2-digit',month:'short',year:'numeric'}).toUpperCase();
- $('runningStatus').textContent=simTime>=END?'✓ MISSION ACCOMPLIE':playing?'● EN COURS':'● EN PAUSE';$('runningStatus').classList.toggle('active',playing);
- $('play').textContent=simTime>=END?'▶ Recommencer':playing?'Ⅱ Pause':'▶ Démarrer';$('next').disabled=simTime>=END;$('next').style.opacity=simTime>=END?'.5':'1';
- $('nextTime').textContent=next?met(next.t):'—';$('nextName').textContent=next?next.title:'Mission terminée';
- let left=next?Math.max(0,Math.ceil(next.t-simTime)):0;
- $('countdown').textContent=next?'Dans '+(left>=3600?nf(Math.floor(left/3600))+' h ':'')+(Math.floor((left%3600)/60))+' min '+String(left%60).padStart(2,'0')+' s de mission':'Apollo 11 est rentré sur Terre';
- const p=pos(simTime),dEarth=Math.hypot(p.x,p.y),dMoon=Math.hypot(p.x-SEPARATION,p.y),earthNear=dEarth-E_RADIUS<dMoon-L_RADIUS;
- const mu=earthNear?MU_E:MU_L,r=earthNear?dEarth:dMoon,radius=earthNear?E_RADIUS:L_RADIUS;
- $('speed').innerHTML=dec(interp('speed',simTime),2)+' <small>km/s</small>';
- $('speedHint').textContent=(simTime<S(75,49,50)||simTime>=S(135,23,42))?'Vitesse de référence indicative':'Vitesse indicative (Lune)';
- $('earthD').innerHTML=nf(dEarth)+' <small>km</small>';
- $('moonD').innerHTML=nf(dMoon)+' <small>km</small>';
- $('gravity').innerHTML=dec(mu*1e3/(r*r),Math.abs(mu*1e3/(r*r))<.1?4:2)+' <small>m/s²</small>';
- $('gravityHint').textContent='Attraction '+(earthNear?'terrestre':'lunaire')+' · GM/r²';
- $('circ').textContent=dec(Math.sqrt(mu/r),2)+' km/s';$('esc').textContent=dec(Math.sqrt(2*mu/r),2)+' km/s';$('alt').textContent=nf(Math.max(0,r-radius))+' km';
- $('maneuver').textContent=next?next.title:'Terminé';
- const fuel=fuelInfo(simTime);$('fuelLabel').textContent=fuel.label;$('fuelNum').textContent=dec(fuel.percentage,0)+' %';$('fuelBar').style.width=fuel.percentage+'%';
- $('mapPhase').textContent=p.focus==='EARTH'?'ORBITE TERRESTRE':p.focus==='MOON'?'ORBITE LUNAIRE':p.focus==='LANDING'?'ALUNISSAGE':'TRAJET INTERPLANÉTAIRE';
- if(force||i!==currentEvent){currentEvent=i;
-  [...tl.children].forEach((b,j)=>{b.classList.toggle('current',j===i);b.classList.toggle('past',j<i)});
-  const log=$('journal');log.innerHTML='';for(let j=i;j>=Math.max(0,i-4);j--){let row=document.createElement('div');row.className='event '+(j===i?'current':'past');row.innerHTML='<span class="evdot"></span><span class="evcopy"><strong></strong><small></small></span><span class="evt"></span>';row.querySelector('strong').textContent=events[j].title;row.querySelector('small').textContent=events[j].brief;row.querySelector('.evt').textContent=met(events[j].t);log.appendChild(row)}
- }
- draw(p);
+function resize(){const r=canvas.getBoundingClientRect();dpr=Math.min(window.devicePixelRatio||1,2);W=Math.max(240,r.width);H=Math.max(125,r.height);canvas.width=Math.round(W*dpr);canvas.height=Math.round(H*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);draw()}
+function line(points,color='#9bd7db',stroke=2){ctx.beginPath();ctx.moveTo(points[0][0],points[0][1]);for(let i=1;i<points.length;i++)ctx.lineTo(points[i][0],points[i][1]);ctx.strokeStyle=color;ctx.lineWidth=stroke;ctx.stroke()}
+function draw(){if(!state||state.x===undefined)return;ctx.clearRect(0,0,W,H);const sky=ctx.createLinearGradient(0,0,0,H);sky.addColorStop(0,'#030b18');sky.addColorStop(.65,'#0c1930');sky.addColorStop(1,'#283345');ctx.fillStyle=sky;ctx.fillRect(0,0,W,H);
+ for(const p of stars){let px=p.x*W,py=p.y*H;ctx.globalAlpha=.35+((p.x*17)%1)*.5;ctx.fillStyle='#d9e8fc';ctx.fillRect(px,py,p.r,p.r)}ctx.globalAlpha=1;
+ const s=state; const ground=H-28; const sx=Math.max(.43,Math.min(2,W/Math.max(320,2.45*Math.abs(s.x))));const cx=W*.43, px=cx-s.x*sx;
+ // Scaled camera tracks the approach, with a near-surface zoom for manual touch-down.
+ const verticalRange=Math.max(85,s.h*1.18);const sy=Math.min(2.3,(ground-49)/verticalRange);const landerY=ground-s.h*sy-21;
+ // Background mountains and terrain silhouettes, strictly decorative.
+ ctx.fillStyle='#29354b';ctx.beginPath();ctx.moveTo(0,ground);for(let x=0;x<=W+5;x+=5){let y=ground-14-18*Math.sin(x*.011+0.6)-8*Math.cos(x*.036);ctx.lineTo(x,y)}ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.fill();
+ ctx.fillStyle='#687080';ctx.beginPath();ctx.moveTo(0,ground);for(let x=0;x<=W+5;x+=4){const world=(x-cx)/sx+s.x;let h=7*Math.sin(world*.024)+5*Math.sin(world*.081);if(Math.abs(world)<PAD_HALF+25)h=1.5;ctx.lineTo(x,ground-h)}ctx.lineTo(W,H);ctx.lineTo(0,H);ctx.fill();
+ ctx.fillStyle='#3b4557';for(let i=0;i<13;i++){const wx=(i-6)*108+30,xx=cx+(wx-s.x)*sx;if(xx<-50||xx>W+50)continue;ctx.beginPath();ctx.ellipse(xx,ground-6,Math.max(3,15*sx),Math.max(2,3*sx),0,0,2*Math.PI);ctx.fill()}
+ // Touchdown pad x=0, visual marker relative to world (pad width 104 m).
+ const padW=PAD_HALF*sx;ctx.fillStyle='#101a26';ctx.fillRect(px-padW,ground-5,padW*2,6);ctx.fillStyle='#58e2d3';ctx.fillRect(px-padW,ground-6,padW*2,3);for(let k of [-1,1]){const xx=px+k*padW;ctx.strokeStyle='#9affee';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(xx,ground-7);ctx.lineTo(xx,ground-30);ctx.stroke();ctx.fillStyle='#aff4e8';ctx.fillRect(xx-3,ground-31,6,4)}
+ ctx.font='900 10px system-ui';ctx.textAlign='center';ctx.fillStyle='#b7fff0';if(px>-60&&px<W+60)ctx.fillText('ZONE D’ALUNISSAGE',px,ground-34);
+ else {ctx.textAlign=px<W/2?'left':'right';ctx.fillText(px<W/2?'◀ SITE D’ALUNISSAGE':'SITE D’ALUNISSAGE ▶',px<W/2?8:W-8,H-49)}
+ // Laser altitude ruler + pad aim line.
+ ctx.setLineDash([4,5]);line([[cx,landerY+19],[cx,ground]],'#76c1d688',1);ctx.setLineDash([]);
+ const vy=-s.vy;const prediction= s.h>0&&s.vy<0 ? s.x+s.vx*s.h/Math.max(vy,.5) : s.x;
+ if(s.h>0){let predictorX=cx+(prediction-s.x)*sx;if(predictorX>0&&predictorX<W){ctx.fillStyle='#ffd191';ctx.globalAlpha=.75;ctx.beginPath();ctx.arc(predictorX,ground-7,4,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1}}
+ // Lander shape, animated fire, soft contact shadow.
+ ctx.save();ctx.translate(cx,landerY);ctx.rotate((controls.right?0.055:0)-(controls.left?0.055:0));
+ if(controls.engine&&s.fuel>0&&running){const p=Number($('throttle').value)/100;const h=13+24*p+Math.sin(s.time*24)*3;ctx.fillStyle='#ffae47aa';ctx.beginPath();ctx.moveTo(-5,12);ctx.lineTo(0,h+20);ctx.lineTo(5,12);ctx.fill();ctx.fillStyle='#ffe7a0';ctx.beginPath();ctx.moveTo(-2,12);ctx.lineTo(0,h+9);ctx.lineTo(2,12);ctx.fill()}
+ if((controls.left||controls.right)&&s.fuel>0&&running){ctx.fillStyle='#f8d38b';ctx.beginPath();let side=controls.left?1:-1;ctx.moveTo(side*13,-8);ctx.lineTo(side*(31+Math.sin(s.time*25)*7),-10);ctx.lineTo(side*13,-5);ctx.fill()}
+ line([[-12,4],[-19,16],[-27,17]],'#e6e5d2',2.5);line([[12,4],[19,16],[27,17]],'#e6e5d2',2.5);line([[-30,17],[-21,17]],'#d0e4e7',2.2);line([[21,17],[30,17]],'#d0e4e7',2.2);
+ ctx.fillStyle='#babeb8';ctx.beginPath();ctx.moveTo(-15,-11);ctx.lineTo(15,-11);ctx.lineTo(19,6);ctx.lineTo(10,13);ctx.lineTo(-10,13);ctx.lineTo(-19,6);ctx.closePath();ctx.fill();
+ ctx.fillStyle='#e4d2a1';ctx.beginPath();ctx.moveTo(-12,-14);ctx.lineTo(12,-14);ctx.lineTo(17,6);ctx.lineTo(-15,6);ctx.closePath();ctx.fill();ctx.fillStyle='#1a2935';ctx.beginPath();ctx.moveTo(-6,-11);ctx.lineTo(4,-10);ctx.lineTo(1,0);ctx.lineTo(-7,-1);ctx.fill();ctx.beginPath();ctx.moveTo(7,-9);ctx.lineTo(13,-6);ctx.lineTo(11,0);ctx.lineTo(5,-1);ctx.fill();
+ ctx.fillStyle='#eea432';ctx.fillRect(-10,6,20,6);ctx.fillStyle='#b4c5c7';ctx.fillRect(-16,0,3,10);ctx.fillRect(14,0,3,10);ctx.fillStyle='#f5df80';ctx.fillRect(-7,-17,14,3);ctx.restore();
+ // Radar: position relative to the target in meters.
+ const rw=Math.min(124,W*.27),rh=40,rx=W-rw-9,ry=H-77;ctx.fillStyle='#071a2ada';ctx.fillRect(rx,ry,rw,rh);ctx.strokeStyle='#42647a';ctx.strokeRect(rx,ry,rw,rh);line([[rx+6,ry+rh*.52],[rx+rw-6,ry+rh*.52]],'#315364',1);
+ const mapScale=(rw-18)/Math.max(300,Math.abs(s.x)*2.3);const targetX=rx+rw/2;const playerX=Math.max(rx+8,Math.min(rx+rw-8,targetX+s.x*mapScale));ctx.fillStyle='#72e5d7';ctx.fillRect(targetX-4,ry+rh/2-4,8,8);ctx.fillStyle='#f3c47b';ctx.beginPath();ctx.arc(playerX,ry+rh/2,3.3,0,6.29);ctx.fill();
+ ctx.font='800 9px system-ui';ctx.fillStyle='#b8d4e3';ctx.textAlign='left';ctx.fillText('RADAR',rx+6,ry+10);
+ ctx.fillStyle='#97afc7';ctx.font='10px ui-monospace,monospace';ctx.fillText('G = 1,62 m/s²',10,H-11);ctx.textAlign='right';ctx.fillText('CARBURANT: '+Math.round(100*s.fuel/s.fuelMax)+'%',W-10,H-11)
 }
-const c=$('orbit'),ctx=c.getContext('2d');let stars=[],cw=0,ch=0;
-function resize(){const dpr=Math.min(window.devicePixelRatio||1,2),bounds=c.getBoundingClientRect();cw=bounds.width;ch=bounds.height;c.width=Math.max(1,Math.round(cw*dpr));c.height=Math.max(1,Math.round(ch*dpr));ctx.setTransform(dpr,0,0,dpr,0,0);
- let seed=8761;const rand=()=>((seed=(seed*1664525+1013904223)>>>0)/4294967296);
- stars=Array.from({length:95},()=>({x:rand()*cw,y:rand()*ch,r:.3+rand()*.85,a:.22+rand()*.48}));render(true)}
-function disc(x,y,r,inner,outer){let g=ctx.createRadialGradient(x-r*.25,y-r*.28,1,x,y,r*1.8);g.addColorStop(0,inner);g.addColorStop(.65,outer);g.addColorStop(1,'#061626');ctx.fillStyle=g;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill()}
-function ellipse(x,y,rx,ry,color,dashed=false){ctx.beginPath();ctx.ellipse(x,y,rx,ry,0,0,Math.PI*2);ctx.strokeStyle=color;ctx.lineWidth=1;ctx.setLineDash(dashed?[4,6]:[]);ctx.stroke();ctx.setLineDash([])}
-function ship(x,y){ctx.save();ctx.translate(x,y);ctx.shadowBlur=16;ctx.shadowColor='#f6c176';ctx.rotate(.45);ctx.fillStyle='#fff2d3';ctx.strokeStyle='#cd945d';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,-7);ctx.lineTo(5,0);ctx.lineTo(0,7);ctx.lineTo(-5,0);ctx.closePath();ctx.fill();ctx.stroke();ctx.restore();ctx.fillStyle='#fbd295';ctx.font='bold 10px system-ui';ctx.fillText('APOLLO 11',x+12,y-7)}
-function draw(p){if(!cw)return;const W=cw,h=ch;ctx.clearRect(0,0,W,h);
- ctx.fillStyle='#071528';ctx.fillRect(0,0,W,h);
- for(let i=0;i<stars.length;i++){const s=stars[i];ctx.fillStyle='rgba(193,224,243,'+s.a+')';ctx.beginPath();ctx.arc(s.x,s.y,s.r,0,Math.PI*2);ctx.fill()}
- ctx.lineWidth=1;ctx.strokeStyle='rgba(75,114,150,.12)';for(let xx=20;xx<W;xx+=44){ctx.beginPath();ctx.moveTo(xx,10);ctx.lineTo(xx,h-10);ctx.stroke()}for(let yy=25;yy<h;yy+=42){ctx.beginPath();ctx.moveTo(10,yy);ctx.lineTo(W-10,yy);ctx.stroke()}
- const eX=W*.19,lX=W*.82,y=h*.52;
- // Two schematic transfer arcs.
- ctx.strokeStyle='rgba(104,226,219,.28)';ctx.lineWidth=1.5;ctx.setLineDash([6,6]);ctx.beginPath();ctx.moveTo(eX+24,y);ctx.quadraticCurveTo(W*.5,h*.08,lX-15,y);ctx.stroke();
- ctx.strokeStyle='rgba(247,190,125,.28)';ctx.beginPath();ctx.moveTo(lX-15,y);ctx.quadraticCurveTo(W*.5,h*.97,eX+24,y);ctx.stroke();ctx.setLineDash([]);
- disc(eX,y,27,'#70b8d2','#1c527b');disc(lX,y,13,'#eee2c9','#8a8c96');
- ctx.fillStyle='#bad9e9';ctx.font='bold 10px system-ui';ctx.textAlign='center';ctx.fillText('TERRE',eX,y+43);ctx.fillText('LUNE',lX,y+29);
- ellipse(eX,y,47,47,'rgba(88,142,171,.48)',true);ellipse(lX,y,29,29,'rgba(176,167,154,.35)',true);
- let sx=0,sy=0;
- if(p.focus==='EARTH'){
-   const a=Math.atan2(p.y,p.x),r=42;
-   sx=eX+Math.cos(a)*r;sy=y+Math.sin(a)*r;
- }else if(p.focus==='MOON'||p.focus==='LANDING'){
-   const dx=p.x-SEPARATION,dy=p.y;
-   if(p.focus==='LANDING'&&simTime>=S(102,45,40)&&simTime<S(124,22,1)){sx=lX-14;sy=y;}
-   else{let a=Math.atan2(dy,dx),r=simTime>=S(102,33,5)&&simTime<S(102,45,40)?mix(29,13,clamp((simTime-S(102,33,5))/(S(102,45,40)-S(102,33,5)),0,1)):29;
-    sx=lX+Math.cos(a)*r;sy=y+Math.sin(a)*r;}
- }else if(p.focus==='TRANSFER'){
-   const u=clamp((simTime-S(2,50,13))/(S(75,49,50)-S(2,50,13)),0,1);
-   sx=mix(eX+34,lX-23,clamp((p.x-6570)/(SEPARATION-6570),0,1));sy=y-4*h*.38*Math.sin(Math.PI*u);
- }else{
-   const u=clamp((simTime-S(135,23,42))/(S(195,3)-S(135,23,42)),0,1);
-   sx=mix(lX-20,eX+34,smooth(u));sy=y+4*h*.36*Math.sin(Math.PI*u);
- }
- sx=clamp(sx,15,W-70);sy=clamp(sy,20,h-20);ship(sx,sy);
- ctx.textAlign='left';ctx.fillStyle='#7192aa';ctx.font='10px system-ui';ctx.fillText('HOUSTON · TÉLÉMÉTRIE SIMULÉE',12,18);
- ctx.fillStyle='#f9cb85';ctx.font='bold 10px monospace';ctx.fillText('MET '+met(simTime),12,h-10);
+function frame(t){if(!lastFrame)lastFrame=t;const elapsed=Math.min(.08,(t-lastFrame)/1000)*speed;lastFrame=t;if(running){const n=Math.max(1,Math.ceil(elapsed/.025));for(let i=0;i<n;i++){step(elapsed/n);if(done)break}}draw();requestAnimationFrame(frame)}
+function start(){resetProfile();$('overlay').hidden=true;running=true;radio('Eagle, réduisez la vitesse avant le contact. Bonne chance.');$('pauseBtn').textContent='⏸ Pause'}
+function showStart(){resetProfile();$('modalType').textContent='MISSION 1969 · PILOTAGE MANUEL';$('modalTitle').textContent='À toi d’alunir.';$('modalText').innerHTML='Le trajet Terre–Lune est passé. Tu pilotes Eagle à l’approche du sol : <b>maintenir MOTEUR</b> pour freiner, <b>◀ / ▶</b> pour te déplacer. Vise le rectangle turquoise et pose-toi doucement.';$('startBtn').textContent='▶ PRENDRE LES COMMANDES';$('overlay').hidden=false}
+$('startBtn').addEventListener('click',start);$('restartBtn').addEventListener('click',showStart);$('pauseBtn').addEventListener('click',()=>{if(done)return;if(!$('overlay').hidden){$('overlay').hidden=true}running=!running;releaseAll();$('pauseBtn').textContent=running?'⏸ Pause':'▶ Reprendre';radio(running?'Le contrôle manuel reprend.':'Simulation en pause.')});
+$('difficulty').addEventListener('change',resetProfile);$('throttle').addEventListener('input',()=>{$('throttleNum').textContent=$('throttle').value+' %'});
+function setButton(key,on,element){if(done||!running)on=false;controls[key]=on;element.classList.toggle('active',on)}
+for(const btn of document.querySelectorAll('[data-control]')){const key=btn.dataset.control;
+ btn.addEventListener('pointerdown',e=>{e.preventDefault();try{btn.setPointerCapture(e.pointerId)}catch(_){}setButton(key,true,btn)});
+ btn.addEventListener('pointerup',e=>{e.preventDefault();setButton(key,false,btn)});
+ btn.addEventListener('pointercancel',()=>setButton(key,false,btn));btn.addEventListener('lostpointercapture',()=>setButton(key,false,btn));btn.addEventListener('contextmenu',e=>e.preventDefault())
 }
-$('play').addEventListener('click',()=>{if(simTime>=END)simTime=0;playing=!playing;render(true)});
-$('next').addEventListener('click',()=>{const i=events.findIndex(e=>e.t>simTime+.5);if(i>=0){simTime=events[i].t;playing=false;render(true)}});
-$('reset').addEventListener('click',()=>{simTime=0;playing=false;render(true)});
-document.querySelectorAll('.rate').forEach(btn=>btn.addEventListener('click',()=>{rate=Number(btn.dataset.rate);document.querySelectorAll('.rate').forEach(b=>b.classList.toggle('selected',b===btn))}));
-function tick(now){if(!lastFrame)lastFrame=now;let dt=Math.min(.2,(now-lastFrame)/1000);lastFrame=now;
- if(playing){simTime=Math.min(END,simTime+dt*rate);if(simTime>=END)playing=false}
- render();requestAnimationFrame(tick)}
-window.addEventListener('resize',resize);resize();render(true);requestAnimationFrame(tick);
+window.addEventListener('keydown',e=>{const m={ArrowLeft:'left',KeyA:'left',ArrowRight:'right',KeyD:'right',Space:'engine',ArrowUp:'engine'};if(m[e.code]){if(e.target&&['SELECT','INPUT'].includes(e.target.tagName))return;e.preventDefault();controls[m[e.code]]=running&&!done;$(m[e.code]+'Btn').classList.toggle('active',controls[m[e.code]])}if(e.code==='Escape'&&running)$('pauseBtn').click()});
+window.addEventListener('keyup',e=>{const m={ArrowLeft:'left',KeyA:'left',ArrowRight:'right',KeyD:'right',Space:'engine',ArrowUp:'engine'};if(m[e.code]){e.preventDefault();controls[m[e.code]]=false;$(m[e.code]+'Btn').classList.remove('active')}});
+window.addEventListener('blur',()=>{releaseAll();if(running){running=false;$('pauseBtn').textContent='▶ Reprendre'}});
+window.addEventListener('resize',resize);
+// Test hooks: exposed for deterministic browser tests, not used by controls.
+window.__apolloTest={start,step,getState:()=>({...state}),setControls:c=>Object.assign(controls,c),reset:resetProfile,config:p=>{$('difficulty').value=p;resetProfile()}};
+resetProfile();resize();requestAnimationFrame(frame);
 })();
 </script>
 </body></html>
