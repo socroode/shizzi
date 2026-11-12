@@ -1,7 +1,7 @@
 name: Build Apollo 11 Houston APK
 on:
   push:
-    branches: ["feature/apollo11-houston-app"]
+    branches: ["feature/apollo11-houston-app", "feature/apollo11-manual-landing-v0.2.0"]
     paths: ["apollo11-sim/**", ".github/workflows/build-apollo11.yml"]
   workflow_dispatch:
 jobs:
@@ -33,6 +33,6 @@ jobs:
       - name: Save APK
         uses: actions/upload-artifact@v4
         with:
-          name: Apollo11-Houston-0.1.0-debug
+          name: Apollo11-Houston-0.2.0-debug
           path: apollo11-sim/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
