@@ -3,7 +3,7 @@ android {
     namespace 'pf.shizzi.apollo11'
     compileSdk 35
     defaultConfig {
-        applicationId 'pf.shizzi.apollo11'
+        applicationId 'pf.shizzi.apollo11.landing'
         minSdk 24
         targetSdk 34
         versionCode 2
