@@ -2,6 +2,8 @@ name: Shizzi 0.4.3.5.10.9 Hotspot automatic recovery
 on:
   push:
     branches: [fix/0.4.3.5.10.9-hotspot-auto-recovery]
+  pull_request:
+    branches: [fix/0.4.3.5.10.8-shizuku-stability]
   workflow_dispatch:
 permissions:
   contents: read
