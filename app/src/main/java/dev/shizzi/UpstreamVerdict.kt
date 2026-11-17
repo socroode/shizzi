@@ -8,14 +8,16 @@ package dev.shizzi
  * interface and does leak, so it is far less tolerable. See
  * https://github.com/carlelieser/shizzi/issues/22
  */
-enum class UpstreamReading { HEALTHY, ABSENT, TIMED_OUT, DRIFTED }
+enum class UpstreamReading { HEALTHY, ABSENT, UNKNOWN, DRIFTED, DOWNSTREAM_STOPPED }
 
 fun classifyUpstream(
     liveNames: List<String>,
     expectedInterface: String,
-    didTimeout: Boolean,
+    isKnown: Boolean,
+    downstreamStopped: Boolean = false,
 ): UpstreamReading = when {
-    didTimeout -> UpstreamReading.TIMED_OUT
+    downstreamStopped -> UpstreamReading.DOWNSTREAM_STOPPED
+    !isKnown -> UpstreamReading.UNKNOWN
     liveNames.isEmpty() -> UpstreamReading.ABSENT
     liveNames.all { it == expectedInterface } -> UpstreamReading.HEALTHY
     else -> UpstreamReading.DRIFTED
@@ -32,9 +34,23 @@ class UpstreamTolerance(
 ) {
 
     private var strikes = 0
+    private var unknownChecks = 0
     private var lastReading = UpstreamReading.HEALTHY
 
     fun judge(reading: UpstreamReading, names: List<String>): String? {
+        if (reading == UpstreamReading.UNKNOWN) {
+            unknownChecks++
+            if (unknownChecks == 1 || unknownChecks % 12 == 0) {
+                onStrike("watchdog: upstream check inconclusive ($unknownChecks); monitoring without stopping")
+            }
+            // A timeout is neither proof of failure nor proof of recovery.
+            // Keep prior observations until we have fresh, usable evidence.
+            return null
+        }
+        if (unknownChecks > 0) {
+            onStrike("watchdog: tethering checks responding after $unknownChecks inconclusive checks")
+            unknownChecks = 0
+        }
         if (reading == UpstreamReading.HEALTHY) {
             strikes = 0
             lastReading = reading
@@ -59,7 +75,7 @@ class UpstreamTolerance(
     }
 
     private fun describe(reading: UpstreamReading, names: List<String>): String = when (reading) {
-        UpstreamReading.TIMED_OUT -> "upstream check timed out $strikes times"
+        UpstreamReading.DOWNSTREAM_STOPPED -> "downstream reported stopped for $strikes checks"
         UpstreamReading.ABSENT ->
             "upstream reported no interface for $strikes checks, expected $expectedInterface"
 

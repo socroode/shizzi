@@ -14,7 +14,8 @@ class TetherSession(private val context: Context) {
 
     private var resources: SessionResources? = null
     private var presenceMonitor: ClientPresenceMonitor? = null
-    private var state = SessionState.IDLE
+    @Volatile private var state = SessionState.IDLE
+    @Volatile private var watchdogRecoveryReason: String? = null
     private var detail = "not started"
     private var interfaceName: String? = null
 
@@ -41,6 +42,7 @@ class TetherSession(private val context: Context) {
             }
         }
         finalTrafficStats = "{}"
+        watchdogRecoveryReason = null
 
         vpnMode = mode
         this.ipv4Only = ipv4Only
@@ -133,22 +135,29 @@ class TetherSession(private val context: Context) {
         lateinit var guard: SessionWatchdog
         guard = SessionWatchdog(
             name,
-            onDrift = { problem ->
-                // An old watchdog must never shut down the replacement session.
-                if (watchdog === guard) {
-                    SessionLog.warn("upstream drift: $problem")
-                    tearDownAfter(problem)
-                }
-            },
-            onReselect = {
-                if (watchdog === guard) {
-                    TetheringPreferenceApi(context).setPreferTestNetworks(true)
-                    SessionLog.info("upstream selection requested again for $name")
-                }
-            },
+            onDrift = { problem -> handleWatchdogFailure(guard, problem) },
+            onReselect = { reselectFromWatchdog(guard, name) },
         )
         watchdog = guard
         guard.start()
+    }
+
+    @Synchronized
+    private fun handleWatchdogFailure(guard: SessionWatchdog, problem: String) {
+        if (watchdog !== guard || !isActive) return
+        SessionLog.warn("watchdog confirmed a hotspot fault: $problem")
+        // Publish before teardown. The app can see the request immediately,
+        // but its stop RPC waits on this same monitor until cleanup finishes.
+        watchdogRecoveryReason = problem
+        runCatching { tearDownAfter(problem) }
+            .onFailure { SessionLog.error("watchdog teardown failed: ${it.message}") }
+    }
+
+    @Synchronized
+    private fun reselectFromWatchdog(guard: SessionWatchdog, name: String) {
+        if (watchdog !== guard || !isActive) return
+        TetheringPreferenceApi(context).setPreferTestNetworks(true)
+        SessionLog.info("upstream selection requested again for $name")
     }
 
     private fun tearDownAfter(problem: String) {
@@ -218,7 +227,8 @@ class TetherSession(private val context: Context) {
     }
 
     private fun liveUpstreams(owned: String): List<String> =
-        inspector.observe().liveInterfaceNames(owned)
+        runCatching { inspector.observe() }.getOrNull()
+            ?.takeIf { it.hasUpstreamReport }?.liveInterfaceNames(owned).orEmpty()
 
     private var finalTrafficStats = "{}"
 
@@ -354,6 +364,8 @@ class TetherSession(private val context: Context) {
         put("state", state.name)
         put("detail", detail)
         put("interface", interfaceName ?: JSONObject.NULL)
+        val recovery = watchdogRecoveryReason
+        if (recovery != null) put("watchdogRecoveryReason", recovery)
 
         put("isVpnBound", vpn.isBound)
         put("isVpnBypassed", isVpnBypassed())
@@ -361,7 +373,7 @@ class TetherSession(private val context: Context) {
         val traffic = interfaceName?.let(InterfaceCounters::read) ?: Traffic()
         put("bytesUp", traffic.up)
         put("bytesDown", traffic.down)
-        put("clientCount", if (isActive) downstream.countDevices() else 0)
+        put("clientCount", if (isActive && recovery == null) downstream.countDevices() else 0)
     }.toString()
 
     private fun isVpnBypassed(): Boolean {

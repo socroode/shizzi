@@ -12,7 +12,7 @@ class UpstreamToleranceTest {
     private fun tolerance() = UpstreamTolerance(expected) {}
 
     private fun classify(names: List<String>, didTimeout: Boolean = false) =
-        classifyUpstream(names, expected, didTimeout)
+        classifyUpstream(names, expected, isKnown = !didTimeout)
 
     @Test
     fun `an empty upstream reads as absent rather than drifted`() {
@@ -31,7 +31,32 @@ class UpstreamToleranceTest {
 
     @Test
     fun `a timeout outranks an otherwise healthy reading`() {
-        assertEquals(UpstreamReading.TIMED_OUT, classify(listOf(expected), didTimeout = true))
+        assertEquals(UpstreamReading.UNKNOWN, classify(listOf(expected), didTimeout = true))
+    }
+
+    @Test
+    fun `repeated timeouts alone never stop the hotspot`() {
+        val guard = tolerance()
+        repeat(30) { assertNull(guard.judge(UpstreamReading.UNKNOWN, emptyList())) }
+        assertNull(guard.judge(UpstreamReading.HEALTHY, listOf(expected)))
+    }
+
+    @Test
+    fun `uncertain observations do not mask a real drift`() {
+        val guard = tolerance()
+        val drifted = listOf("wlan0")
+        assertNull(guard.judge(UpstreamReading.DRIFTED, drifted))
+        assertNull(guard.judge(UpstreamReading.UNKNOWN, emptyList()))
+        assertNotNull(guard.judge(UpstreamReading.DRIFTED, drifted))
+    }
+
+    @Test
+    fun `two confirmed downstream stops override a stale upstream`() {
+        val guard = tolerance()
+        val reading = classifyUpstream(listOf(expected), expected, isKnown = true, downstreamStopped = true)
+        assertEquals(UpstreamReading.DOWNSTREAM_STOPPED, reading)
+        assertNull(guard.judge(reading, listOf(expected)))
+        assertNotNull(guard.judge(reading, listOf(expected)))
     }
 
     @Test
