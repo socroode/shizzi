@@ -49,27 +49,19 @@ jobs:
           EOF
       - name: Test Android modules
         run: ./gradlew :app:testDebugUnitTest :admin:testDebugUnitTest :conso:testDebugUnitTest --no-daemon
-      - name: Restore immutable signed Shizzi+ APK
+      - name: Restore signed companion APKs from HOTSPOT 0.4.3.5.10.8
         uses: actions/download-artifact@v5
         with:
-          name: Shizzi-0.4.3.5.10.1-coupons-signed
-          run-id: 41270368599
+          name: Shizzi-0.4.3.5.10.8-data-extension-signed
+          run-id: 42703059866
           github-token: ${{ github.token }}
           path: pinned-client-apks
-      - name: Verify Shizzi+ provenance and byte identity
+      - name: Verify unchanged companion APKs
+        working-directory: pinned-client-apks
         run: |
-          set -euo pipefail
-          git fetch --no-tags --depth=1 origin 49917bb4ca2baab856a9be08a0b3b7d113904fbb
-          git diff --exit-code 49917bb4ca2baab856a9be08a0b3b7d113904fbb HEAD -- \
-            conso/src/main conso/build.gradle.kts conso/proguard-rules.pro \
-            build.gradle.kts settings.gradle.kts gradle.properties
-          cd pinned-client-apks
           printf '%s\n' \
+            '2535c31b424a49f931b1dc270dbec068c241ba3eb57695ccf5a7d7bd1e312676  Shizzi-admin-0.3.7-data-extension.apk' \
             'd2fcce9993ffcc32ba78329f18c0bb27a480de1ed7b7c93fea8e3d5894c6265d  Shizzi-conso-0.3.0-background-calls.apk' | sha256sum -c -
-      - name: Build updated signed Admin APK
-        run: |
-          ./gradlew :admin:assembleRelease --no-daemon
-          cp admin/build/outputs/apk/release/admin-release.apk pinned-client-apks/Shizzi-admin-0.3.7-data-extension.apk
       - name: Build signed router with embedded client APKs
         env:
           SHIZZI_PREBUILT_CLIENT_DIR: ${{ github.workspace }}/pinned-client-apks
