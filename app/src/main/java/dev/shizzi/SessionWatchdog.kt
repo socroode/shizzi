@@ -43,8 +43,7 @@ class SessionWatchdog(
             if (!didSleep || !isRunning.get()) return
 
             val problem = checkUpstream()
-            if (problem != null) {
-                isRunning.set(false)
+            if (problem != null && isRunning.compareAndSet(true, false)) {
                 Log.w(TAG, "tearing down: $problem")
                 onDrift(problem)
                 return
@@ -53,9 +52,12 @@ class SessionWatchdog(
     }
 
     private fun checkUpstream(): String? {
-        val observation = inspector.observe()
-        val names = observation.liveInterfaceNames(expectedInterface)
-        val reading = classifyUpstream(names, expectedInterface, observation.didTimeout)
+        val observation = runCatching { inspector.observe() }.getOrNull()
+        if (!isRunning.get()) return null
+        val isKnown = observation?.hasUpstreamReport == true
+        val names = if (isKnown) observation?.liveInterfaceNames(expectedInterface).orEmpty() else emptyList()
+        val downstreamStopped = observation?.tetheredDownstreams()?.isEmpty() == true
+        val reading = classifyUpstream(names, expectedInterface, isKnown, downstreamStopped)
 
         if (recovery.shouldReselect(reading)) {
             runCatching { onReselect() }

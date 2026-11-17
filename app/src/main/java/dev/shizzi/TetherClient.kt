@@ -24,6 +24,7 @@ data class SessionUiState(
     val detail: String = "",
     val interfaceName: String = "",
     val lastError: String = "",
+    val watchdogRecoveryReason: String = "",
     val isVpnBound: Boolean = false,
     val isVpnBypassed: Boolean = false,
 
@@ -40,6 +41,7 @@ fun SessionUiState.asStopped(): SessionUiState = copy(
     status = UiStatus.READY,
     lastError = "",
     detail = "Stopped",
+    watchdogRecoveryReason = "",
     interfaceName = "",
     isVpnBound = false,
     isVpnBypassed = false,
@@ -54,6 +56,7 @@ fun SessionUiState.applyOutcome(outcome: Result<String>): SessionUiState {
             isBusy = false,
             status = UiStatus.ERROR,
             lastError = "${failure.javaClass.simpleName}: ${failure.message}",
+            watchdogRecoveryReason = "",
 
             interfaceName = "",
             isVpnBound = false,
@@ -73,6 +76,7 @@ fun SessionUiState.applyOutcome(outcome: Result<String>): SessionUiState {
         detail = sessionDetail,
         interfaceName = parsed?.optString("interface").orEmpty().takeIf { it != "null" }.orEmpty(),
         lastError = if (sessionState == "ERROR") sessionDetail else "",
+        watchdogRecoveryReason = parsed?.optString("watchdogRecoveryReason", "").orEmpty(),
 
         isVpnBound = parsed?.optBoolean("isVpnBound") == true,
         isVpnBypassed = parsed?.optBoolean("isVpnBypassed") == true,
@@ -98,7 +102,7 @@ class TetherClient {
     private val bindMutex = Mutex()
     @Volatile private var observedBinder: IBinder? = null
 
-    var onSessionLost: (() -> Unit)? = null
+    @Volatile var onSessionLost: (() -> Unit)? = null
 
     private var deathRecipient: IBinder.DeathRecipient? = null
 
@@ -251,21 +255,6 @@ class TetherClient {
             onSuccess = { null },
             onFailure = { failure -> failure.message ?: "could not reach Shizuku" },
         )
-    }
-
-    suspend fun releaseOrphanedDownstream(): String? = withContext(Dispatchers.IO) {
-        runCatching { service().stop() }
-            .fold(
-                onSuccess = { response ->
-                    val result = runCatching { JSONObject(response) }.getOrNull()
-                    if (result?.optString("state") == "ERROR") {
-                        result.optString("detail", "hotspot shutdown failed")
-                    } else null
-                },
-                onFailure = { failure ->
-                    "could not reach Shizuku to drop the hotspot: ${failure.message}"
-                },
-            )
     }
 
     suspend fun status(): String = withContext(Dispatchers.IO) {

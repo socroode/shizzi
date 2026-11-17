@@ -11,11 +11,13 @@ import android.os.Build
 import android.os.IBinder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,11 +26,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 class SessionService : Service() {
 
-    private val scope = CoroutineScope(SupervisorJob())
+    // Serialize lifecycle and status callbacks with Android's service commands.
+    // Binder calls and account persistence run on IO, not on this dispatcher.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val controller = TetherClient()
     private val notification by lazy { SessionNotification(this) }
     private val statusPoller = SessionStatusPoller(scope, controller)
@@ -50,6 +55,7 @@ class SessionService : Service() {
     private val internalState get() = sessionState
 
     private var isStopping = false
+    private var wantsSession = false
 
     private var reportTo: AutomationCommand? = null
 
@@ -65,7 +71,9 @@ class SessionService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        controller.onSessionLost = ::handleSessionLost
+        controller.onSessionLost = {
+            scope.launch { recoverSession("service privilégié perdu (Shizuku)") }
+        }
         if (!messagingServer.start()) {
             SessionLog.warn("messaging backend failed to start")
         } else {
@@ -82,24 +90,26 @@ class SessionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        isStopping = intent?.action == ACTION_STOP
-        reportTo = intent?.getStringExtra(EXTRA_REPORT_AS)
+        val shouldStop = intent?.action == ACTION_STOP
+        wantsSession = !shouldStop
+        val report = intent?.getStringExtra(EXTRA_REPORT_AS)
             ?.let { runCatching { AutomationCommand.valueOf(it) }.getOrNull() }
+        if (report != null) reportTo = report
         startForeground(
             NOTIFICATION_ID,
             notification.build(
                 SessionUiState(status = UiStatus.LOADING),
-                isStopping,
+                shouldStop || isStopping,
             ),
         )
 
-        if (!isStopping && MediaPrefs.isEnabled(this)) {
+        if (!shouldStop && MediaPrefs.isEnabled(this)) {
             MediaServerService.start(this)
         }
 
         when {
-            isStopping -> stopSession()
-            else -> startSession()
+            shouldStop && !isStopping -> stopSession()
+            !shouldStop && !isStopping && recoveryJob?.isActive != true -> startSession()
         }
         return START_NOT_STICKY
     }
@@ -107,6 +117,7 @@ class SessionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun startSession() {
+        if (!wantsSession || isStopping || recoveryJob?.isActive == true) return
         if (internalState.value.isBusy) {
             announceOutcome()
             return
@@ -122,14 +133,9 @@ class SessionService : Service() {
 
             val outcome = sessionLock.withLock {
                 if (attempt != generation) return@launch
-                // Cybercafe mode (at least one account) runs the hotspot IPv4-only:
-                // portal sessions are keyed by the client's IPv4 identity, and a
-                // client with routed IPv6 would log in on one family and be
-                // refused on the other.
-                val ipv4Only = true
-                if (ipv4Only) SessionLog.info("cybercafe mode: hotspot IPv4-only")
-                runCatching { controller.start(settings.isLogging, settings.vpnMode, ipv4Only) }
+                runCatching { startControlledHotspot(settings) }
             }
+            ensureActive()
             if (attempt != generation) return@launch
 
             outcome.exceptionOrNull()?.let { failure ->
@@ -163,7 +169,7 @@ class SessionService : Service() {
      */
     private fun followCybercafe() {
         cybercafeJob?.cancel()
-        cybercafeJob = scope.launch {
+        cybercafeJob = scope.launch(Dispatchers.IO) {
             val store = (application as App).cybercafeStore
             val ledger = store.newUsageLedger().also { usageLedger = it }
             val rates = SessionRateMeter()
@@ -366,19 +372,46 @@ class SessionService : Service() {
         caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }.getOrDefault(false)
 
-    private fun followStatus() = statusPoller.follow(
-        isConnected = { internalState.value.status == UiStatus.CONNECTED },
-        onStatus = { outcome ->
-            internalState.update { current -> current.applyOutcome(outcome) }
-            publishState()
-        },
-    )
+    private fun followStatus() {
+        val attempt = generation
+        statusPoller.follow(
+            isConnected = { attempt == generation && internalState.value.status == UiStatus.CONNECTED },
+            onStatus = { outcome ->
+                if (attempt == generation) {
+                    val status = internalState.value.applyOutcome(outcome)
+                    if (status.watchdogRecoveryReason.isNotBlank()) {
+                        recoverSession(status.watchdogRecoveryReason)
+                    } else {
+                        internalState.value = status
+                        publishState()
+                    }
+                }
+            },
+        )
+    }
+
+    private suspend fun startControlledHotspot(settings: Settings): String {
+        // Portal sessions are keyed to the IPv4 address of each client.
+        SessionLog.info("cybercafe mode: hotspot IPv4-only")
+        return controller.start(settings.isLogging, settings.vpnMode, ipv4Only = true)
+    }
+
+    private suspend fun stopAndSaveUsage() = withContext(Dispatchers.IO) {
+        val store = (application as App).cybercafeStore
+        val snapshot = parseLiveTrafficSnapshot(controller.stopAndTrafficStats())
+        if (snapshot.epoch != 0L) {
+            usageLedger?.let { store.absorbUsage(it, snapshot.epoch, snapshot.accountUsage) }
+        }
+        store.flushUsage(System.currentTimeMillis(), force = true)
+    }
 
     private fun settingsStore(): SettingsStore =
         (application as App).settingsStore
 
     private fun stopSession() {
-        recoveryJob?.cancel()
+        isStopping = true
+        val abandonedRecovery = recoveryJob
+        abandonedRecovery?.cancel()
         recoveryJob = null
         val stopped = ++generation
 
@@ -398,17 +431,12 @@ class SessionService : Service() {
         publishState()
 
         scope.launch {
-
+            abandonedRecovery?.cancelAndJoin()
             abandoned?.cancelAndJoin()
             abandonedSync?.cancelAndJoin()
 
             val shutdown = sessionLock.withLock {
-                runCatching {
-                    val store = (application as App).cybercafeStore
-                    val snapshot = parseLiveTrafficSnapshot(controller.stopAndTrafficStats())
-                    usageLedger?.let { store.absorbUsage(it, snapshot.epoch, snapshot.accountUsage) }
-                    store.flushUsage(System.currentTimeMillis(), force = true)
-                }.onSuccess {
+                runCatching { stopAndSaveUsage() }.onSuccess {
                     // Only terminate the privileged daemon after the downstream
                     // has been confirmed stopped by TetherSession.
                     controller.unbindAndStopDaemon()
@@ -430,55 +458,76 @@ class SessionService : Service() {
                 return@launch
             }
             internalState.update { it.asStopped() }
+            isStopping = false
             publishState()
-            announceOutcome()
-            if (stopped == generation) stopSelf()
+            if (wantsSession) {
+                startSession()
+            } else {
+                announceOutcome()
+                if (stopped == generation) stopSelf()
+            }
         }
     }
 
-    private fun handleSessionLost() {
-        if (isStopping || recoveryJob?.isActive == true) return
+    private fun recoverSession(reason: String) {
+        if (!wantsSession || isStopping || recoveryJob?.isActive == true) return
         val attempt = ++generation
-        startJob?.cancel()
+        val abandonedStart = startJob
+        abandonedStart?.cancel()
         startJob = null
         statusPoller.stop()
-        cybercafeJob?.cancel()
+        val abandonedSync = cybercafeJob
+        abandonedSync?.cancel()
         cybercafeJob = null
+        clearLiveSessions()
 
-        SessionLog.error("shell process died; retaining foreground recovery monitor")
+        SessionLog.warn("hotspot automatic recovery requested: $reason")
         internalState.update {
             it.copy(
-                isBusy = false,
-                status = UiStatus.ERROR,
+                isBusy = true,
+                status = UiStatus.LOADING,
                 interfaceName = "",
-                lastError = "Service privilégié perdu — tentative de récupération…",
+                clientCount = 0,
+                detail = "Récupération automatique du hotspot…",
+                lastError = "",
             )
         }
         publishState()
 
-        // Keep the app foreground service alive so recovery can be attempted
-        // when Shizuku becomes reachable again, without a human restarting
-        // Shizzi. Never start a replacement TUN until the old hotspot is down.
         recoveryJob = scope.launch {
+            abandonedStart?.cancelAndJoin()
+            abandonedSync?.cancelAndJoin()
+            val stillWanted = { attempt == generation && wantsSession && !isStopping }
             var retries = 0
-            while (attempt == generation && !isStopping) {
+            while (stillWanted()) {
                 retries++
-                val problem = runCatching { controller.releaseOrphanedDownstream() }
-                    .getOrElse { failure -> "teardown failed: ${failure.message}" }
-                if (problem == null) {
-                    SessionLog.info("orphan recovery: hotspot stopped; restarting controlled session")
-                    internalState.update { it.asStopped() }
+                val outcome = sessionLock.withLock {
+                    runCatching {
+                        runHotspotRecoveryAttempt(stillWanted, ::stopAndSaveUsage) {
+                            startControlledHotspot(settingsStore().settings.first())
+                        }
+                    }
+                }
+                ensureActive()
+                if (!stillWanted()) return@launch
+                val status = outcome.getOrNull()?.let { internalState.value.applyOutcome(Result.success(it)) }
+                if (status?.status == UiStatus.CONNECTED && status.watchdogRecoveryReason.isBlank()) {
+                    internalState.value = status
+                    SessionLog.info("hotspot automatic recovery verified on ${status.interfaceName} (attempt $retries)")
                     publishState()
                     recoveryJob = null
-                    startSession()
+                    announceOutcome()
+                    followStatus()
+                    followCybercafe()
                     return@launch
                 }
-                SessionLog.warn("orphan recovery attempt $retries failed: $problem")
+                val problem = outcome.exceptionOrNull()?.message ?: status?.lastError.orEmpty()
+                SessionLog.warn("hotspot automatic recovery attempt $retries failed: $problem")
                 internalState.update { current ->
-                    current.copy(lastError = notification.describeLoss(problem))
+                    current.copy(lastError = problem)
                 }
                 publishState()
-                delay(15_000L)
+                delay(RECOVERY_RETRY_MS)
             }
         }
     }
@@ -521,6 +570,7 @@ class SessionService : Service() {
         private const val BATTERY_POLL_MS = 5_000L
         private const val CYBERCAFE_RESYNC_MS = 60_000L
         private const val MEDIA_HEALTH_CHECK_MS = 5_000L
+        private const val RECOVERY_RETRY_MS = 15_000L
         const val ACTION_STOP = "dev.shizzi.STOP_SESSION"
         const val EXTRA_REPORT_AS = "reportAs"
 

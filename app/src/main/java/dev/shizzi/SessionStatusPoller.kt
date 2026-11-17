@@ -3,6 +3,7 @@ package dev.shizzi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 class SessionStatusPoller(
@@ -22,6 +23,7 @@ class SessionStatusPoller(
                 if (!isConnected()) return@launch
 
                 val outcome = runCatching { controller.status() }
+                ensureActive()
                 if (outcome.isSuccess) onStatus(outcome)
             }
         }

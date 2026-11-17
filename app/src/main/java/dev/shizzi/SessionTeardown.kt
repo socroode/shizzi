@@ -72,8 +72,8 @@ class SessionTeardown(private val context: Context) {
         val deadline = System.currentTimeMillis() + UPSTREAM_RELEASE_MS
 
         while (System.currentTimeMillis() < deadline) {
-            val observed = runCatching { inspector.observe().interfaceNames }.getOrDefault(emptyList())
-            if (observed.none { it == name }) {
+            val observed = runCatching { inspector.observe() }.getOrNull()
+            if (observed?.hasUpstreamReport == true && name !in observed.interfaceNames) {
                 SessionLog.info("upstream released: tethering moved off $name")
                 return
             }
