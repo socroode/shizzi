@@ -13,7 +13,7 @@ class UpstreamRecoveryTest {
         val recovery = UpstreamRecovery()
         assertTrue(recovery.shouldReselect(UpstreamReading.ABSENT))
         assertFalse(recovery.shouldReselect(UpstreamReading.DRIFTED))
-        assertFalse(recovery.shouldReselect(UpstreamReading.TIMED_OUT))
+        assertFalse(recovery.shouldReselect(UpstreamReading.UNKNOWN))
         assertFalse(recovery.shouldReselect(UpstreamReading.HEALTHY))
         assertTrue(recovery.shouldReselect(UpstreamReading.ABSENT))
     }
